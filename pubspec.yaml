@@ -1,0 +1,37 @@
+name: intelliattend_smartboard
+description: Offline-resilient, TOTP-based attendance engine for university classrooms.
+version: 3.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # State Management & UI
+  provider: ^6.1.1
+  google_fonts: ^6.1.0
+  qr_flutter: ^4.1.0
+  
+  # Core Logic & Cryptography
+  crypto: ^3.0.3
+  ntp: ^2.0.0
+  http: ^1.1.0
+  
+  # Storage & Security
+  isar: ^3.1.0
+  isar_flutter_libs: ^3.1.0
+  flutter_secure_storage: ^9.0.0
+  
+  # Network Utilities
+  connectivity_plus: ^5.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  isar_generator: ^3.1.0
+  build_runner: ^2.4.7
+
+flutter:
+  uses-material-design: true
