@@ -3,8 +3,8 @@ import 'dart:async';
 import 'dart:isolate';
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/network/ntp_service.dart';
 import '../../services/totp_engine.dart';
+import '../../services/socket_service.dart';
 import '../widgets/attendance_grid.dart';
 import '../widgets/attendance_timer.dart';
 import '../widgets/qr_display_pane.dart';
@@ -26,9 +26,8 @@ class AttendanceScreen extends StatefulWidget {
 }
 
 class _AttendanceScreenState extends State<AttendanceScreen> {
-  final NtpSyncService _ntpSync = NtpSyncService();
-  Isolate? _totpIsolate;
-  ReceivePort? _mainReceivePort;
+  late final TotpEngine _totpEngine;
+  late final SocketService _socketService;
   
   String? _currentToken;
   double _qrProgress = 0.0;
@@ -38,36 +37,41 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   @override
   void initState() {
     super.initState();
-    _initializeEngine();
+    _initializeEngines();
   }
 
-  Future<void> _initializeEngine() async {
-    // 1. NTP Sync (Spec Section 3.1)
-    await _ntpSync.synchronizeClock('https://api.intelliattend.edu/v1/time');
+  Future<void> _initializeEngines() async {
+    // 1. Kick off the TOTP Dart Isolate
+    _totpEngine = TotpEngine(sessionSecret: widget.sessionSecret);
+    
+    _totpEngine.qrStream.listen((token) {
+      if (!mounted || _isSessionFinished) return;
+      setState(() {
+        _currentToken = token;
+        _qrProgress = 1.0; // Reset visual progress bar on 3.5s rotation
+      });
+    });
 
-    // 2. Launch TOTP Isolate (Spec Section 3.3)
-    _mainReceivePort = ReceivePort();
-    _totpIsolate = await Isolate.spawn(TotpEngine.run, _mainReceivePort!.sendPort);
+    await _totpEngine.start();
 
-    _mainReceivePort!.listen((message) {
-      if (message is SendPort) {
-        // Send config to Isolate
-        message.send({
-          'secret': widget.sessionSecret,
-          'skew': _ntpSync.clockSkew,
-        });
-      } else if (message is Map<String, dynamic>) {
-        // Handle new token from Isolate
+    // 2. Open the WebSocket "Ear" to Node.js
+    _socketService = SocketService();
+    
+    _socketService.attendanceStream.listen((data) {
+      if (!mounted) return;
+      final studentId = data['student_id'] as String?;
+      if (studentId != null && !_presentIds.contains(studentId)) {
         setState(() {
-          _currentToken = message['token'];
-          _qrProgress = 1.0; // Reset progress on rotation
+          _presentIds.add(studentId);
         });
       }
     });
 
-    // Start rotation progress animation (3.5s cycle)
+    _socketService.connect();
+
+    // 3. Start smooth progressive degradation animation for UI (~3.5s cycle)
     Timer.periodic(const Duration(milliseconds: 50), (timer) {
-      if (_isSessionFinished) {
+      if (_isSessionFinished || !mounted) {
         timer.cancel();
         return;
       }
@@ -79,7 +83,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
   void _onAttendanceFinished() {
     setState(() => _isSessionFinished = true);
-    _totpIsolate?.kill(priority: Isolate.immediate);
+    _totpEngine.stop(); // Kills the Isolate instantly
     print('✅ [Session] 120-second window closed. QR Engine Terminated.');
   }
 
@@ -163,8 +167,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
   @override
   void dispose() {
-    _totpIsolate?.kill();
-    _mainReceivePort?.close();
+    _totpEngine.stop();
+    _socketService.disconnect();
     super.dispose();
   }
 }

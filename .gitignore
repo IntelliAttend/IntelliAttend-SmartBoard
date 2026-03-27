@@ -32,3 +32,6 @@ Thumbs.db
 .tap/
 coverage/
 .nyc_output/
+
+# Executables
+vs_BuildTools.exe

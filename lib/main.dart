@@ -1,7 +1,7 @@
 
 import 'package:flutter/material.dart';
 import 'core/theme/app_theme.dart';
-import 'presentation/screens/attendance_screen.dart';
+import 'presentation/screens/login_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,13 +18,8 @@ class IntelliAttendApp extends StatelessWidget {
       title: 'IntelliAttend SmartBoard',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
-      // Landing at the AttendanceScreen for demonstration
-      // In production, this would land on LoginScreen (OTP entry)
-      home: const AttendanceScreen(
-        sessionId: 'SESS_411A_DEMO',
-        sessionSecret: 'Z9#KL2!PQ8RX\$MN5',
-        rosterCount: 50,
-      ),
+      // The entry point is the OTP secure login screen
+      home: const LoginScreen(),
     );
   }
 }
