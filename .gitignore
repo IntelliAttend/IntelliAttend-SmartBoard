@@ -35,3 +35,7 @@ coverage/
 
 # Executables
 vs_BuildTools.exe
+
+# Flutter/Dart
+.dart_tool/
+*.log
