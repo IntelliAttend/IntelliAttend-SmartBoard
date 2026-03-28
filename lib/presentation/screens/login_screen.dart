@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../services/api_service.dart';
 import '../../services/hardware_fingerprint_service.dart';
+import '../../services/session_manager.dart';
 import 'attendance_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -27,12 +28,19 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      // API call includes the Zero-Trust fingerprint payload internally
       final result = await ApiService.initiateSession(_otpController.text);
       if (result['status'] == 'success' && result['data'] != null) {
         final data = result['data'];
         
-        // Ensure max brightness for QR rendering if on Windows
+        // --- PHASE 3: Persist session for Crash Recovery ---
+        await SessionManager.saveSession(
+          sessionId: data['session_id'],
+          sessionSecret: data['session_secret'],
+          rosterCount: data['roster_count'],
+          facultyName: data['room_name'] ?? 'Professor',
+          endTime: DateTime.parse(data['server_time']).add(const Duration(hours: 1)),
+        );
+
         await HardwareFingerprintService.maximizeBrightness();
 
         if (mounted) {

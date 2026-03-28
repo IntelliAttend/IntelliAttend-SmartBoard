@@ -38,7 +38,7 @@ Cheap smart board hardware often suffers from clock drift. Because TOTP relies o
 ### 3.2. Session Ignition Module
 
 1. **Trigger:** Faculty enters the 6-digit OTP on the UI.
-2. **API Call:** App sends `POST /board/session/initiate` including the OTP and the hardware MAC address.
+2. **API Call:** App sends `POST /board/session/initiate` including the OTP and the composite hardware fingerprint.
 3. **Payload Processing:** The server responds with the `session_id`, the classroom roster, and the crucial `session_secret` (the cryptographic seed).
 4. **Security:** The `session_secret` is immediately written to the OS-level Hardware Keystore via `flutter_secure_storage`. It is *never* stored in plaintext or in the Isar database.
 
@@ -108,7 +108,7 @@ class QueuedScan {
 ## 5. API Contracts (Smart Board <-> Server)
 
 **Base URL:** `https://api.intelliattend.edu/v1/board`
-**Headers:** `X-Board-MAC: <mac_address>` required on all requests.
+`Headers: X-Board-MAC: <hardware_fingerprint>` required on all requests.
 
 ### 5.1. `POST /session/initiate`
 

@@ -7,10 +7,9 @@ Strict isolation is the golden rule. Each component has a specific jurisdiction.
 
 | Component | Role | Jurisdiction |
 | :--- | :--- | :--- |
-| **Flutter** | Universal Frontend | Builds the Smart Board app (Windows/Android) and Student Mobile app. **No direct database access.** |
+| **Flutter** | Universal Frontend | Builds the Smart Board app (Windows/Android) and Student Mobile app. **Listens to Firestore for real-time updates.** |
 | **Python (FastAPI)** | The Brain & Vault | Handles logins, device ID checks, cryptographic validation, and **Master of Firestore**. |
-| **Node.js** | The Megaphone | Dedicated WebSocket microservice to hold wss:// connections. **No math, no database writes.** |
-| **Redis** | The Nervous System | The bridge between Python and Node.js using Pub/Sub. Stores temporary 3.5s seeds. |
+| **Firebase** | The Nervous System | Acts as the real-time data bridge between Python and Flutter. Stores attendance records in Firestore. |
 
 ---
 
@@ -23,17 +22,16 @@ Strict isolation is the golden rule. Each component has a specific jurisdiction.
 - **Loop**: Implement `Timer.periodic` (3500ms) to update the `intelliattend://` URI and redraw the QR.
 - **Rule**: QR updates must **"snap"** instantly (no fade/cross-dissolve).
 
-### Sprint 2: The Python Handshake (REST API)
-*Goal: Secure session initiation.*
+### Sprint 2: The Python & Firebase Handshake
+*Goal: Secure session initiation and real-time link.*
 - **Action**: Implement "Start Class" button triggering `POST /api/v1/session/start`.
 - **Clock Sync**: Calculate the difference between local hardware time and `server_time` to apply a precise offset to the TOTP loop.
-- **Security**: The seed must be wiped from memory immediately after the session ends.
+- **Firebase**: SmartBoard listens to `ActiveSessions/{sessionId}/Attendance` for live updates.
 
-### Sprint 3: The Node.js Live Feed (WebSockets)
-*Goal: Real-time student feedback.*
-- **WebSocket**: Open connection to the Node.js bridge immediately after the handshake.
-- **Listener**: Handle incoming `STUDENT_SCANNED` JSON payloads.
-- **Resilience**: Implement auto-reconnect logic for unstable Wi-Fi without breaking the 3.5s QR loop.
+### Sprint 3: Production Hardening
+*Goal: Resilience and Security.*
+- **Crash Recovery**: Implement Isar database to persist `session_secret` locally for instant reboot recovery.
+- **Offline Mode**: Queue scans locally if Wi-Fi drops and sync when back online.
 
 ---
 

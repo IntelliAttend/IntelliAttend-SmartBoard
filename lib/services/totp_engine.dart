@@ -78,22 +78,28 @@ class TotpEngine {
   }
 
   static void _generateNextToken(_TotpIsolatePayload payload) {
-    // 1. Recreate the True Mathematical Time using the injected skew offset
-    final DateTime uncorrectedTime = DateTime.now();
-    final DateTime trueTime = uncorrectedTime.add(Duration(milliseconds: payload.clockSkewMillis));
+    // 1. Normalize the Seed (Strip hyphens and trim)
+    final String normalizedSeed = payload.sessionSecret.replaceAll('-', '').trim();
     
-    // 2. Convert to Windowed Epoch Frame
+    // 2. Calculate the True Mathematical Time using the injected skew offset
+    final DateTime trueTime = DateTime.now().add(Duration(milliseconds: payload.clockSkewMillis));
+    
+    // 3. Convert to the 3.5s Window (Epoch)
     final int epochMillis = trueTime.millisecondsSinceEpoch;
-    final int timeWindowCounter = epochMillis ~/ payload.windowDurationMillis;
+    final int timeWindow = epochMillis ~/ 3500;
     
-    // 3. Generate Crypto Hash Identity
-    final String rawPayload = '${payload.sessionSecret}|$timeWindowCounter';
-    final List<int> bytes = utf8.encode(rawPayload);
-    final Digest digest = sha256.convert(bytes);
+    // 4. HMAC-SHA256 Signing
+    // Key: Normalized Seed | Message: Time Window (Epoch)
+    final List<int> keyBytes = utf8.encode(normalizedSeed);
+    final List<int> messageBytes = utf8.encode(timeWindow.toString());
     
-    final qrToken = digest.toString();
+    final hmac = Hmac(sha256, keyBytes);
+    final Digest digest = hmac.convert(messageBytes);
+    
+    // 5. Wrap in IATT:: Prefix
+    final String qrPayload = 'IATT::$digest';
     
     // Fire it back across the memory boundary to the UI Thread
-    payload.sendPort.send(qrToken);
+    payload.sendPort.send(qrPayload);
   }
 }

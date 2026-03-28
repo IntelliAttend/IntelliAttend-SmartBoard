@@ -8,7 +8,7 @@
 > **So that** I can securely start my class session and ensure no one else can spoof my attendance records.
 
 * **Acceptance Criteria:**
-* The board must reject any OTP that doesn't match the server's generated code for that specific room's MAC address.
+* The board must reject any OTP that doesn't match the server's generated code for that specific room's hardware fingerprint.
 * Upon success, the board must sync its local clock with an NTP server to calculate the `clock_skew`.
 * The board must instantly write the `session_id` and `session_secret` to the encrypted local Isar database for crash recovery.
 
