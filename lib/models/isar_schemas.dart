@@ -24,6 +24,27 @@ class ActiveSession {
 }
 
 @collection
+class DeviceRegistration {
+  Id id = Isar.autoIncrement;
+
+  @Index(unique: true)
+  late String roomId;
+
+  late String hardwareId; // Storing the WIN_UUID_... here
+  late String roomName;
+  late String building;
+  late String department;
+  late int capacity;
+  late DateTime registrationDate;
+  
+  // v5.4 Cryptographic Trust: API Key for authentication
+  String? apiKey; // Long-lived key issued by server during registration
+  String? accessToken; // Short-lived JWT
+  int? tokenExpiryMs; // When the access token expires
+  String? refreshToken; // For obtaining new access tokens
+}
+
+@collection
 class QueuedScan {
   Id id = Isar.autoIncrement;
 
@@ -33,4 +54,19 @@ class QueuedScan {
   late String studentId;
   late String scannedTotpHash;
   late DateTime scanTimestamp;
+}
+
+@collection
+class TimetableEntry {
+  Id id = Isar.autoIncrement;
+  
+  @Index()
+  late int dayOfWeek; // 1-7 (Mon-Sun)
+  
+  @Index()
+  late String startTime; // e.g., "09:00"
+  
+  late String endTime;   // e.g., "10:00"
+  late String courseName;
+  late String facultyName;
 }

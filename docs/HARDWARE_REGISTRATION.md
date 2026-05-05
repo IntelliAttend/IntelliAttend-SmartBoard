@@ -1,5 +1,10 @@
 # Technical Requirements: SmartBoard Hardware Fingerprinting
 
+> [!IMPORTANT]
+> **DEPRECATION NOTICE:** This document describes the "Hardware Trust" model. While hardware fingerprinting is still used for *identification*, the authentication mechanism using `X-Board-MAC` headers is being replaced by the **Cryptographic Trust** model (JWT + Refresh Tokens). 
+> 
+> **Please refer to [SECURE_AUTH_ARCHITECTURE.md](./SECURE_AUTH_ARCHITECTURE.md) for the mandatory implementation details.**
+
 ## 1. Goal
 Implement a platform-aware, "Zero-Trust" hardware fingerprinting module to ensure the SmartBoard application is running on authorized hardware and to prevent spoofing or unauthorized session initiation.
 

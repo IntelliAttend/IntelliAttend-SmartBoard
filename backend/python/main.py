@@ -55,16 +55,28 @@ class AttendanceVerifyRequest(BaseModel):
 # --- 3. Dependency: Hardware Signature Validation ---
 
 async def verify_board_signature(x_board_mac: str = Header(None)):
+    print(f"[The Brain] Incoming Request | Hardware Header: {x_board_mac or 'MISSING'}")
+    
     if not x_board_mac:
-        raise HTTPException(status_code=401, detail="Missing X-Board-MAC")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Hardware Identity Breach: X-Board-MAC missing"
+        )
     
     if db:
         device_doc = db.collection("RegisteredDevices").document(x_board_mac).get()
         if not device_doc.exists:
-            raise HTTPException(status_code=403, detail="Device Unregistered")
-        return device_doc.to_dict()
+            print(f"[The Brain] Access Denied: Unregistered Hardware {x_board_mac}")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, 
+                detail="Unregistered Hardware Signature"
+            )
+        
+        device_data = device_doc.to_dict()
+        print(f"[The Brain] Access Granted: {device_data.get('room_name')} ({x_board_mac})")
+        return device_data
     
-    # Dev Fallback
+    # Dev Fallback for local testing if Firestore is unreachable
     return {"room_id": "ROOM_CSE_402", "room_name": "CSE Seminar Hall 402", "roster_count": 55}
 
 # --- 4. Endpoints ---
@@ -120,16 +132,24 @@ async def initiate_session(request: SessionInitiateRequest, device_info: dict = 
             "roster_count": schedule_data['roster_count']
         })
 
+    # The "Nuclear Flattening" fix (v5.4):
+    # We return the session identifiers at the root AND inside the 'data' block.
+    # This prevents "Missing session identifiers" errors regardless of how the
+    # client-side JSON parser flattens the response.
+    handshake_payload = {
+        "session_id": session_id,
+        "session_secret": session_secret,
+        "server_time": server_time,
+        "course_name": schedule_data['course_name'],
+        "faculty_name": schedule_data['faculty_name'],
+        "roster_count": schedule_data['roster_count']
+    }
+
     return {
         "status": "success",
-        "data": {
-            "session_id": session_id,
-            "session_secret": session_secret,
-            "server_time": server_time,
-            "course_name": schedule_data['course_name'],
-            "faculty_name": schedule_data['faculty_name'],
-            "roster_count": schedule_data['roster_count']
-        }
+        "session_id": session_id,      # Flattened Root Key
+        "session_secret": session_secret,  # Flattened Root Key
+        "data": handshake_payload
     }
 
 # ... (attendance/verify remains same as previous step)

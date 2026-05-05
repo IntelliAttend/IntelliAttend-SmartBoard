@@ -1,6 +1,6 @@
-
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
 
 class AttendanceTimer extends StatefulWidget {
@@ -27,7 +27,7 @@ class _AttendanceTimerState extends State<AttendanceTimer> {
   void _startCountdown() {
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_remaining > 0) {
-        setState(() => _remaining--);
+        if (mounted) setState(() => _remaining--);
       } else {
         _timer?.cancel();
         widget.onTimerFinished();
@@ -41,16 +41,21 @@ class _AttendanceTimerState extends State<AttendanceTimer> {
     final seconds = (_remaining % 60).toString().padLeft(2, '0');
 
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
         Text(
           '$minutes:$seconds',
-          style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+          style: GoogleFonts.jetbrainsMono(
+            fontSize: 64,
+            fontWeight: FontWeight.bold,
             color: _remaining < 30 ? AppColors.error : AppColors.primary,
-            fontFamily: 'JetBrains Mono', // High-legibility monospaced for digits
           ),
         ),
         const SizedBox(height: 8),
-        const Text('REMAINING ATTENDANCE WINDOW', style: TextStyle(letterSpacing: 4, fontSize: 10)),
+        Text(
+          'REMAINING ATTENDANCE WINDOW',
+          style: Theme.of(context).textTheme.labelLarge,
+        ),
       ],
     );
   }

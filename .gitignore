@@ -39,3 +39,12 @@ vs_BuildTools.exe
 # Flutter/Dart
 .dart_tool/
 *.log
+*.lock
+# Ignore all .txt files in root (usually local overrides or logs)
+/*.txt
+# But allow specific ones if needed (e.g. requirements.txt is in a subfolder, so it's fine)
+
+# Environment secrets
+.env
+.env.*
+!.env.example
