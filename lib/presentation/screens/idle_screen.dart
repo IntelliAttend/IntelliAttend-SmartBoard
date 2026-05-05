@@ -18,6 +18,9 @@ import '../widgets/pin_input.dart';
 import '../widgets/timeline_slot.dart';
 import 'attendance_screen.dart';
 import 'settings_screen.dart';
+import 'timetable_screen.dart';
+import 'analytics_screen.dart';
+import 'notifications_screen.dart';
 
 class IdleScreen extends StatefulWidget {
   final DeviceRegistration registration;
@@ -223,23 +226,6 @@ class _IdleScreenState extends State<IdleScreen> {
             ),
           ),
 
-          // Background - Corner Decoration
-          Positioned(
-            top: 0,
-            right: 0,
-            child: Opacity(
-              opacity: 0.1,
-              child: ClipRRect(
-                borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(200)),
-                child: Image.asset(
-                  'assets/background.png',
-                  width: 300,
-                  height: 300,
-                  fit: BoxFit.cover,
-                ),
-              ),
-            ),
-          ),
 
           // Main Layout
           Column(
@@ -275,8 +261,6 @@ class _IdleScreenState extends State<IdleScreen> {
           ),
 
           if (_showStartingSoon && _upcomingSlot != null) _buildStartingSoonBanner(),
-          if (bool.fromEnvironment('DEBUG', defaultValue: true)) 
-            Positioned(top: 80, right: 20, child: _buildDebugOverlay()),
         ],
       ),
     );
@@ -315,35 +299,42 @@ class _IdleScreenState extends State<IdleScreen> {
     
     return Row(
       children: [
-        _navItem('Dashboard', activeColor, true),
+        _navItem('Welcome', activeColor, true, () {}),
         const SizedBox(width: 30),
-        _navItem('Classroom View', inactiveColor, false),
+        _navItem('Timetable', inactiveColor, false, () {
+          Navigator.of(context).push(MaterialPageRoute(builder: (context) => TimetableScreen(todayTimeline: _todayTimeline)));
+        }),
         const SizedBox(width: 30),
-        _navItem('Analytics', inactiveColor, false),
+        _navItem('Analytics', inactiveColor, false, () {
+          Navigator.of(context).push(MaterialPageRoute(builder: (context) => const AnalyticsScreen()));
+        }),
       ],
     );
   }
 
-  Widget _navItem(String label, Color color, bool isActive) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          label,
-          style: TextStyle(
-            color: color,
-            fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
-            fontSize: 14,
+  Widget _navItem(String label, Color color, bool isActive, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
+              fontSize: 14,
+            ),
           ),
-        ),
-        if (isActive)
-          Container(
-            margin: const EdgeInsets.only(top: 4),
-            height: 2,
-            width: 40,
-            color: color,
-          ),
-      ],
+          if (isActive)
+            Container(
+              margin: const EdgeInsets.only(top: 4),
+              height: 2,
+              width: 40,
+              color: color,
+            ),
+        ],
+      ),
     );
   }
 
@@ -351,8 +342,18 @@ class _IdleScreenState extends State<IdleScreen> {
     final iconColor = isDark ? Colors.white70 : Colors.black54;
     return Row(
       children: [
-        IconButton(onPressed: () {}, icon: Icon(Icons.notifications_none, color: iconColor)),
-        IconButton(onPressed: () {}, icon: Icon(Icons.help_outline, color: iconColor)),
+        IconButton(
+          onPressed: () {
+            Navigator.of(context).push(MaterialPageRoute(builder: (context) => const NotificationsScreen()));
+          }, 
+          icon: Icon(Icons.notifications_none, color: iconColor)
+        ),
+        IconButton(
+          onPressed: () {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('IntelliAttend Support: Help is on the way!')));
+          }, 
+          icon: Icon(Icons.help_outline, color: iconColor)
+        ),
         IconButton(
           onPressed: () {
             Navigator.of(context).push(
@@ -360,19 +361,6 @@ class _IdleScreenState extends State<IdleScreen> {
             );
           }, 
           icon: Icon(Icons.settings_outlined, color: iconColor)
-        ),
-        const SizedBox(width: 10),
-        Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            border: Border.all(color: isDark ? Colors.white24 : Colors.black12),
-            image: const DecorationImage(
-              image: NetworkImage('https://lh3.googleusercontent.com/aida/ADBb0uh9yqoJtYGCHVgdv0SH3XZRDAPsIBR2TPNAsJMLhMf13mNYjgNCTZVkQAjLT9UqrYCZ32xjNI8UUbinizFDDVsO-ubWUzGHc5HNna4aDKSFHxcn7po-XtlIwso9rf7sT2mBtniyuo7hTvszjFWaRgbFA9S8i3q25vEWQmH2xk-AlKWxFO_4HlEfOOnScPM6QrMmxPyQU8GDSDNtqSZZZqIZSluomw6MuXFUOKWMNCvOJ-uB__7B9f9a886c-O7ZQyqAfUFAb-9plQ'),
-              fit: BoxFit.cover,
-            ),
-          ),
         ),
       ],
     );
@@ -608,30 +596,6 @@ class _IdleScreenState extends State<IdleScreen> {
           children: [
             Column(
               mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  "$timeStr $period",
-                  style: GoogleFonts.jetBrainsMono(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: isDark ? Colors.white : AppColors.textPrimaryLight,
-                  ),
-                ),
-                Text(
-                  _getFormattedDate(now).toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1,
-                    color: isDark ? Colors.white38 : Colors.black38,
-                  ),
-                ),
-              ],
-            ),
-            Container(margin: const EdgeInsets.symmetric(horizontal: 24), height: 40, width: 1, color: isDark ? Colors.white10 : Colors.black12),
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
@@ -669,6 +633,30 @@ class _IdleScreenState extends State<IdleScreen> {
                 ),
               ],
             ),
+            Container(margin: const EdgeInsets.symmetric(horizontal: 24), height: 40, width: 1, color: isDark ? Colors.white10 : Colors.black12),
+            Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  "$timeStr $period",
+                  style: GoogleFonts.jetBrainsMono(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : AppColors.textPrimaryLight,
+                  ),
+                ),
+                Text(
+                  _getFormattedDate(now).toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1,
+                    color: isDark ? Colors.white38 : Colors.black38,
+                  ),
+                ),
+              ],
+            ),
           ],
         );
       },
@@ -697,13 +685,6 @@ class _IdleScreenState extends State<IdleScreen> {
     );
   }
 
-  Widget _buildDebugOverlay() {
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
-      child: Text('ROOM: ${widget.registration.roomId}', style: const TextStyle(fontSize: 10, color: Colors.white)),
-    );
-  }
 
   Widget _buildNumericKeypad(bool isDark) {
     return GridView.count(
