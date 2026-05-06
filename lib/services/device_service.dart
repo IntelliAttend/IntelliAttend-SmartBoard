@@ -12,44 +12,82 @@ class DeviceService {
   static Isar get _isar => SessionManager.isar;
 
   /// Checks if this SmartBoard has already been bound to a classroom.
+  /// v5.5: Also validates that the registration is not corrupted.
   static Future<bool> isRegistered() async {
-    final count = await _isar.deviceRegistrations.count();
-    return count >0;
+    final reg = await _isar.deviceRegistrations.where().findFirst();
+    if (reg == null) return false;
+    
+    // If registration is corrupted (missing ID) or legacy (missing classroomId),
+    // we wipe it to force a clean metadata sync.
+    if (reg.smartBoardId.isEmpty || reg.classroomId == null) {
+      Log.w('⚠️ [DeviceService] Corrupted or Legacy registration found. Wiping for fresh sync...');
+      await _isar.writeTxn(() => _isar.deviceRegistrations.clear());
+      return false;
+    }
+    
+    return true;
   }
 
   /// Retrieves the permanent registration details.
+  /// Automatically heals missing metadata (like classroomId) from Firestore if needed.
   static Future<DeviceRegistration?> getRegistration() async {
-    return await _isar.deviceRegistrations.where().findFirst();
+    final reg = await _isar.deviceRegistrations.where().findFirst();
+    if (reg != null && reg.classroomId == null) {
+      if (reg.smartBoardId.isEmpty) {
+        Log.w('⚠️ [DeviceService] Registration exists but smartBoardId is empty. Skipping healing.');
+        return reg;
+      }
+      Log.i('🔧 [DeviceService] Missing classroomId for ${reg.smartBoardId}. Attempting to heal...');
+      try {
+        final doc = await FirebaseFirestore.instance.collection('smart_boards').doc(reg.smartBoardId).get();
+        if (doc.exists) {
+          final data = doc.data()!;
+          final classroomId = data['classroom_id']?.toString() ?? data['classroomId']?.toString();
+          if (classroomId != null) {
+            await _isar.writeTxn(() async {
+              reg.classroomId = classroomId;
+              await _isar.deviceRegistrations.put(reg);
+            });
+            Log.i('✅ [DeviceService] Healed metadata: classroomId=$classroomId');
+          }
+        }
+      } catch (e) {
+        Log.w('⚠️ [DeviceService] Metadata healing failed: $e');
+      }
+    }
+    return reg;
   }
 
-  /// The active Room ID for this hardware.
-  static Future<String?> getRoomId() async {
+  /// The active SmartBoard ID for identification and Firestore queries.
+  static Future<String?> getSmartBoardId() async {
     final reg = await getRegistration();
-    return reg?.roomId;
+    return reg?.smartBoardId;
   }
 
   /// Step1: Request Administrative OTP to authorize this hardware.
-  static Future<void> requestOtp({required String roomId}) async {
-    await ApiService.requestRegistrationOtp(roomId: roomId);
+  static Future<void> requestOtp({required String smartBoardId}) async {
+    await ApiService.requestRegistrationOtp(smartBoardId: smartBoardId);
   }
 
   /// Step2: Completes the One-Time Registration with the Backend using the Admin OTP.
   /// Binds the hardware fingerprint to the room in the server's database.
   /// v5.4: Now extracts and stores cryptographic tokens from server response.
   static Future<void> registerWithOtp({
-    required String roomId,
+    required String smartBoardId,
     required String otp,
     required String deviceName,
     int rosterCount = 60,
   }) async {
-    // 1. Call Backend Handshake (v5.3) and capture response
+    // 1. Call Backend Handshake and capture response
     final response = await ApiService.verifyRegistrationOtp(
-      roomId: roomId,
+      smartBoardId: smartBoardId,
       otp: otp,
       deviceName: deviceName,
     );
 
-    // v5.4: Extract cryptographic tokens from server response
+    // Identity is strictly the SmartBoard ID
+    final finalBoardId = smartBoardId;
+    
     final apiKey = response['api_key']?.toString() ?? response['apiKey']?.toString();
     final accessToken = response['access_token']?.toString() ?? response['accessToken']?.toString();
     final refreshToken = response['refresh_token']?.toString() ?? response['refreshToken']?.toString();
@@ -58,7 +96,6 @@ class DeviceService {
     // Store tokens securely
     if (apiKey != null && apiKey.isNotEmpty) {
       await SecureStorageService.storeApiKey(apiKey);
-      Log.i('🔐 [DeviceService] API Key stored securely');
     }
 
     if (accessToken != null && accessToken.isNotEmpty) {
@@ -68,37 +105,65 @@ class DeviceService {
       } else if (expiryMs is String) {
         expiry = int.tryParse(expiryMs) ?? (DateTime.now().millisecondsSinceEpoch + 900000);
       } else {
-        expiry = DateTime.now().millisecondsSinceEpoch + 900000; // 15 min default
+        expiry = DateTime.now().millisecondsSinceEpoch + 900000;
       }
       await SecureStorageService.storeAccessToken(accessToken, expiry);
-      Log.i('🔐 [DeviceService] Access token stored (expires in 15min)');
     }
 
     if (refreshToken != null && refreshToken.isNotEmpty) {
       await SecureStorageService.storeRefreshToken(refreshToken);
-      Log.i('🔐 [DeviceService] Refresh token stored');
     }
 
     final hardwareId = await HardwareFingerprintService.getWindowsFingerprint();
     
-    // 2. Persist to Local Vault (Clear old registration first to avoid Unique Index violation)
+    // 2. Fetch Metadata from Firestore (using board_id as document ID)
+    String roomName = deviceName;
+    String building = 'Main Campus';
+    String department = 'Academic';
+    int capacity = rosterCount;
+    String? classroomId;
+
+    try {
+      final doc = await FirebaseFirestore.instance.collection('smart_boards').doc(finalBoardId).get();
+      if (doc.exists) {
+        final data = doc.data()!;
+        roomName = data['room_name'] ?? data['roomName'] ?? roomName;
+        building = data['building'] ?? building;
+        department = data['department'] ?? department;
+        capacity = data['capacity'] ?? capacity;
+        // Resolve logical classroom ID for queries (e.g. 'room_4208')
+        classroomId = data['classroom_id']?.toString() ?? data['classroomId']?.toString();
+        Log.i('📡 [DeviceService] Metadata synced for $finalBoardId. Classroom ID: $classroomId');
+      }
+    } catch (e) {
+      Log.w('⚠️ [DeviceService] Firestore metadata sync failed: $e');
+    }
+
+    // 3. Persist to Local Vault
     final reg = DeviceRegistration()
-      ..roomId = roomId
+      ..smartBoardId = finalBoardId
+      ..classroomId = classroomId
       ..hardwareId = hardwareId
-      ..roomName = deviceName
-      ..building = 'Staging'
-      ..department = 'CSE'
-      ..capacity = rosterCount
+      ..roomName = roomName
+      ..building = building
+      ..department = department
+      ..capacity = capacity
       ..registrationDate = DateTime.now()
       ..apiKey = apiKey
       ..accessToken = accessToken
       ..refreshToken = refreshToken;
 
-    await _isar.writeTxn(() => _isar.deviceRegistrations.clear());
-    await _isar.writeTxn(() => _isar.deviceRegistrations.put(reg));
+    await _isar.writeTxn(() async {
+      await _isar.deviceRegistrations.clear();
+      await _isar.timetableEntrys.clear();
+      await _isar.deviceRegistrations.put(reg);
+    });
     
-    Log.i('✅ [DeviceService] Hardware securely bound via OTP to Room: $roomId');
-    Log.i('🔐 [DeviceService] Cryptographic tokens stored - MAC spoofing no longer possible');
+    Log.i('✅ [DeviceService] Bound to SmartBoard ID: $finalBoardId');
+
+    // v5.4: Trigger a FULL timetable sync immediately after registration
+    // This ensures the device has the entire week's schedule cached for offline use.
+    await syncTimetable(fullSync: true);
   }
 
   /// Legacy Registration Method (v5.2 Direct Bypass)
@@ -112,8 +177,9 @@ class DeviceService {
   }
 
   /// Layer1: The Context Sync (The Bedrock)
-  /// Pulls timetable from Firestore directly (same as mobile apps) into Isar cache
-  static Future<void> syncTimetable() async {
+  /// Pulls timetable from Firestore directly into Isar cache.
+  /// [fullSync]: If true, fetches the entire week. If false, only today.
+  static Future<void> syncTimetable({bool fullSync = false}) async {
     final registration = await getRegistration();
     if (registration == null) return;
 
@@ -125,69 +191,82 @@ class DeviceService {
       Log.w('⚠️ [DeviceService] Time sync failed (continuing): $e');
     }
 
-    // Pull from Firestore directly (same pattern as Faculty/Student apps)
+    // Pull from Firestore directly
     if (Firebase.apps.isEmpty) {
       Log.w('⚠️ [DeviceService] Firebase not initialized. Cannot sync from Firestore.');
       return;
     }
 
     try {
-      final dayName = _getDayNameString(DateTime.now());
-      final roomId = registration.roomId;
+      final now = DateTime.now();
+      final dayName = _getDayNameString(now);
+      final dayOfWeek = now.weekday;
+      
+      // Use logical classroomId for timetable query, fallback to smartBoardId
+      final classroomId = registration.classroomId ?? registration.smartBoardId;
 
-      Log.i('📡 [DeviceService] Syncing from Firestore: room=$roomId, day=$dayName');
+      Log.i('📡 [DeviceService] Syncing from Firestore (Full=$fullSync): room=$classroomId');
 
-      final snapshot = await FirebaseFirestore.instance
+      var query = FirebaseFirestore.instance
           .collection('timetable_slots')
-          .where('classroom_id', isEqualTo: roomId)
-          .where('day_of_week', isEqualTo: dayName)
-          .get();
+          .where('classroom_id', isEqualTo: classroomId);
 
-      final dayOfWeek = DateTime.now().weekday;
+      if (!fullSync) {
+        query = query.where('day_of_week', isEqualTo: dayName);
+      }
+
+      final snapshot = await query.get();
 
       if (snapshot.docs.isEmpty) {
-        Log.w('⚠️ [DeviceService] No timetable slots found for room=$roomId, day=$dayName');
-        // Clear Isar cache so UI shows "No Class Scheduled"
-        await _updateIsarCache([], dayOfWeek);
+        Log.w('⚠️ [DeviceService] No timetable slots found for room=$classroomId');
+        if (!fullSync) {
+          await _updateIsarCache([], dayOfWeek);
+        } else {
+          await _updateIsarCache([], null);
+        }
         return;
       }
+
       final entries = snapshot.docs.map((doc) {
         final data = doc.data();
+        final slotDayName = data['day_of_week']?.toString() ?? dayName;
+        
         return TimetableEntry()
-          ..dayOfWeek = dayOfWeek
+          ..dayOfWeek = _getDayNumber(slotDayName)
           ..startTime = data['start_time'] ?? ''
           ..endTime = data['end_time'] ?? ''
-          ..courseName = data['subject_name'] ?? 'Unknown'
-          ..facultyName = data['faculty_name'] ?? 'Unknown';
+          ..courseName = data['subject_name'] ?? 'Class'
+          ..facultyName = data['faculty_name'] ?? (data['faculty_emails'] is List ? (data['faculty_emails'] as List).join(', ') : data['faculty_emails']?.toString() ?? 'Professor')
+          ..sectionId = data['section_id']?.toString() ?? 'N/A';
       }).toList();
 
-      entries.sort((a, b) => a.startTime.compareTo(b.startTime));
-
       // Update Isar cache
-      await _updateIsarCache(entries, dayOfWeek);
+      await _updateIsarCache(entries, fullSync ? null : dayOfWeek);
 
-      Log.i('🏛️ [DeviceService] Synced ${entries.length} slots from Firestore.');
+      Log.i('🏛️ [DeviceService] Sync complete. Found ${entries.length} slots.');
     } catch (e, stackTrace) {
       Log.e('❌ [DeviceService] Firestore sync failed: $e');
       Log.e('❌ [DeviceService] Stack trace: $stackTrace');
-      // Don't rethrow - let the app continue with whatever data is available
     }
   }
 
   /// Real-time Firestore stream for today's schedule for this room.
   /// Mirrors the Faculty/Student app pattern using Firestore snapshots().
-  static Stream<List<TimetableEntry>> watchTodaySchedule(String roomId) {
+  static Stream<List<TimetableEntry>> watchTodaySchedule(DeviceRegistration registration) {
     final now = DateTime.now();
     final dayName = _getDayNameString(now);
     final dayOfWeek = now.weekday;
-    final cleanRoomId = roomId.trim();
+    
+    // Use logical classroomId for queries
+    final queryId = registration.classroomId ?? registration.smartBoardId;
 
     return FirebaseFirestore.instance
         .collection('timetable_slots')
-        .where('classroom_id', isEqualTo: cleanRoomId)
+        .where('classroom_id', isEqualTo: queryId)
         .where('day_of_week', isEqualTo: dayName)
         .snapshots()
         .asyncMap((snapshot) async {
+          Log.i('📡 [DeviceService] Firestore returned ${snapshot.docs.length} docs for $queryId on $dayName');
           final entries = snapshot.docs.map((doc) {
             final data = doc.data();
             return TimetableEntry()
@@ -195,13 +274,20 @@ class DeviceService {
               ..startTime = data['start_time'] ?? ''
               ..endTime = data['end_time'] ?? ''
               ..courseName = data['subject_name'] ?? 'Unknown'
-              ..facultyName = data['faculty_name'] ?? 'Unknown';
+              ..facultyName = data['faculty_name'] ?? (data['faculty_emails'] is List ? (data['faculty_emails'] as List).join(', ') : data['faculty_emails']?.toString() ?? 'Unknown')
+              ..sectionId = data['section_id']?.toString() ?? 'N/A';
           }).toList();
 
           entries.sort((a, b) => a.startTime.compareTo(b.startTime));
 
           // Update local Isar cache for offline resilience
           await _updateIsarCache(entries, dayOfWeek);
+          
+          if (entries.isEmpty) {
+            Log.w('⚠️ [DeviceService] Stream update: No slots found for $dayName');
+          } else {
+            Log.i('🏛️ [DeviceService] Stream update: ${entries.length} slots received');
+          }
 
           return entries;
         });
@@ -209,10 +295,12 @@ class DeviceService {
 
   /// Real-time listener for an active session in a specific room.
   /// Allows the SmartBoard to "ignite" instantly when a professor starts a session.
-  static Stream<Map<String, dynamic>?> watchActiveSession(String roomId) {
+  static Stream<Map<String, dynamic>?> watchActiveSession(DeviceRegistration registration) {
+    final queryId = registration.classroomId ?? registration.smartBoardId;
+    
     return FirebaseFirestore.instance
-        .collection('sessions')
-        .where('classroom_id', isEqualTo: roomId)
+        .collection('ActiveSessions')
+        .where('room_id', isEqualTo: queryId)
         .where('status', isEqualTo: 'active')
         .limit(1)
         .snapshots()
@@ -225,17 +313,29 @@ class DeviceService {
         });
   }
 
-  static Future<void> _updateIsarCache(List<TimetableEntry> entries, int dayOfWeek) async {
+  static Future<void> _updateIsarCache(List<TimetableEntry> entries, int? dayOfWeek) async {
     try {
       final isar = SessionManager.isar;
       await isar.writeTxn(() async {
-        await isar.timetableEntrys.filter().dayOfWeekEqualTo(dayOfWeek).deleteAll();
+        if (dayOfWeek != null) {
+          // Selective day update (daily sync or stream)
+          await isar.timetableEntrys.filter().dayOfWeekEqualTo(dayOfWeek).deleteAll();
+        } else {
+          // Full cache reset (registration or maintenance sync)
+          await isar.timetableEntrys.clear();
+        }
         await isar.timetableEntrys.putAll(entries);
       });
-      Log.i('📦 [DeviceService] Isar cache updated from Firestore stream');
+      Log.i('📦 [DeviceService] Isar cache updated (${entries.length} entries)');
     } catch (e) {
       Log.e('❌ [DeviceService] Failed to update Isar cache: $e');
     }
+  }
+
+  static int _getDayNumber(String dayName) {
+    final days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    final idx = days.indexWhere((d) => d.toLowerCase() == dayName.toLowerCase());
+    return idx != -1 ? idx + 1 : DateTime.now().weekday;
   }
 
   static String _getDayNameString(DateTime date) {
@@ -265,13 +365,16 @@ class DeviceService {
     // Fall back to Firestore directly (same pattern as mobile apps)
     if (Firebase.apps.isNotEmpty) {
       try {
+        final registration = await getRegistration();
+        if (registration == null) return cached;
+
         final dayName = _getDayNameString(now);
-        final roomId = (await getRoomId() ?? '').trim();
-        print('📅 [DeviceService] Firestore query: roomId=$roomId, dayName=$dayName');
+        final queryId = (registration.classroomId ?? registration.smartBoardId).trim();
+        print('📅 [DeviceService] Firestore query: room=$queryId, dayName=$dayName');
         
         final snapshot = await FirebaseFirestore.instance
             .collection('timetable_slots')
-            .where('classroom_id', isEqualTo: roomId)
+            .where('classroom_id', isEqualTo: queryId)
             .where('day_of_week', isEqualTo: dayName)
             .get();
         
@@ -286,7 +389,8 @@ class DeviceService {
               ..startTime = data['start_time'] ?? ''
               ..endTime = data['end_time'] ?? ''
               ..courseName = data['subject_name'] ?? 'Unknown'
-              ..facultyName = data['faculty_name'] ?? 'Unknown';
+              ..facultyName = data['faculty_name'] ?? (data['faculty_emails'] is List ? (data['faculty_emails'] as List).join(', ') : data['faculty_emails']?.toString() ?? 'Unknown')
+              ..sectionId = data['section_id']?.toString() ?? 'N/A';
           }).toList();
           
           entries.sort((a, b) => a.startTime.compareTo(b.startTime));
@@ -305,6 +409,19 @@ class DeviceService {
     }
     
     return cached; // Return empty list if nothing found
+  }
+
+  /// Fetches all timetable entries for the entire week from local cache.
+  static Future<List<TimetableEntry>> getWeeklyTimeline() async {
+    // We prioritize local cache for the weekly view as it's primarily for offline reference.
+    final entries = await _isar.timetableEntrys
+        .where()
+        .sortByDayOfWeek()
+        .thenByStartTime()
+        .findAll();
+    
+    Log.i('📅 [DeviceService] Weekly timeline: ${entries.length} entries');
+    return entries;
   }
 
   /// Finds the currently active slot based on system time.
@@ -337,13 +454,16 @@ class DeviceService {
     // Fall back to Firestore (e.g. if Isar was just cleared or first run)
     if (Firebase.apps.isNotEmpty) {
       try {
+        final registration = await getRegistration();
+        if (registration == null) return null;
+
         final dayName = _getDayNameString(now);
-        final roomId = (await getRoomId() ?? '').trim();
+        final queryId = (registration.classroomId ?? registration.smartBoardId).trim();
         
         // Note: Simple query to avoid needing complex composite indexes immediately
         final snapshot = await FirebaseFirestore.instance
             .collection('timetable_slots')
-            .where('classroom_id', isEqualTo: roomId)
+            .where('classroom_id', isEqualTo: queryId)
             .where('day_of_week', isEqualTo: dayName)
             .get();
         
@@ -359,7 +479,8 @@ class DeviceService {
                 ..startTime = startTime
                 ..endTime = endTime
                 ..courseName = data['subject_name'] ?? 'Unknown'
-                ..facultyName = data['faculty_name'] ?? 'Unknown';
+                ..facultyName = data['faculty_name'] ?? (data['faculty_emails'] is List ? (data['faculty_emails'] as List).join(', ') : data['faculty_emails']?.toString() ?? 'Unknown')
+                ..sectionId = data['section_id']?.toString() ?? 'N/A';
             }
           }
         }
@@ -374,6 +495,11 @@ class DeviceService {
   /// Deletes the local registration (USE WITH CAUTION - for IT maintenance only).
   static Future<void> clearRegistration() async {
     await SecureStorageService.clearAll();
+    await _isar.writeTxn(() async {
+      await _isar.deviceRegistrations.clear();
+      await _isar.timetableEntrys.clear();
+      await _isar.activeSessions.clear();
+    });
     Log.w('⚠️ [DeviceService] Registration wiped. Device is now anonymous.');
   }
 }

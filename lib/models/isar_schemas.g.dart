@@ -1613,38 +1613,43 @@ const DeviceRegistrationSchema = CollectionSchema(
       name: r'capacity',
       type: IsarType.long,
     ),
-    r'department': PropertySchema(
+    r'classroomId': PropertySchema(
       id: 4,
+      name: r'classroomId',
+      type: IsarType.string,
+    ),
+    r'department': PropertySchema(
+      id: 5,
       name: r'department',
       type: IsarType.string,
     ),
     r'hardwareId': PropertySchema(
-      id: 5,
+      id: 6,
       name: r'hardwareId',
       type: IsarType.string,
     ),
     r'refreshToken': PropertySchema(
-      id: 6,
+      id: 7,
       name: r'refreshToken',
       type: IsarType.string,
     ),
     r'registrationDate': PropertySchema(
-      id: 7,
+      id: 8,
       name: r'registrationDate',
       type: IsarType.dateTime,
-    ),
-    r'roomId': PropertySchema(
-      id: 8,
-      name: r'roomId',
-      type: IsarType.string,
     ),
     r'roomName': PropertySchema(
       id: 9,
       name: r'roomName',
       type: IsarType.string,
     ),
-    r'tokenExpiryMs': PropertySchema(
+    r'smartBoardId': PropertySchema(
       id: 10,
+      name: r'smartBoardId',
+      type: IsarType.string,
+    ),
+    r'tokenExpiryMs': PropertySchema(
+      id: 11,
       name: r'tokenExpiryMs',
       type: IsarType.long,
     )
@@ -1655,14 +1660,14 @@ const DeviceRegistrationSchema = CollectionSchema(
   deserializeProp: _deviceRegistrationDeserializeProp,
   idName: r'id',
   indexes: {
-    r'roomId': IndexSchema(
-      id: -3609232324653216207,
-      name: r'roomId',
+    r'smartBoardId': IndexSchema(
+      id: -1445689714503001021,
+      name: r'smartBoardId',
       unique: true,
       replace: false,
       properties: [
         IndexPropertySchema(
-          name: r'roomId',
+          name: r'smartBoardId',
           type: IndexType.hash,
           caseSensitive: true,
         )
@@ -1696,6 +1701,12 @@ int _deviceRegistrationEstimateSize(
     }
   }
   bytesCount += 3 + object.building.length * 3;
+  {
+    final value = object.classroomId;
+    if (value != null) {
+      bytesCount += 3 + value.length * 3;
+    }
+  }
   bytesCount += 3 + object.department.length * 3;
   bytesCount += 3 + object.hardwareId.length * 3;
   {
@@ -1704,8 +1715,8 @@ int _deviceRegistrationEstimateSize(
       bytesCount += 3 + value.length * 3;
     }
   }
-  bytesCount += 3 + object.roomId.length * 3;
   bytesCount += 3 + object.roomName.length * 3;
+  bytesCount += 3 + object.smartBoardId.length * 3;
   return bytesCount;
 }
 
@@ -1719,13 +1730,14 @@ void _deviceRegistrationSerialize(
   writer.writeString(offsets[1], object.apiKey);
   writer.writeString(offsets[2], object.building);
   writer.writeLong(offsets[3], object.capacity);
-  writer.writeString(offsets[4], object.department);
-  writer.writeString(offsets[5], object.hardwareId);
-  writer.writeString(offsets[6], object.refreshToken);
-  writer.writeDateTime(offsets[7], object.registrationDate);
-  writer.writeString(offsets[8], object.roomId);
+  writer.writeString(offsets[4], object.classroomId);
+  writer.writeString(offsets[5], object.department);
+  writer.writeString(offsets[6], object.hardwareId);
+  writer.writeString(offsets[7], object.refreshToken);
+  writer.writeDateTime(offsets[8], object.registrationDate);
   writer.writeString(offsets[9], object.roomName);
-  writer.writeLong(offsets[10], object.tokenExpiryMs);
+  writer.writeString(offsets[10], object.smartBoardId);
+  writer.writeLong(offsets[11], object.tokenExpiryMs);
 }
 
 DeviceRegistration _deviceRegistrationDeserialize(
@@ -1739,14 +1751,15 @@ DeviceRegistration _deviceRegistrationDeserialize(
   object.apiKey = reader.readStringOrNull(offsets[1]);
   object.building = reader.readString(offsets[2]);
   object.capacity = reader.readLong(offsets[3]);
-  object.department = reader.readString(offsets[4]);
-  object.hardwareId = reader.readString(offsets[5]);
+  object.classroomId = reader.readStringOrNull(offsets[4]);
+  object.department = reader.readString(offsets[5]);
+  object.hardwareId = reader.readString(offsets[6]);
   object.id = id;
-  object.refreshToken = reader.readStringOrNull(offsets[6]);
-  object.registrationDate = reader.readDateTime(offsets[7]);
-  object.roomId = reader.readString(offsets[8]);
+  object.refreshToken = reader.readStringOrNull(offsets[7]);
+  object.registrationDate = reader.readDateTime(offsets[8]);
   object.roomName = reader.readString(offsets[9]);
-  object.tokenExpiryMs = reader.readLongOrNull(offsets[10]);
+  object.smartBoardId = reader.readString(offsets[10]);
+  object.tokenExpiryMs = reader.readLongOrNull(offsets[11]);
   return object;
 }
 
@@ -1766,18 +1779,20 @@ P _deviceRegistrationDeserializeProp<P>(
     case 3:
       return (reader.readLong(offset)) as P;
     case 4:
-      return (reader.readString(offset)) as P;
+      return (reader.readStringOrNull(offset)) as P;
     case 5:
       return (reader.readString(offset)) as P;
     case 6:
-      return (reader.readStringOrNull(offset)) as P;
-    case 7:
-      return (reader.readDateTime(offset)) as P;
-    case 8:
       return (reader.readString(offset)) as P;
+    case 7:
+      return (reader.readStringOrNull(offset)) as P;
+    case 8:
+      return (reader.readDateTime(offset)) as P;
     case 9:
       return (reader.readString(offset)) as P;
     case 10:
+      return (reader.readString(offset)) as P;
+    case 11:
       return (reader.readLongOrNull(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -1799,57 +1814,59 @@ void _deviceRegistrationAttach(
 }
 
 extension DeviceRegistrationByIndex on IsarCollection<DeviceRegistration> {
-  Future<DeviceRegistration?> getByRoomId(String roomId) {
-    return getByIndex(r'roomId', [roomId]);
+  Future<DeviceRegistration?> getBySmartBoardId(String smartBoardId) {
+    return getByIndex(r'smartBoardId', [smartBoardId]);
   }
 
-  DeviceRegistration? getByRoomIdSync(String roomId) {
-    return getByIndexSync(r'roomId', [roomId]);
+  DeviceRegistration? getBySmartBoardIdSync(String smartBoardId) {
+    return getByIndexSync(r'smartBoardId', [smartBoardId]);
   }
 
-  Future<bool> deleteByRoomId(String roomId) {
-    return deleteByIndex(r'roomId', [roomId]);
+  Future<bool> deleteBySmartBoardId(String smartBoardId) {
+    return deleteByIndex(r'smartBoardId', [smartBoardId]);
   }
 
-  bool deleteByRoomIdSync(String roomId) {
-    return deleteByIndexSync(r'roomId', [roomId]);
+  bool deleteBySmartBoardIdSync(String smartBoardId) {
+    return deleteByIndexSync(r'smartBoardId', [smartBoardId]);
   }
 
-  Future<List<DeviceRegistration?>> getAllByRoomId(List<String> roomIdValues) {
-    final values = roomIdValues.map((e) => [e]).toList();
-    return getAllByIndex(r'roomId', values);
+  Future<List<DeviceRegistration?>> getAllBySmartBoardId(
+      List<String> smartBoardIdValues) {
+    final values = smartBoardIdValues.map((e) => [e]).toList();
+    return getAllByIndex(r'smartBoardId', values);
   }
 
-  List<DeviceRegistration?> getAllByRoomIdSync(List<String> roomIdValues) {
-    final values = roomIdValues.map((e) => [e]).toList();
-    return getAllByIndexSync(r'roomId', values);
+  List<DeviceRegistration?> getAllBySmartBoardIdSync(
+      List<String> smartBoardIdValues) {
+    final values = smartBoardIdValues.map((e) => [e]).toList();
+    return getAllByIndexSync(r'smartBoardId', values);
   }
 
-  Future<int> deleteAllByRoomId(List<String> roomIdValues) {
-    final values = roomIdValues.map((e) => [e]).toList();
-    return deleteAllByIndex(r'roomId', values);
+  Future<int> deleteAllBySmartBoardId(List<String> smartBoardIdValues) {
+    final values = smartBoardIdValues.map((e) => [e]).toList();
+    return deleteAllByIndex(r'smartBoardId', values);
   }
 
-  int deleteAllByRoomIdSync(List<String> roomIdValues) {
-    final values = roomIdValues.map((e) => [e]).toList();
-    return deleteAllByIndexSync(r'roomId', values);
+  int deleteAllBySmartBoardIdSync(List<String> smartBoardIdValues) {
+    final values = smartBoardIdValues.map((e) => [e]).toList();
+    return deleteAllByIndexSync(r'smartBoardId', values);
   }
 
-  Future<Id> putByRoomId(DeviceRegistration object) {
-    return putByIndex(r'roomId', object);
+  Future<Id> putBySmartBoardId(DeviceRegistration object) {
+    return putByIndex(r'smartBoardId', object);
   }
 
-  Id putByRoomIdSync(DeviceRegistration object, {bool saveLinks = true}) {
-    return putByIndexSync(r'roomId', object, saveLinks: saveLinks);
+  Id putBySmartBoardIdSync(DeviceRegistration object, {bool saveLinks = true}) {
+    return putByIndexSync(r'smartBoardId', object, saveLinks: saveLinks);
   }
 
-  Future<List<Id>> putAllByRoomId(List<DeviceRegistration> objects) {
-    return putAllByIndex(r'roomId', objects);
+  Future<List<Id>> putAllBySmartBoardId(List<DeviceRegistration> objects) {
+    return putAllByIndex(r'smartBoardId', objects);
   }
 
-  List<Id> putAllByRoomIdSync(List<DeviceRegistration> objects,
+  List<Id> putAllBySmartBoardIdSync(List<DeviceRegistration> objects,
       {bool saveLinks = true}) {
-    return putAllByIndexSync(r'roomId', objects, saveLinks: saveLinks);
+    return putAllByIndexSync(r'smartBoardId', objects, saveLinks: saveLinks);
   }
 }
 
@@ -1933,44 +1950,44 @@ extension DeviceRegistrationQueryWhere
   }
 
   QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterWhereClause>
-      roomIdEqualTo(String roomId) {
+      smartBoardIdEqualTo(String smartBoardId) {
     return QueryBuilder.apply(this, (query) {
       return query.addWhereClause(IndexWhereClause.equalTo(
-        indexName: r'roomId',
-        value: [roomId],
+        indexName: r'smartBoardId',
+        value: [smartBoardId],
       ));
     });
   }
 
   QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterWhereClause>
-      roomIdNotEqualTo(String roomId) {
+      smartBoardIdNotEqualTo(String smartBoardId) {
     return QueryBuilder.apply(this, (query) {
       if (query.whereSort == Sort.asc) {
         return query
             .addWhereClause(IndexWhereClause.between(
-              indexName: r'roomId',
+              indexName: r'smartBoardId',
               lower: [],
-              upper: [roomId],
+              upper: [smartBoardId],
               includeUpper: false,
             ))
             .addWhereClause(IndexWhereClause.between(
-              indexName: r'roomId',
-              lower: [roomId],
+              indexName: r'smartBoardId',
+              lower: [smartBoardId],
               includeLower: false,
               upper: [],
             ));
       } else {
         return query
             .addWhereClause(IndexWhereClause.between(
-              indexName: r'roomId',
-              lower: [roomId],
+              indexName: r'smartBoardId',
+              lower: [smartBoardId],
               includeLower: false,
               upper: [],
             ))
             .addWhereClause(IndexWhereClause.between(
-              indexName: r'roomId',
+              indexName: r'smartBoardId',
               lower: [],
-              upper: [roomId],
+              upper: [smartBoardId],
               includeUpper: false,
             ));
       }
@@ -2476,6 +2493,160 @@ extension DeviceRegistrationQueryFilter
         includeLower: includeLower,
         upper: upper,
         includeUpper: includeUpper,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      classroomIdIsNull() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(const FilterCondition.isNull(
+        property: r'classroomId',
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      classroomIdIsNotNull() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(const FilterCondition.isNotNull(
+        property: r'classroomId',
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      classroomIdEqualTo(
+    String? value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'classroomId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      classroomIdGreaterThan(
+    String? value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'classroomId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      classroomIdLessThan(
+    String? value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'classroomId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      classroomIdBetween(
+    String? lower,
+    String? upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'classroomId',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      classroomIdStartsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.startsWith(
+        property: r'classroomId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      classroomIdEndsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.endsWith(
+        property: r'classroomId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      classroomIdContains(String value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.contains(
+        property: r'classroomId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      classroomIdMatches(String pattern, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.matches(
+        property: r'classroomId',
+        wildcard: pattern,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      classroomIdIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'classroomId',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      classroomIdIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        property: r'classroomId',
+        value: '',
       ));
     });
   }
@@ -3019,142 +3190,6 @@ extension DeviceRegistrationQueryFilter
   }
 
   QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      roomIdEqualTo(
-    String value, {
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.equalTo(
-        property: r'roomId',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      roomIdGreaterThan(
-    String value, {
-    bool include = false,
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.greaterThan(
-        include: include,
-        property: r'roomId',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      roomIdLessThan(
-    String value, {
-    bool include = false,
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.lessThan(
-        include: include,
-        property: r'roomId',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      roomIdBetween(
-    String lower,
-    String upper, {
-    bool includeLower = true,
-    bool includeUpper = true,
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.between(
-        property: r'roomId',
-        lower: lower,
-        includeLower: includeLower,
-        upper: upper,
-        includeUpper: includeUpper,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      roomIdStartsWith(
-    String value, {
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.startsWith(
-        property: r'roomId',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      roomIdEndsWith(
-    String value, {
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.endsWith(
-        property: r'roomId',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      roomIdContains(String value, {bool caseSensitive = true}) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.contains(
-        property: r'roomId',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      roomIdMatches(String pattern, {bool caseSensitive = true}) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.matches(
-        property: r'roomId',
-        wildcard: pattern,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      roomIdIsEmpty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.equalTo(
-        property: r'roomId',
-        value: '',
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      roomIdIsNotEmpty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.greaterThan(
-        property: r'roomId',
-        value: '',
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
       roomNameEqualTo(
     String value, {
     bool caseSensitive = true,
@@ -3285,6 +3320,142 @@ extension DeviceRegistrationQueryFilter
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.greaterThan(
         property: r'roomName',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      smartBoardIdEqualTo(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'smartBoardId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      smartBoardIdGreaterThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'smartBoardId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      smartBoardIdLessThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'smartBoardId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      smartBoardIdBetween(
+    String lower,
+    String upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'smartBoardId',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      smartBoardIdStartsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.startsWith(
+        property: r'smartBoardId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      smartBoardIdEndsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.endsWith(
+        property: r'smartBoardId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      smartBoardIdContains(String value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.contains(
+        property: r'smartBoardId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      smartBoardIdMatches(String pattern, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.matches(
+        property: r'smartBoardId',
+        wildcard: pattern,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      smartBoardIdIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'smartBoardId',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
+      smartBoardIdIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        property: r'smartBoardId',
         value: '',
       ));
     });
@@ -3430,6 +3601,20 @@ extension DeviceRegistrationQuerySortBy
   }
 
   QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
+      sortByClassroomId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'classroomId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
+      sortByClassroomIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'classroomId', Sort.desc);
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
       sortByDepartment() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'department', Sort.asc);
@@ -3486,20 +3671,6 @@ extension DeviceRegistrationQuerySortBy
   }
 
   QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      sortByRoomId() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'roomId', Sort.asc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      sortByRoomIdDesc() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'roomId', Sort.desc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
       sortByRoomName() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'roomName', Sort.asc);
@@ -3510,6 +3681,20 @@ extension DeviceRegistrationQuerySortBy
       sortByRoomNameDesc() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'roomName', Sort.desc);
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
+      sortBySmartBoardId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'smartBoardId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
+      sortBySmartBoardIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'smartBoardId', Sort.desc);
     });
   }
 
@@ -3587,6 +3772,20 @@ extension DeviceRegistrationQuerySortThenBy
   }
 
   QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
+      thenByClassroomId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'classroomId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
+      thenByClassroomIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'classroomId', Sort.desc);
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
       thenByDepartment() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'department', Sort.asc);
@@ -3657,20 +3856,6 @@ extension DeviceRegistrationQuerySortThenBy
   }
 
   QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      thenByRoomId() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'roomId', Sort.asc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      thenByRoomIdDesc() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'roomId', Sort.desc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
       thenByRoomName() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'roomName', Sort.asc);
@@ -3681,6 +3866,20 @@ extension DeviceRegistrationQuerySortThenBy
       thenByRoomNameDesc() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'roomName', Sort.desc);
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
+      thenBySmartBoardId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'smartBoardId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
+      thenBySmartBoardIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'smartBoardId', Sort.desc);
     });
   }
 
@@ -3730,6 +3929,13 @@ extension DeviceRegistrationQueryWhereDistinct
   }
 
   QueryBuilder<DeviceRegistration, DeviceRegistration, QDistinct>
+      distinctByClassroomId({bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'classroomId', caseSensitive: caseSensitive);
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, DeviceRegistration, QDistinct>
       distinctByDepartment({bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
       return query.addDistinctBy(r'department', caseSensitive: caseSensitive);
@@ -3758,16 +3964,16 @@ extension DeviceRegistrationQueryWhereDistinct
   }
 
   QueryBuilder<DeviceRegistration, DeviceRegistration, QDistinct>
-      distinctByRoomId({bool caseSensitive = true}) {
+      distinctByRoomName({bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
-      return query.addDistinctBy(r'roomId', caseSensitive: caseSensitive);
+      return query.addDistinctBy(r'roomName', caseSensitive: caseSensitive);
     });
   }
 
   QueryBuilder<DeviceRegistration, DeviceRegistration, QDistinct>
-      distinctByRoomName({bool caseSensitive = true}) {
+      distinctBySmartBoardId({bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
-      return query.addDistinctBy(r'roomName', caseSensitive: caseSensitive);
+      return query.addDistinctBy(r'smartBoardId', caseSensitive: caseSensitive);
     });
   }
 
@@ -3813,6 +4019,13 @@ extension DeviceRegistrationQueryProperty
     });
   }
 
+  QueryBuilder<DeviceRegistration, String?, QQueryOperations>
+      classroomIdProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'classroomId');
+    });
+  }
+
   QueryBuilder<DeviceRegistration, String, QQueryOperations>
       departmentProperty() {
     return QueryBuilder.apply(this, (query) {
@@ -3841,16 +4054,17 @@ extension DeviceRegistrationQueryProperty
     });
   }
 
-  QueryBuilder<DeviceRegistration, String, QQueryOperations> roomIdProperty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addPropertyName(r'roomId');
-    });
-  }
-
   QueryBuilder<DeviceRegistration, String, QQueryOperations>
       roomNameProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'roomName');
+    });
+  }
+
+  QueryBuilder<DeviceRegistration, String, QQueryOperations>
+      smartBoardIdProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'smartBoardId');
     });
   }
 
@@ -4848,8 +5062,13 @@ const TimetableEntrySchema = CollectionSchema(
       name: r'facultyName',
       type: IsarType.string,
     ),
-    r'startTime': PropertySchema(
+    r'sectionId': PropertySchema(
       id: 4,
+      name: r'sectionId',
+      type: IsarType.string,
+    ),
+    r'startTime': PropertySchema(
+      id: 5,
       name: r'startTime',
       type: IsarType.string,
     )
@@ -4904,6 +5123,7 @@ int _timetableEntryEstimateSize(
   bytesCount += 3 + object.courseName.length * 3;
   bytesCount += 3 + object.endTime.length * 3;
   bytesCount += 3 + object.facultyName.length * 3;
+  bytesCount += 3 + object.sectionId.length * 3;
   bytesCount += 3 + object.startTime.length * 3;
   return bytesCount;
 }
@@ -4918,7 +5138,8 @@ void _timetableEntrySerialize(
   writer.writeLong(offsets[1], object.dayOfWeek);
   writer.writeString(offsets[2], object.endTime);
   writer.writeString(offsets[3], object.facultyName);
-  writer.writeString(offsets[4], object.startTime);
+  writer.writeString(offsets[4], object.sectionId);
+  writer.writeString(offsets[5], object.startTime);
 }
 
 TimetableEntry _timetableEntryDeserialize(
@@ -4933,7 +5154,8 @@ TimetableEntry _timetableEntryDeserialize(
   object.endTime = reader.readString(offsets[2]);
   object.facultyName = reader.readString(offsets[3]);
   object.id = id;
-  object.startTime = reader.readString(offsets[4]);
+  object.sectionId = reader.readString(offsets[4]);
+  object.startTime = reader.readString(offsets[5]);
   return object;
 }
 
@@ -4953,6 +5175,8 @@ P _timetableEntryDeserializeProp<P>(
     case 3:
       return (reader.readString(offset)) as P;
     case 4:
+      return (reader.readString(offset)) as P;
+    case 5:
       return (reader.readString(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -5721,6 +5945,142 @@ extension TimetableEntryQueryFilter
   }
 
   QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      sectionIdEqualTo(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'sectionId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      sectionIdGreaterThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'sectionId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      sectionIdLessThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'sectionId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      sectionIdBetween(
+    String lower,
+    String upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'sectionId',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      sectionIdStartsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.startsWith(
+        property: r'sectionId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      sectionIdEndsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.endsWith(
+        property: r'sectionId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      sectionIdContains(String value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.contains(
+        property: r'sectionId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      sectionIdMatches(String pattern, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.matches(
+        property: r'sectionId',
+        wildcard: pattern,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      sectionIdIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'sectionId',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      sectionIdIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        property: r'sectionId',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
       startTimeEqualTo(
     String value, {
     bool caseSensitive = true,
@@ -5919,6 +6279,19 @@ extension TimetableEntryQuerySortBy
     });
   }
 
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterSortBy> sortBySectionId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'sectionId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterSortBy>
+      sortBySectionIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'sectionId', Sort.desc);
+    });
+  }
+
   QueryBuilder<TimetableEntry, TimetableEntry, QAfterSortBy> sortByStartTime() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'startTime', Sort.asc);
@@ -6001,6 +6374,19 @@ extension TimetableEntryQuerySortThenBy
     });
   }
 
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterSortBy> thenBySectionId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'sectionId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterSortBy>
+      thenBySectionIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'sectionId', Sort.desc);
+    });
+  }
+
   QueryBuilder<TimetableEntry, TimetableEntry, QAfterSortBy> thenByStartTime() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'startTime', Sort.asc);
@@ -6045,6 +6431,13 @@ extension TimetableEntryQueryWhereDistinct
     });
   }
 
+  QueryBuilder<TimetableEntry, TimetableEntry, QDistinct> distinctBySectionId(
+      {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'sectionId', caseSensitive: caseSensitive);
+    });
+  }
+
   QueryBuilder<TimetableEntry, TimetableEntry, QDistinct> distinctByStartTime(
       {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
@@ -6082,6 +6475,12 @@ extension TimetableEntryQueryProperty
   QueryBuilder<TimetableEntry, String, QQueryOperations> facultyNameProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'facultyName');
+    });
+  }
+
+  QueryBuilder<TimetableEntry, String, QQueryOperations> sectionIdProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'sectionId');
     });
   }
 

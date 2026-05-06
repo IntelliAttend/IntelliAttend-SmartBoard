@@ -45,7 +45,7 @@ class _BootScreenState extends State<BootScreen> {
       }
 
       try {
-        await DeviceService.syncTimetable();
+        await DeviceService.syncTimetable(fullSync: true);
       } catch (e) {
         debugPrint('⚠️ [Boot] Timetable sync failed: $e');
       }
@@ -96,7 +96,7 @@ class _BootScreenState extends State<BootScreen> {
                       child: GestureDetector(
                         onTap: () {
                           final reg = snapshot.data ?? DeviceRegistration()
-                            ..roomId = 'UNREGISTERED'
+                            ..smartBoardId = 'UNREGISTERED'
                             ..roomName = 'New Device'
                             ..building = 'Unknown'
                             ..department = 'Unknown'
@@ -159,7 +159,7 @@ class _BootScreenState extends State<BootScreen> {
               child: Center(
                 child: Opacity(
                   opacity: 0.3,
-                  child: Text('v5.4.1-DEBUG', style: Theme.of(context).textTheme.labelLarge),
+                  child: Text('v5.4.1-STABLE', style: Theme.of(context).textTheme.labelLarge),
                 ),
               ),
             ),

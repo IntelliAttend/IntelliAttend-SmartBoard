@@ -9,10 +9,10 @@ class AppConfig {
   AppConfig._internal();
 
   /// The Cloud API Gateway URL
-  static String get apiBaseUrl => dotenv.env['API_BASE_URL'] ?? 'https://api-dev.balaseetharamanjaneyulu.com';
+  static String get apiBaseUrl => dotenv.env['API_BASE_URL']!;
 
   /// The Local "Brain" API URL
-  static String get localApiUrl => dotenv.env['LOCAL_API_URL'] ?? 'http://127.0.0.1:8000/v1/board/telemetry';
+  static String get localApiUrl => dotenv.env['LOCAL_API_URL']!;
 
   /// Validates that all required environment variables are present.
   /// Throws an [Exception] if critical configuration is missing.

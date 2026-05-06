@@ -42,24 +42,29 @@ class ApiService {
   // ─── Authentication ───────────────────────────────────────────────────────
 
   static Future<Map<String, String>> _authHeaders() async {
-    String? token = await SecureStorageService.getValidAccessToken();
-    token ??= await _refreshToken();
-
-    if (token != null) {
-      return {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'};
-    }
-
-    final apiKey = await SecureStorageService.getApiKey();
-    if (apiKey != null && apiKey.isNotEmpty) {
-      return {'Content-Type': 'application/json', 'X-API-Key': apiKey};
-    }
-
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    
+    // ─── Hardware Identity (Zero-Trust) ─────────────────────────────────────
     final deviceId = await HardwareFingerprintService.getWindowsFingerprint();
     if (deviceId.isNotEmpty && deviceId != 'null') {
-      return {'Content-Type': 'application/json', 'X-Device-ID': deviceId};
+      headers['X-Device-ID'] = deviceId;
     }
 
-    return {'Content-Type': 'application/json'};
+    // ─── Token Authentication ──────────────────────────────────────────────
+    String? token = await SecureStorageService.getValidAccessToken();
+    token ??= await _refreshToken();
+    if (token != null) {
+      headers['Authorization'] = 'Bearer $token';
+      return headers;
+    }
+
+    // ─── API Key Fallback ──────────────────────────────────────────────────
+    final apiKey = await SecureStorageService.getApiKey();
+    if (apiKey != null && apiKey.isNotEmpty) {
+      headers['X-API-Key'] = apiKey;
+    }
+
+    return headers;
   }
 
   static Future<String?> _refreshToken() async {
@@ -94,12 +99,12 @@ class ApiService {
 
   // ─── Registration Flow ────────────────────────────────────────────────────
 
-  static Future<void> requestRegistrationOtp({required String roomId}) async {
+  static Future<void> requestRegistrationOtp({required String smartBoardId}) async {
     final uri = await _buildUri('api/v1/board/register/request-otp');
     final response = await http.post(
       uri,
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'classroom_id': roomId}),
+      body: jsonEncode({'classroom_id': smartBoardId}),
     );
 
     if (response.statusCode != 200) {
@@ -108,7 +113,7 @@ class ApiService {
   }
 
   static Future<Map<String, dynamic>> verifyRegistrationOtp({
-    required String roomId,
+    required String smartBoardId,
     required String otp,
     String? deviceName,
   }) async {
@@ -118,10 +123,10 @@ class ApiService {
       uri,
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
-        'classroom_id': roomId,
+        'classroom_id': smartBoardId,
         'otp': otp,
         'hardware_fingerprint': hardwareId,
-        'device_name': deviceName ?? 'SmartBoard $roomId',
+        'device_name': deviceName ?? 'SmartBoard $smartBoardId',
       }),
     );
 
@@ -179,7 +184,7 @@ class ApiService {
   static Future<void> recordLiveAttendance({
     required String studentId,
     required String sessionId,
-    required String roomId,
+    required String smartBoardId,
     required String entryType,
   }) async {
     final uri = await _buildUri('api/v1/board/session/attendance/record-live');
@@ -189,7 +194,7 @@ class ApiService {
       body: jsonEncode({
         'student_id': studentId,
         'session_id': sessionId,
-        'room_id': roomId,
+        'room_id': smartBoardId,
         'entry_type': entryType,
         'timestamp_ms': DateTime.now().millisecondsSinceEpoch,
       }),

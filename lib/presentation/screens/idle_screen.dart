@@ -47,8 +47,19 @@ class _IdleScreenState extends State<IdleScreen> {
   @override
   void initState() {
     super.initState();
+    _loadInitialData();
     _startRealTimeListener();
     _startPreClassTimer();
+  }
+
+  Future<void> _loadInitialData() async {
+    final initialTimeline = await DeviceService.getTodayTimeline();
+    if (mounted) {
+      setState(() {
+        _todayTimeline = initialTimeline;
+        _bedrockEntry = _findCurrentSlot(initialTimeline);
+      });
+    }
   }
 
   @override
@@ -66,9 +77,9 @@ class _IdleScreenState extends State<IdleScreen> {
       return;
     }
     
-    final roomId = widget.registration.roomId;
+    final smartBoardId = widget.registration.smartBoardId;
     
-    _timetableSubscription = DeviceService.watchTodaySchedule(roomId).listen(
+    _timetableSubscription = DeviceService.watchTodaySchedule(widget.registration).listen(
       (entries) {
         if (mounted) {
           setState(() {
@@ -80,7 +91,7 @@ class _IdleScreenState extends State<IdleScreen> {
       onError: (e) => Log.e('❌ [Idle] Timetable stream error: $e'),
     );
 
-    _sessionSubscription = DeviceService.watchActiveSession(roomId).listen(
+    _sessionSubscription = DeviceService.watchActiveSession(widget.registration).listen(
       (sessionData) {
         if (mounted && sessionData != null) {
           _igniteWithActiveSession(sessionData);
@@ -177,7 +188,7 @@ class _IdleScreenState extends State<IdleScreen> {
       final rosterCount = data['roster_count'] is int ? data['roster_count'] : int.tryParse(data['roster_count']?.toString() ?? '0') ?? 0;
       final facultyName = data['faculty_name']?.toString() ?? 'Professor';
       final courseName = data['course_name']?.toString() ?? 'Active Class';
-      final sectionId = data['section_id']?.toString() ?? widget.registration.roomId;
+      final sectionId = data['section_id']?.toString() ?? widget.registration.smartBoardId;
 
       if (sessionId == null || sessionSecret == null) throw Exception('Invalid server response');
 
@@ -217,12 +228,13 @@ class _IdleScreenState extends State<IdleScreen> {
           Container(color: isDark ? AppColors.bgDark : AppColors.bgLight),
 
           Opacity(
-            opacity: isDark ? 0.08 : 0.05,
-            child: Image.asset(
-              'assets/background.png',
-              width: size.width,
-              height: size.height,
-              fit: BoxFit.cover,
+            opacity: isDark ? 0.05 : 0.03,
+            child: Center(
+              child: Image.asset(
+                'assets/background.png',
+                width: size.width * 0.6,
+                fit: BoxFit.contain,
+              ),
             ),
           ),
 
@@ -301,8 +313,11 @@ class _IdleScreenState extends State<IdleScreen> {
       children: [
         _navItem('Welcome', activeColor, true, () {}),
         const SizedBox(width: 30),
-        _navItem('Timetable', inactiveColor, false, () {
-          Navigator.of(context).push(MaterialPageRoute(builder: (context) => TimetableScreen(todayTimeline: _todayTimeline)));
+        _navItem('Timetable', inactiveColor, false, () async {
+          final weekly = await DeviceService.getWeeklyTimeline();
+          if (mounted) {
+            Navigator.of(context).push(MaterialPageRoute(builder: (context) => TimetableScreen(weeklyTimeline: weekly)));
+          }
         }),
         const SizedBox(width: 30),
         _navItem('Analytics', inactiveColor, false, () {
@@ -367,8 +382,8 @@ class _IdleScreenState extends State<IdleScreen> {
   }
 
   Widget _buildCourseInfo(bool isDark) {
-    final course = _bedrockEntry?.courseName ?? 'ADVANCED DATA STRUCTURES';
-    final faculty = _bedrockEntry?.facultyName ?? 'PROF. DR. SARAH JAY';
+    final course = _bedrockEntry?.courseName ?? 'NO ACTIVE SESSION';
+    final faculty = _bedrockEntry?.facultyName ?? 'SYSTEM READY';
     
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -401,7 +416,7 @@ class _IdleScreenState extends State<IdleScreen> {
                   ),
                 ),
                 Text(
-                  'Computer Science Department • Hall 402',
+                  '${widget.registration.roomName} • ${widget.registration.department}',
                   style: TextStyle(
                     fontSize: 14,
                     color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
@@ -556,16 +571,18 @@ class _IdleScreenState extends State<IdleScreen> {
           Expanded(
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
-              itemCount: _todayTimeline.isEmpty ? 5 : _todayTimeline.length,
+              itemCount: _todayTimeline.isEmpty ? 1 : _todayTimeline.length,
               itemBuilder: (context, index) {
                 if (_todayTimeline.isEmpty) {
-                  return TimelineSlot(
-                    entry: TimetableEntry()
-                      ..courseName = 'CS302 - Data Structures'
-                      ..facultyName = 'Dr. Sarah'
-                      ..startTime = '09:30 AM'
-                      ..endTime = '10:30 AM',
-                    isLive: index == 2,
+                  if (index > 0) return const SizedBox.shrink();
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 40),
+                    child: Center(
+                      child: Text(
+                        'NO CLASSES SCHEDULED TODAY',
+                        style: TextStyle(color: AppColors.textSecondaryDark, fontWeight: FontWeight.bold, letterSpacing: 2),
+                      ),
+                    ),
                   );
                 }
                 final entry = _todayTimeline[index];

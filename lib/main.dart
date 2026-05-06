@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,16 +11,27 @@ import 'core/theme/app_theme.dart';
 import 'services/session_manager.dart';
 import 'services/secure_storage_service.dart';
 import 'presentation/screens/boot_screen.dart';
+import 'services/device_service.dart';
 import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Full Screen setup for Desktop
-  if (!kIsWeb && (defaultTargetPlatform == TargetPlatform.macOS || defaultTargetPlatform == TargetPlatform.windows || defaultTargetPlatform == TargetPlatform.linux)) {
+  // 1. Initialize Core Services first
+  await _initFirebase();
+  await _loadEnvironment();
+  await _initSecureStorage();
+  _configureOrientation();
+  await _initLocalVault();
+
+  // 2. Start UI immediately
+  runApp(const IntelliAttendApp());
+
+  // 3. Handle Desktop Windowing after UI is up
+  if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
     await windowManager.ensureInitialized();
     
-    await windowManager.waitUntilReadyToShow(const WindowOptions(
+    windowManager.waitUntilReadyToShow(const WindowOptions(
       titleBarStyle: TitleBarStyle.hidden,
       center: true,
     ), () async {
@@ -27,21 +39,6 @@ void main() async {
       await windowManager.focus();
       await windowManager.setFullScreen(true);
       await windowManager.setAlwaysOnTop(true);
-    });
-  }
-
-  await _initFirebase();
-  await _loadEnvironment();
-  await _initSecureStorage();
-  _configureOrientation();
-  await _initLocalVault();
-
-  runApp(const IntelliAttendApp());
-  
-  // Secondary attempt after UI is rendered
-  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
-    Future.delayed(const Duration(milliseconds: 500), () async {
-      await windowManager.setFullScreen(true);
     });
   }
 }

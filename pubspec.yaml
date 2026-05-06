@@ -37,10 +37,14 @@ dependencies:
   # Logging
   logger: ^2.0.2+1
 
+  # Path & Files
+  path_provider: ^2.1.2
+  
   # Network & Device Telemetry
   connectivity_plus: ^5.0.2
   device_info_plus: ^9.1.1
   package_info_plus: ^5.0.1
+  web_socket_channel: ^2.4.0
 
 dev_dependencies:
   flutter_test:

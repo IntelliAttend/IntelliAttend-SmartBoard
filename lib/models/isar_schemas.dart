@@ -28,20 +28,21 @@ class DeviceRegistration {
   Id id = Isar.autoIncrement;
 
   @Index(unique: true)
-  late String roomId;
+  late String smartBoardId; // e.g., "IASB-4208" - Physical ID for registration
 
-  late String hardwareId; // Storing the WIN_UUID_... here
-  late String roomName;
+  String? classroomId;      // e.g., "room_4208" - Logical ID for database queries
+
+  late String hardwareId;   // Hardware fingerprint
+  late String roomName;     // Display name (e.g., "Hall 402")
   late String building;
   late String department;
   late int capacity;
   late DateTime registrationDate;
   
-  // v5.4 Cryptographic Trust: API Key for authentication
-  String? apiKey; // Long-lived key issued by server during registration
-  String? accessToken; // Short-lived JWT
-  int? tokenExpiryMs; // When the access token expires
-  String? refreshToken; // For obtaining new access tokens
+  String? apiKey;
+  String? accessToken;
+  int? tokenExpiryMs;
+  String? refreshToken;
 }
 
 @collection
@@ -69,4 +70,5 @@ class TimetableEntry {
   late String endTime;   // e.g., "10:00"
   late String courseName;
   late String facultyName;
+  late String sectionId;
 }
