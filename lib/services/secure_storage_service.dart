@@ -26,6 +26,7 @@ class SecureStorageService {
   static const String _keyRefreshToken = 'refresh_token';
   static const String _keyAccessToken = 'access_token';
   static const String _keyTokenExpiry = 'token_expiry';
+  static const String _keyIdleTheme = 'idle_break_theme'; // 'white' or 'dark'
 
   // Android: encrypted SharedPreferences (Android Keystore).
   // iOS / macOS: Keychain (kSecClassGenericPassword, after-first-unlock).
@@ -37,50 +38,65 @@ class SecureStorageService {
     mOptions: MacOsOptions(accessibility: KeychainAccessibility.first_unlock),
   );
 
-  /// True when we should use SharedPreferences instead of the OS keychain.
-  /// Only active in debug builds running on macOS, where Keychain ACLs are
-  /// painful for fast inner-loop development.
-  static bool get _useDevFallback => kDebugMode && Platform.isMacOS;
+  static bool _forceFallback = false;
+  static bool get _shouldUseFallback => _forceFallback || (kDebugMode && Platform.isMacOS);
 
   static SharedPreferences? _prefs;
 
   static Future<void> init() async {
-    if (_useDevFallback) {
-      _prefs = await SharedPreferences.getInstance();
-      if (kDebugMode) {
-        debugPrint('🔐 [SecureStorage] DEV FALLBACK (macOS debug) → SharedPreferences');
-      }
-    } else {
-      // No-op for the secure backend; flutter_secure_storage is lazy.
-      if (kDebugMode) {
-        debugPrint('🔐 [SecureStorage] Initialized (OS keychain backend)');
-      }
+    _prefs = await SharedPreferences.getInstance();
+    if (kDebugMode) {
+      debugPrint('🔐 [SecureStorage] Initialized (SharedPreferences available as fallback)');
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Internal read/write helpers — single switch point for the fallback.
-  // ─────────────────────────────────────────────────────────────────────
   static Future<void> _write(String key, String value) async {
-    if (_useDevFallback) {
+    if (_shouldUseFallback) {
       await _prefs!.setString(key, value);
-    } else {
+      return;
+    }
+    try {
       await _secure.write(key: key, value: value);
+    } catch (e) {
+      if (e.toString().contains('-34018') || e.toString().contains('errSecMissingEntitlement')) {
+        debugPrint('⚠️ [SecureStorage] Keychain Access Failed. Falling back to SharedPreferences.');
+        _forceFallback = true;
+        await _prefs!.setString(key, value);
+      } else {
+        rethrow;
+      }
     }
   }
 
   static Future<String?> _read(String key) async {
-    if (_useDevFallback) {
+    if (_shouldUseFallback) {
       return _prefs?.getString(key);
     }
-    return _secure.read(key: key);
+    try {
+      return await _secure.read(key: key);
+    } catch (e) {
+      if (e.toString().contains('-34018')) {
+        _forceFallback = true;
+        return _prefs?.getString(key);
+      }
+      rethrow;
+    }
   }
 
   static Future<void> _delete(String key) async {
-    if (_useDevFallback) {
+    if (_shouldUseFallback) {
       await _prefs?.remove(key);
-    } else {
+      return;
+    }
+    try {
       await _secure.delete(key: key);
+    } catch (e) {
+      if (e.toString().contains('-34018')) {
+        _forceFallback = true;
+        await _prefs?.remove(key);
+      } else {
+        rethrow;
+      }
     }
   }
 
@@ -148,6 +164,12 @@ class SecureStorageService {
 
   static Future<void> clearSessionSecret(String sessionId) =>
       _delete(_sessionSecretKey(sessionId));
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Idle Screen Theme Preference
+  // ─────────────────────────────────────────────────────────────────────
+  static Future<void> storeIdleTheme(String theme) => _write(_keyIdleTheme, theme);
+  static Future<String?> getIdleTheme() => _read(_keyIdleTheme);
 
   // ─────────────────────────────────────────────────────────────────────
   // Bulk wipe — used by registration reset and tamper-detection paths.

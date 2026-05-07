@@ -7,6 +7,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/config/app_config.dart';
 import '../../core/utils/logger.dart';
 import '../../services/device_service.dart';
 import '../../services/session_manager.dart';
@@ -21,6 +22,9 @@ import 'settings_screen.dart';
 import 'timetable_screen.dart';
 import 'analytics_screen.dart';
 import 'notifications_screen.dart';
+import '../../services/time_sync_service.dart';
+import '../../core/config/app_config.dart';
+import 'package:video_player/video_player.dart';
 
 class IdleScreen extends StatefulWidget {
   final DeviceRegistration registration;
@@ -30,7 +34,7 @@ class IdleScreen extends StatefulWidget {
   State<IdleScreen> createState() => _IdleScreenState();
 }
 
-class _IdleScreenState extends State<IdleScreen> {
+class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateMixin {
   TimetableEntry? _bedrockEntry;
   List<TimetableEntry> _todayTimeline = [];
   bool _isLoading = false;
@@ -42,14 +46,143 @@ class _IdleScreenState extends State<IdleScreen> {
   TimetableEntry? _upcomingSlot;
   bool _showStartingSoon = false;
   bool _isKeypadVisible = false;
+  Timer? _inactivityTimer;
   final TextEditingController _otpController = TextEditingController();
+  int _presentCount = 0;
+  StreamSubscription<int>? _attendanceSubscription;
+  VideoPlayerController? _videoController;
+  bool _isVideoInitialized = false;
+  String _idleTheme = 'auto'; // 'auto', 'white', or 'dark'
+  bool _forceShowCard = false; // For starting session in advance via lock icon tap
+
+  // Cinematic Transition
+  late AnimationController _cinematicController;
+  DateTime? _breakStartedAt;
+  Timer? _cinematicTimer;
+  bool _isCinematicTransitionTriggered = false;
 
   @override
   void initState() {
     super.initState();
+    _cinematicController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 10), // Slow 10s transition
+    )..addListener(() => setState(() {}));
+
     _loadInitialData();
+    _loadPreferences();
     _startRealTimeListener();
     _startPreClassTimer();
+    if (AppConfig.enableVideoBreaks) {
+      _initVideoBackground();
+    }
+    _startCinematicMonitor();
+  }
+
+
+  void _startCinematicMonitor() {
+    _cinematicTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      final isBreak = _isAnyBreak();
+      final hasVideo = isBreak && _isVideoInitialized && _videoController != null;
+
+      // Reset to White (0.0) if no video is playing OR if we are forcing the card (Session Active)
+      if (!hasVideo || _forceShowCard) {
+        if (_cinematicController.value > 0) _cinematicController.reverse();
+        _breakStartedAt = null;
+        _isCinematicTransitionTriggered = false;
+        return;
+      }
+
+      // Respect user preference if not set to 'auto'
+      if (_idleTheme == 'white') {
+        if (_cinematicController.value > 0) _cinematicController.reverse();
+        return;
+      }
+      if (_idleTheme == 'dark') {
+        if (_cinematicController.value < 1) _cinematicController.forward();
+        return;
+      }
+
+      // Automatic logic
+      if (_breakStartedAt == null) {
+        _breakStartedAt = DateTime.now();
+        _cinematicController.reverse(); // Start at White (0.0)
+      }
+
+      // After 3 minutes (Production Logic), transition to Dark (1.0)
+      final elapsedMinutes = TimeSyncService.timeNow.difference(_breakStartedAt!).inMinutes;
+      if (elapsedMinutes >= 3 && !_isCinematicTransitionTriggered && !_showStartingSoon) {
+        _isCinematicTransitionTriggered = true;
+        _cinematicController.forward();
+      }
+
+      // 3 minutes before next class, transition back to White (0.0)
+      if (_showStartingSoon && _cinematicController.value > 0 && _cinematicController.status != AnimationStatus.reverse) {
+        _cinematicController.reverse();
+        _isCinematicTransitionTriggered = false;
+      }
+    });
+  }
+
+  Future<void> _loadPreferences() async {
+    final theme = await SecureStorageService.getIdleTheme();
+    if (mounted) {
+      setState(() {
+        _idleTheme = theme ?? 'auto';
+      });
+    }
+  }
+
+  void _initVideoBackground() {
+    // Verified macOS compatible testing URL for verification
+    _videoController = VideoPlayerController.networkUrl(
+      Uri.parse('https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4'),
+    )..initialize().then((_) {
+        if (mounted) {
+          setState(() {
+            _isVideoInitialized = true;
+            _videoController?.setLooping(true);
+            _videoController?.setVolume(0);
+            _videoController?.play();
+          });
+        }
+      }).catchError((e) {
+        Log.e('❌ [Video] Failed to initialize: $e');
+        if (mounted) {
+          setState(() {
+            _isVideoInitialized = false;
+          });
+        }
+      });
+  }
+
+  bool _isAnyBreak() {
+    if (!AppConfig.enableVideoBreaks) return false;
+    return _isBioBreak() || _isLunchBreak();
+  }
+
+  bool _isBioBreak() {
+    final now = TimeSyncService.timeNow;
+    final start = DateTime(now.year, now.month, now.day, 11, 10);
+    final end = DateTime(now.year, now.month, now.day, 11, 20);
+    return now.isAfter(start) && now.isBefore(end);
+  }
+
+  bool _isLunchBreak() {
+    final now = TimeSyncService.timeNow;
+    final start = DateTime(now.year, now.month, now.day, 12, 10);
+    final end = DateTime(now.year, now.month, now.day, 12, 50);
+    return now.isAfter(start) && now.isBefore(end);
+  }
+
+  String _getBreakTip() {
+    final tips = [
+      "Stay hydrated! Grab a glass of water.",
+      "Stretch your legs and take a deep breath.",
+      "Rest your eyes - look at something 20 feet away.",
+      "A quick walk can boost your focus for the next session.",
+    ];
+    return tips[TimeSyncService.timeNow.minute % tips.length];
   }
 
   Future<void> _loadInitialData() async {
@@ -64,11 +197,28 @@ class _IdleScreenState extends State<IdleScreen> {
 
   @override
   void dispose() {
+    _cinematicTimer?.cancel();
+    _videoController?.dispose();
+    _otpController.dispose();
+    _inactivityTimer?.cancel();
     _timetableSubscription?.cancel();
     _sessionSubscription?.cancel();
+    _attendanceSubscription?.cancel();
     _preClassTimer?.cancel();
-    _otpController.dispose();
+    _cinematicController.dispose();
     super.dispose();
+  }
+
+  void _resetInactivityTimer() {
+    _inactivityTimer?.cancel();
+    _inactivityTimer = Timer(const Duration(minutes: 5), () {
+      if (mounted && _forceShowCard) {
+        setState(() {
+          _forceShowCard = false;
+          _otpController.clear();
+        });
+      }
+    });
   }
 
   void _startRealTimeListener() {
@@ -93,8 +243,20 @@ class _IdleScreenState extends State<IdleScreen> {
 
     _sessionSubscription = DeviceService.watchActiveSession(widget.registration).listen(
       (sessionData) {
-        if (mounted && sessionData != null) {
-          _igniteWithActiveSession(sessionData);
+        if (mounted) {
+          if (sessionData != null) {
+            final sessionId = sessionData['session_id']?.toString();
+            if (sessionId != null) {
+              _attendanceSubscription?.cancel();
+              _attendanceSubscription = DeviceService.watchAttendanceCount(sessionId).listen((count) {
+                if (mounted) setState(() => _presentCount = count);
+              });
+            }
+            _igniteWithActiveSession(sessionData);
+          } else {
+            _attendanceSubscription?.cancel();
+            if (mounted) setState(() => _presentCount = 0);
+          }
         }
       },
       onError: (e) => Log.e('❌ [Idle] Session stream error: $e'),
@@ -131,7 +293,7 @@ class _IdleScreenState extends State<IdleScreen> {
 
   TimetableEntry? _findCurrentSlot(List<TimetableEntry> entries) {
     if (entries.isEmpty) return null;
-    final now = DateTime.now();
+    final now = TimeSyncService.timeNow;
     final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
     for (final entry in entries) {
       if (entry.startTime.compareTo(timeStr) <= 0 && entry.endTime.compareTo(timeStr) > 0) {
@@ -142,7 +304,12 @@ class _IdleScreenState extends State<IdleScreen> {
   }
 
   void _startPreClassTimer() {
-    _preClassTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+    _preClassTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      if (mounted) {
+        setState(() {
+          _bedrockEntry = _findCurrentSlot(_todayTimeline);
+        });
+      }
       _checkUpcomingClass();
     });
     _checkUpcomingClass();
@@ -150,26 +317,41 @@ class _IdleScreenState extends State<IdleScreen> {
 
   void _checkUpcomingClass() {
     if (_todayTimeline.isEmpty) return;
-    final now = DateTime.now();
-    final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
-    TimetableEntry? nextSlot;
+    
+    final now = TimeSyncService.timeNow;
+    final currentMinutes = now.hour * 60 + now.minute;
+    
+    TimetableEntry? nextEntry;
+    int minDiff = 9999;
+
     for (final entry in _todayTimeline) {
-      if (entry.startTime.compareTo(timeStr) > 0) {
-        nextSlot = entry;
-        break;
+      final parts = entry.startTime.split(':');
+      if (parts.length != 2) continue;
+      
+      final entryMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
+      final diff = entryMinutes - currentMinutes;
+      
+      if (diff > 0 && diff < minDiff) {
+        minDiff = diff;
+        nextEntry = entry;
       }
     }
-    if (nextSlot != null) {
-      final parts = nextSlot.startTime.split(':');
-      final startTime = DateTime(now.year, now.month, now.day, int.parse(parts[0]), int.parse(parts[1]));
-      final diff = startTime.difference(now).inMinutes;
-      if (diff >= 0 && diff <= 2) {
-        if (mounted && !_showStartingSoon) setState(() { _upcomingSlot = nextSlot; _showStartingSoon = true; });
-      } else {
-        if (mounted && _showStartingSoon) setState(() => _showStartingSoon = false);
+
+    if (nextEntry != null && minDiff <= 3) {
+      if (mounted) {
+        setState(() {
+          _upcomingSlot = nextEntry;
+          _showStartingSoon = true;
+        });
       }
     } else {
-      if (mounted && _showStartingSoon) setState(() => _showStartingSoon = false);
+      if (mounted && _showStartingSoon) {
+        setState(() {
+          _showStartingSoon = false;
+          // Also reset force show if we were waiting for a class that has now started or been removed
+          _forceShowCard = false;
+        });
+      }
     }
   }
 
@@ -194,7 +376,7 @@ class _IdleScreenState extends State<IdleScreen> {
 
       await SessionManager.saveSession(
         sessionId: sessionId, rosterCount: rosterCount, facultyName: facultyName,
-        courseName: courseName, sectionId: sectionId, endTime: DateTime.now().add(const Duration(hours: 1)),
+        courseName: courseName, sectionId: sectionId, endTime: TimeSyncService.timeNow.add(const Duration(hours: 1)),
       );
       await SecureStorageService.storeSessionSecret(sessionId, sessionSecret);
 
@@ -220,70 +402,163 @@ class _IdleScreenState extends State<IdleScreen> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final size = MediaQuery.of(context).size;
+    final isBreak = _isAnyBreak();
+    final showVideo = isBreak && _isVideoInitialized && _videoController != null;
+    
+    // Theme Calculation Logic:
+    // If showVideo is false OR session is being initiated (forceShowCard), we are "Blindly White"
+    final bool isBlindlyWhite = !showVideo || _forceShowCard;
+    final morph = isBlindlyWhite ? 0.0 : _cinematicController.value;
+    
+    final overlayColor = Color.lerp(
+      Colors.white.withOpacity(0.1),
+      Colors.black.withOpacity(0.4),
+      morph
+    )!;
+    
+    final headerFooterColor = Color.lerp(
+      Colors.white,
+      AppColors.bgDark,
+      morph
+    )!;
 
-    return Scaffold(
-      body: Stack(
+    final primaryTextColor = Color.lerp(
+      AppColors.textPrimaryLight,
+      Colors.white,
+      morph
+    )!;
+
+    final secondaryTextColor = Color.lerp(
+      AppColors.textSecondaryLight,
+      AppColors.textSecondaryDark,
+      morph
+    )!;
+
+    // Context-Aware Visibility:
+    // 1. If starting soon (3 min window) OR user tapped the lock to initiate early, show the card.
+    // 2. Otherwise, card opacity depends on the morph (fades out as screen darkens).
+    final bool showCardContextually = _showStartingSoon || _forceShowCard;
+    
+    final cardOpacity = showCardContextually 
+        ? 1.0 
+        : (1.0 - (morph * 1.5)).clamp(0.0, 1.0);
+        
+    final lockOpacity = showCardContextually 
+        ? 0.0 
+        : (morph * 2.0 - 1.0).clamp(0.0, 1.0);
+
+    List<Widget> stackChildren = [];
+    
+    // 1. Background
+    if (showVideo) {
+      stackChildren.add(
+        SizedBox.expand(
+          child: FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: _videoController!.value.size.width,
+              height: _videoController!.value.size.height,
+              child: VideoPlayer(_videoController!),
+            ),
+          ),
+        )
+      );
+    } else {
+      stackChildren.add(Container(color: isDark ? AppColors.bgDark : AppColors.bgLight));
+    }
+
+    // 2. Overlay
+    if (showVideo) {
+      stackChildren.add(Container(decoration: BoxDecoration(color: overlayColor)));
+    }
+
+    // 3. Logo
+    if (!showVideo) {
+      stackChildren.add(
+        Opacity(
+          opacity: isDark ? 0.05 : 0.03,
+          child: Center(
+            child: Image.asset(
+              'assets/background.png',
+              width: size.width * 0.6,
+              fit: BoxFit.contain,
+            ),
+          ),
+        )
+      );
+    }
+
+    // 4. Main UI
+    stackChildren.add(
+      Column(
         children: [
-          // Background - Base Color
-          Container(color: isDark ? AppColors.bgDark : AppColors.bgLight),
-
-          Opacity(
-            opacity: isDark ? 0.05 : 0.03,
-            child: Center(
-              child: Image.asset(
-                'assets/background.png',
-                width: size.width * 0.6,
-                fit: BoxFit.contain,
+          _buildTopHeader(primaryTextColor, headerFooterColor, showVideo),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 80),
+              child: Row(
+                children: [
+                  Expanded(
+                    flex: 6,
+                    child: _buildCourseInfo(primaryTextColor, secondaryTextColor, showVideo),
+                  ),
+                  const SizedBox(width: 40),
+                  Expanded(
+                    flex: 4,
+                    child: Stack(
+                      alignment: Alignment.centerRight,
+                      children: [
+                        Opacity(
+                          opacity: cardOpacity,
+                          child: IgnorePointer(
+                            ignoring: cardOpacity < 0.1,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 320),
+                              child: _buildAuthCard(
+                                isBlindlyWhite ? Colors.white : headerFooterColor, 
+                                isBlindlyWhite ? AppColors.textPrimaryLight : primaryTextColor, 
+                                isBlindlyWhite ? AppColors.textSecondaryLight : secondaryTextColor, 
+                                showVideo && !isBlindlyWhite
+                              ),
+                            ),
+                          ),
+                        ),
+                        Opacity(
+                          opacity: lockOpacity,
+                          child: IgnorePointer(
+                            ignoring: lockOpacity < 0.1,
+                            child: _buildHangingLock(primaryTextColor),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-
-
-          // Main Layout
-          Column(
-            children: [
-              _buildTopHeader(isDark),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 80),
-                  child: Row(
-                    children: [
-                      // Left Content: Course Info
-                      Expanded(
-                        flex: 6,
-                        child: _buildCourseInfo(isDark),
-                      ),
-                      const SizedBox(width: 40),
-                      Expanded(
-                        flex: 4,
-                        child: Align(
-                          alignment: Alignment.centerRight,
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 320),
-                            child: _buildAuthCard(isDark, size),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              _buildFooter(isDark, size),
-            ],
-          ),
-
-          if (_showStartingSoon && _upcomingSlot != null) _buildStartingSoonBanner(),
+          _buildFooter(headerFooterColor, primaryTextColor, secondaryTextColor, showVideo),
         ],
-      ),
+      )
+    );
+
+    // 5. Banner
+    if (_showStartingSoon && _upcomingSlot != null) {
+      stackChildren.add(_buildStartingSoonBanner());
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: Stack(children: stackChildren),
     );
   }
 
-  Widget _buildTopHeader(bool isDark) {
+  Widget _buildTopHeader(Color textColor, Color bgColor, bool isVideoActive) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 20),
       decoration: BoxDecoration(
-        color: (isDark ? AppColors.bgDark : Colors.white).withValues(alpha: 0.8),
-        border: Border(bottom: BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
+        color: bgColor.withValues(alpha: isVideoActive ? 0.5 : 0.8),
+        border: Border(bottom: BorderSide(color: textColor.withValues(alpha: 0.1))),
       ),
       child: Row(
         children: [
@@ -292,22 +567,22 @@ class _IdleScreenState extends State<IdleScreen> {
             style: TextStyle(
               fontSize: 24,
               fontWeight: FontWeight.w900,
-              color: AppColors.primaryTeal,
+              color: textColor == Colors.white ? Colors.white : AppColors.primaryTeal,
               letterSpacing: -1,
             ),
           ),
           const Spacer(),
-          _buildNavLinks(isDark),
+          _buildNavLinks(textColor),
           const SizedBox(width: 40),
-          _buildHeaderActions(isDark),
+          _buildHeaderActions(textColor),
         ],
       ),
     );
   }
 
-  Widget _buildNavLinks(bool isDark) {
-    final activeColor = AppColors.primaryTeal;
-    final inactiveColor = isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight;
+  Widget _buildNavLinks(Color color) {
+    final activeColor = color == Colors.white ? Colors.white : AppColors.primaryTeal;
+    final inactiveColor = color == Colors.white ? Colors.white70 : AppColors.textSecondaryLight;
     
     return Row(
       children: [
@@ -353,8 +628,8 @@ class _IdleScreenState extends State<IdleScreen> {
     );
   }
 
-  Widget _buildHeaderActions(bool isDark) {
-    final iconColor = isDark ? Colors.white70 : Colors.black54;
+  Widget _buildHeaderActions(Color color) {
+    final iconColor = color == Colors.white ? Colors.white70 : Colors.black54;
     return Row(
       children: [
         IconButton(
@@ -370,10 +645,9 @@ class _IdleScreenState extends State<IdleScreen> {
           icon: Icon(Icons.help_outline, color: iconColor)
         ),
         IconButton(
-          onPressed: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(builder: (context) => SettingsScreen(registration: widget.registration)),
-            );
+          onPressed: () async {
+            await Navigator.of(context).push(MaterialPageRoute(builder: (context) => SettingsScreen(registration: widget.registration)));
+            _loadPreferences();
           }, 
           icon: Icon(Icons.settings_outlined, color: iconColor)
         ),
@@ -381,21 +655,38 @@ class _IdleScreenState extends State<IdleScreen> {
     );
   }
 
-  Widget _buildCourseInfo(bool isDark) {
-    final course = _bedrockEntry?.courseName ?? 'NO ACTIVE SESSION';
-    final faculty = _bedrockEntry?.facultyName ?? 'SYSTEM READY';
+  Widget _buildCourseInfo(Color primaryColor, Color secondaryColor, bool isVideoActive) {
+    final isSunday = TimeSyncService.timeNow.weekday == DateTime.sunday;
+    final isBio = _isBioBreak();
+    final isLunch = _isLunchBreak();
+    final hasBreak = isBio || isLunch;
     
+    var course = _bedrockEntry?.courseName ?? 'NO ACTIVE SESSION';
+    var faculty = _bedrockEntry?.facultyName ?? 'SYSTEM READY';
+    
+    if (isSunday && _bedrockEntry == null) {
+      course = 'SUNDAY FUNDAY';
+      faculty = 'SYSTEM IDLE';
+    } else if (isBio) {
+      course = 'BIO BREAK TIME';
+      faculty = 'REFRESH';
+    } else if (isLunch) {
+      course = 'LUNCH BREAK';
+      faculty = 'RECHARGE';
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         // Professor Info at Top
+        if (!hasBreak && !(isSunday && _bedrockEntry == null))
         Row(
           children: [
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: isDark ? AppColors.surfaceDark : Colors.white,
+                color: primaryColor == Colors.white ? AppColors.surfaceDark : Colors.white,
                 borderRadius: BorderRadius.circular(12),
                 boxShadow: [
                   BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 4))
@@ -408,18 +699,53 @@ class _IdleScreenState extends State<IdleScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  faculty.toUpperCase(),
+                  (faculty.contains('@') ? faculty.split('@')[0].replaceAll('_', ' ').toUpperCase() : faculty.toUpperCase()),
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
-                    color: isDark ? Colors.white : AppColors.textPrimaryLight,
+                    color: primaryColor,
                   ),
                 ),
                 Text(
                   '${widget.registration.roomName} • ${widget.registration.department}',
                   style: TextStyle(
                     fontSize: 14,
-                    color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+                    color: secondaryColor,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        )
+        else if (hasBreak)
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.primaryTeal.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(isBio ? Icons.coffee_outlined : Icons.restaurant_outlined, color: AppColors.primaryTeal),
+            ),
+            const SizedBox(width: 16),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isBio ? 'QUICK REFRESHMENT' : 'MID-DAY MEAL',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.primaryTeal,
+                  ),
+                ),
+                Text(
+                  _getBreakTip(),
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: secondaryColor,
+                    fontStyle: FontStyle.italic,
                   ),
                 ),
               ],
@@ -433,7 +759,7 @@ class _IdleScreenState extends State<IdleScreen> {
           style: TextStyle(
             fontSize: 64,
             fontWeight: FontWeight.w900,
-            color: isDark ? Colors.white : AppColors.textPrimaryLight,
+            color: primaryColor,
             height: 1.1,
             letterSpacing: -2,
           ),
@@ -442,12 +768,12 @@ class _IdleScreenState extends State<IdleScreen> {
     );
   }
 
-  Widget _buildAuthCard(bool isDark, Size size) {
+  Widget _buildAuthCard(Color bgColor, Color primaryColor, Color secondaryColor, bool isVideoActive) {
     return GlassContainer(
       padding: const EdgeInsets.all(20),
       borderRadius: 16,
-      color: (isDark ? Colors.black : Colors.white).withValues(alpha: 0.8),
-      borderColor: isDark ? Colors.white10 : Colors.black12,
+      color: bgColor.withValues(alpha: 0.8),
+      borderColor: primaryColor.withValues(alpha: 0.1),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -460,10 +786,10 @@ class _IdleScreenState extends State<IdleScreen> {
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.bold,
-                  color: isDark ? Colors.white : AppColors.textPrimaryLight,
+                  color: primaryColor,
                 ),
               ),
-              Icon(Icons.lock_open_outlined, size: 20, color: isDark ? Colors.white24 : Colors.black26),
+              Icon(Icons.lock_open_outlined, size: 20, color: secondaryColor.withValues(alpha: 0.5)),
             ],
           ),
           const SizedBox(height: 12),
@@ -471,7 +797,7 @@ class _IdleScreenState extends State<IdleScreen> {
             'Enter the session code displayed on your mobile device to begin Session.',
             style: TextStyle(
               fontSize: 12,
-              color: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+              color: secondaryColor,
             ),
           ),
           const SizedBox(height: 32),
@@ -486,7 +812,7 @@ class _IdleScreenState extends State<IdleScreen> {
             firstChild: const SizedBox(width: double.infinity),
             secondChild: Padding(
               padding: const EdgeInsets.only(top: 24),
-              child: _buildNumericKeypad(isDark),
+              child: _buildNumericKeypad(primaryColor == Colors.white, isVideoActive),
             ),
             crossFadeState: _isKeypadVisible ? CrossFadeState.showSecond : CrossFadeState.showFirst,
             duration: const Duration(milliseconds: 400),
@@ -532,7 +858,7 @@ class _IdleScreenState extends State<IdleScreen> {
                   fontSize: 10,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 1,
-                  color: isDark ? Colors.white38 : Colors.black38,
+                  color: secondaryColor.withValues(alpha: 0.5),
                 ),
               ),
               Row(
@@ -545,7 +871,7 @@ class _IdleScreenState extends State<IdleScreen> {
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 1,
-                      color: isDark ? Colors.white38 : Colors.black38,
+                      color: secondaryColor.withValues(alpha: 0.5),
                     ),
                   ),
                 ],
@@ -557,13 +883,13 @@ class _IdleScreenState extends State<IdleScreen> {
     );
   }
 
-  Widget _buildFooter(bool isDark, Size size) {
+  Widget _buildFooter(Color bgColor, Color primaryColor, Color secondaryColor, bool isVideoActive) {
     return Container(
       height: 100,
       padding: const EdgeInsets.symmetric(horizontal: 40),
       decoration: BoxDecoration(
-        color: (isDark ? AppColors.bgDark : Colors.white).withValues(alpha: 0.9),
-        border: Border(top: BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
+        color: bgColor.withValues(alpha: isVideoActive ? 0.5 : 0.9),
+        border: Border(top: BorderSide(color: primaryColor.withValues(alpha: 0.1))),
       ),
       child: Row(
         children: [
@@ -575,12 +901,12 @@ class _IdleScreenState extends State<IdleScreen> {
               itemBuilder: (context, index) {
                 if (_todayTimeline.isEmpty) {
                   if (index > 0) return const SizedBox.shrink();
-                  return const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 40),
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 40),
                     child: Center(
                       child: Text(
-                        'NO CLASSES SCHEDULED TODAY',
-                        style: TextStyle(color: AppColors.textSecondaryDark, fontWeight: FontWeight.bold, letterSpacing: 2),
+                        TimeSyncService.timeNow.weekday == DateTime.sunday ? 'SUNDAY FUNDAY' : 'NO CLASSES SCHEDULED TODAY',
+                        style: const TextStyle(color: AppColors.textSecondaryDark, fontWeight: FontWeight.bold, letterSpacing: 2),
                       ),
                     ),
                   );
@@ -595,17 +921,17 @@ class _IdleScreenState extends State<IdleScreen> {
           ),
           const SizedBox(width: 40),
           // Clock & Students
-          _buildClockAndInfo(isDark),
+          _buildClockAndInfo(primaryColor, secondaryColor),
         ],
       ),
     );
   }
 
-  Widget _buildClockAndInfo(bool isDark) {
+  Widget _buildClockAndInfo(Color primaryColor, Color secondaryColor) {
     return StreamBuilder<DateTime>(
-      stream: Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()),
+      stream: Stream.periodic(const Duration(seconds: 1), (_) => TimeSyncService.timeNow),
       builder: (context, snapshot) {
-        final now = snapshot.data ?? DateTime.now();
+        final now = snapshot.data ?? TimeSyncService.timeNow;
         final timeStr = "${now.hour > 12 ? now.hour - 12 : (now.hour == 0 ? 12 : now.hour)}:${now.minute.toString().padLeft(2, '0')}";
         final period = now.hour >= 12 ? 'PM' : 'AM';
         
@@ -620,11 +946,11 @@ class _IdleScreenState extends State<IdleScreen> {
                     const Icon(Icons.group_outlined, size: 16, color: AppColors.primaryTeal),
                     const SizedBox(width: 8),
                     Text(
-                      '142 Students Present',
+                      '$_presentCount Students Present',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
-                        color: isDark ? Colors.white70 : Colors.black54,
+                        color: secondaryColor,
                       ),
                     ),
                   ],
@@ -634,12 +960,14 @@ class _IdleScreenState extends State<IdleScreen> {
                   width: 120,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: isDark ? Colors.white10 : Colors.black12,
+                    color: secondaryColor.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(2),
                   ),
                   child: FractionallySizedBox(
                     alignment: Alignment.centerLeft,
-                    widthFactor: 0.85,
+                    widthFactor: widget.registration.capacity > 0 
+                        ? (_presentCount / widget.registration.capacity).clamp(0.0, 1.0)
+                        : 0.0,
                     child: Container(
                       decoration: BoxDecoration(
                         color: AppColors.primaryTeal,
@@ -650,7 +978,7 @@ class _IdleScreenState extends State<IdleScreen> {
                 ),
               ],
             ),
-            Container(margin: const EdgeInsets.symmetric(horizontal: 24), height: 40, width: 1, color: isDark ? Colors.white10 : Colors.black12),
+            Container(margin: const EdgeInsets.symmetric(horizontal: 24), height: 40, width: 1, color: secondaryColor.withValues(alpha: 0.1)),
             Column(
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.end,
@@ -660,7 +988,7 @@ class _IdleScreenState extends State<IdleScreen> {
                   style: GoogleFonts.jetBrainsMono(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
-                    color: isDark ? Colors.white : AppColors.textPrimaryLight,
+                    color: primaryColor,
                   ),
                 ),
                 Text(
@@ -669,7 +997,7 @@ class _IdleScreenState extends State<IdleScreen> {
                     fontSize: 10,
                     fontWeight: FontWeight.bold,
                     letterSpacing: 1,
-                    color: isDark ? Colors.white38 : Colors.black38,
+                    color: secondaryColor.withValues(alpha: 0.5),
                   ),
                 ),
               ],
@@ -688,22 +1016,76 @@ class _IdleScreenState extends State<IdleScreen> {
 
   Widget _buildStartingSoonBanner() {
     return Positioned(
-      top: 0, left: 0, right: 0,
-      child: Container(
-        height: 60,
-        color: AppColors.primaryTeal,
-        child: Center(
-          child: Text(
-            'CLASS STARTING SOON: ${_upcomingSlot!.courseName.toUpperCase()}',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, letterSpacing: 2),
+      top: 20, left: 0, right: 0,
+      child: Center(
+        child: GlassContainer(
+          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+          borderRadius: 30,
+          color: AppColors.primaryTeal.withOpacity(0.9),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.timer_outlined, color: Colors.white, size: 18),
+              const SizedBox(width: 12),
+              Text(
+                'CLASS STARTING SOON: ${_upcomingSlot!.courseName.toUpperCase()}',
+                style: const TextStyle(
+                  color: Colors.white, 
+                  fontWeight: FontWeight.w900, 
+                  letterSpacing: 1.5,
+                  fontSize: 14,
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
 
+  Widget _buildHangingLock(Color color) {
+    return InkWell(
+      onTap: () {
+        setState(() {
+          _forceShowCard = true;
+        });
+        _resetInactivityTimer();
+      },
+      borderRadius: BorderRadius.circular(50),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 2,
+            height: 40,
+            color: color.withOpacity(0.2),
+          ),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.05),
+              shape: BoxShape.circle,
+              border: Border.all(color: color.withOpacity(0.1)),
+            ),
+            child: Icon(Icons.lock_outline, color: color.withOpacity(0.5), size: 32),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'SESSION LOCKED',
+            style: TextStyle(
+              color: color.withOpacity(0.3),
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 2,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-  Widget _buildNumericKeypad(bool isDark) {
+
+  Widget _buildNumericKeypad(bool isDark, bool isVideoActive) {
     return GridView.count(
       shrinkWrap: true,
       crossAxisCount: 3,
@@ -712,24 +1094,30 @@ class _IdleScreenState extends State<IdleScreen> {
       childAspectRatio: 1.6,
       physics: const NeverScrollableScrollPhysics(),
       children: [
-        for (var i = 1; i <= 9; i++) _keypadButton(i.toString(), isDark),
+        for (var i = 1; i <= 9; i++) _keypadButton(i.toString(), isDark, isVideoActive),
         const SizedBox(),
-        _keypadButton('0', isDark),
-        _keypadButton('backspace', isDark, isAction: true),
+        _keypadButton('0', isDark, isVideoActive),
+        _keypadButton('backspace', isDark, isVideoActive, isAction: true),
       ],
     );
   }
 
-  Widget _keypadButton(String label, bool isDark, {bool isAction = false}) {
+  Widget _keypadButton(String label, bool isDark, bool isVideoActive, {bool isAction = false}) {
     return InkWell(
       onTap: () {
         if (label == 'backspace') {
           if (_otpController.text.isNotEmpty) {
-            setState(() => _otpController.text = _otpController.text.substring(0, _otpController.text.length - 1));
+            setState(() {
+              _otpController.text = _otpController.text.substring(0, _otpController.text.length - 1);
+              _resetInactivityTimer();
+            });
           }
         } else {
           if (_otpController.text.length < 6) {
-            setState(() => _otpController.text += label);
+            setState(() {
+              _otpController.text += label;
+              _resetInactivityTimer();
+            });
           }
         }
       },

@@ -72,15 +72,20 @@ class _BootScreenState extends State<BootScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [AppColors.background, Color(0xFF1E293B)],
-          ),
-        ),
+        color: AppColors.bgLight,
         child: Stack(
           children: [
+            // Background pattern
+            Opacity(
+              opacity: 0.02,
+              child: Center(
+                child: Image.asset(
+                  'assets/background.png',
+                  width: 400,
+                  fit: BoxFit.contain,
+                ),
+              ),
+            ),
             // Settings Button (Top Left)
             Positioned(
               top: 24,
@@ -107,10 +112,14 @@ class _BootScreenState extends State<BootScreen> {
                             ),
                           );
                         },
-                        child: GlassContainer(
+                        child: Container(
                           padding: const EdgeInsets.all(12),
-                          borderRadius: 12,
-                          child: const Icon(Icons.settings_outlined, color: Colors.white, size: 28),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.black12),
+                          ),
+                          child: const Icon(Icons.settings_outlined, color: AppColors.textPrimaryLight, size: 28),
                         ),
                       ),
                     ),
@@ -141,12 +150,12 @@ class _BootScreenState extends State<BootScreen> {
                   const SizedBox(height: 48),
                   Text(
                     'INTELLIATTEND',
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(letterSpacing: 12, fontWeight: FontWeight.w900, color: AppColors.primary),
+                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(letterSpacing: 12, fontWeight: FontWeight.w900, color: AppColors.primaryTeal),
                   ),
                   const SizedBox(height: 8),
                   Text(
                     _statusMessage,
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(letterSpacing: 4, color: AppColors.textMuted),
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(letterSpacing: 4, color: AppColors.textSecondaryLight),
                   ),
                   if (_errorMessage != null) _buildErrorDisplay(),
                 ],

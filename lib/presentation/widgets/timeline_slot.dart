@@ -20,7 +20,7 @@ class TimelineSlot extends StatelessWidget {
         : (isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
       decoration: BoxDecoration(
         color: isLive 
             ? AppColors.primaryTeal.withValues(alpha: 0.05) 

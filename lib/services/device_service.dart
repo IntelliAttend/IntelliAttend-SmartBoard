@@ -313,6 +313,16 @@ class DeviceService {
         });
   }
 
+  static Stream<int> watchAttendanceCount(String sessionId) {
+    if (Firebase.apps.isEmpty) return Stream.value(0);
+    return FirebaseFirestore.instance
+        .collection('ActiveSessions')
+        .doc(sessionId)
+        .collection('attendees')
+        .snapshots()
+        .map((snapshot) => snapshot.docs.length);
+  }
+
   static Future<void> _updateIsarCache(List<TimetableEntry> entries, int? dayOfWeek) async {
     try {
       final isar = SessionManager.isar;

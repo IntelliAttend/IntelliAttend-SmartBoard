@@ -14,6 +14,10 @@ class AppConfig {
   /// The Local "Brain" API URL
   static String get localApiUrl => dotenv.env['LOCAL_API_URL']!;
 
+  /// v2.0 Roadmap: Cinematic Video Backgrounds for Breaks
+  /// Currently disabled for v1.0 Release.
+  static const bool enableVideoBreaks = false;
+
   /// Validates that all required environment variables are present.
   /// Throws an [Exception] if critical configuration is missing.
   static void validate() {

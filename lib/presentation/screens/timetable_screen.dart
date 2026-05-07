@@ -43,11 +43,18 @@ class TimetableScreen extends StatelessWidget {
 
   Widget _buildDayView(BuildContext context, List<TimetableEntry> entries, bool isDark) {
     if (entries.isEmpty) {
+      final isSunday = weeklyTimeline.any((e) => e.dayOfWeek == 7) ? false : true; // This is a bit naive, let's just check the index if possible
+      // Actually, we can check the tab index or the day of week.
+      // But entries are already filtered by day.
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.event_busy_outlined, size: 64, color: isDark ? Colors.white10 : Colors.black12),
+            Icon(
+              Icons.event_busy_outlined, 
+              size: 64, 
+              color: isDark ? Colors.white10 : Colors.black12
+            ),
             const SizedBox(height: 16),
             Text(
               'NO CLASSES SCHEDULED',
@@ -57,6 +64,18 @@ class TimetableScreen extends StatelessWidget {
                 letterSpacing: 2,
               ),
             ),
+            if (DateTime.now().weekday == DateTime.sunday) ...[
+              const SizedBox(height: 8),
+              const Text(
+                'SUNDAY FUNDAY',
+                style: TextStyle(
+                  color: AppColors.primaryTeal,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 24,
+                  letterSpacing: 4,
+                ),
+              ),
+            ]
           ],
         ),
       );
@@ -103,7 +122,10 @@ class TimetableScreen extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(entry.courseName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                    Text(entry.facultyName, style: const TextStyle(color: Colors.grey)),
+                    Text(
+                      (entry.facultyName.contains('@') ? entry.facultyName.split('@')[0].replaceAll('_', ' ').toUpperCase() : entry.facultyName.toUpperCase()),
+                      style: const TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.w500)
+                    ),
                   ],
                 ),
               ),

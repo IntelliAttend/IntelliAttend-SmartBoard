@@ -45,7 +45,7 @@ class _AttendanceTimerState extends State<AttendanceTimer> {
       children: [
         Text(
           '$minutes:$seconds',
-          style: GoogleFonts.jetbrainsMono(
+          style: GoogleFonts.jetBrainsMono(
             fontSize: 64,
             fontWeight: FontWeight.bold,
             color: _remaining < 30 ? AppColors.error : AppColors.primary,

@@ -26,7 +26,7 @@ class PinInput extends StatelessWidget {
           final isFocused = index == value.length;
 
           return Container(
-            width: 42,
+            width: 38,
             height: 52,
             margin: const EdgeInsets.symmetric(horizontal: 4),
             decoration: BoxDecoration(

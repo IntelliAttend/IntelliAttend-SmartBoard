@@ -13,6 +13,7 @@ dependencies:
   provider: ^6.1.1
   google_fonts: ^6.1.0
   qr_flutter: ^4.1.0
+  video_player: ^2.9.1
   
   # Core Logic & Cryptography
   crypto: ^3.0.3

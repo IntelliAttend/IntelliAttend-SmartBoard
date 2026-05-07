@@ -12,6 +12,7 @@ import '../../services/device_service.dart';
 import '../widgets/glass_container.dart';
 import 'idle_screen.dart';
 import 'settings_screen.dart';
+import '../../core/utils/logger.dart';
 
 class AttendanceScreen extends StatefulWidget {
   final String sessionId;
@@ -45,7 +46,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   bool _qrRotationStopped = false;
   int _presentCount = 0;
   List<int> _presentSeatIndices = [];
-  int _secondsRemaining = 900; // 15 minutes default
+  int _secondsRemaining = 300; // 5 minutes default
   Timer? _countdownTimer;
 
   @override
@@ -98,7 +99,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   void _listenForSessionEnd() {
     if (Firebase.apps.isEmpty) return;
     _sessionStatusSubscription = FirebaseFirestore.instance
-        .collection('sessions')
+        .collection('ActiveSessions')
         .doc(widget.sessionId)
         .snapshots()
         .listen((snapshot) {
@@ -129,24 +130,85 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   }
 
   void _handlePhysicalTapEnd() {
-    showDialog(
+    showGeneralDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: const Text('End Session?', style: TextStyle(color: Colors.white)),
-        content: Text(
-          '$_presentCount students marked present. End "${widget.courseName}"?',
-          style: const TextStyle(color: AppColors.textMuted),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () { Navigator.of(context).pop(); _handleEndAttendance(); },
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
-            child: const Text('End Session'),
+      barrierDismissible: true,
+      barrierLabel: '',
+      barrierColor: Colors.black.withValues(alpha: 0.6),
+      transitionDuration: const Duration(milliseconds: 300),
+      pageBuilder: (context, anim1, anim2) => const SizedBox(),
+      transitionBuilder: (context, anim1, anim2, child) {
+        return Transform.scale(
+          scale: anim1.value,
+          child: Opacity(
+            opacity: anim1.value,
+            child: Center(
+              child: Material(
+                color: Colors.transparent,
+                child: GlassContainer(
+                  width: 400,
+                  padding: const EdgeInsets.all(32),
+                  borderRadius: 24,
+                  color: Colors.black.withValues(alpha: 0.8),
+                  borderColor: Colors.white10,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: AppColors.error.withValues(alpha: 0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 32),
+                      ),
+                      const SizedBox(height: 24),
+                      const Text(
+                        'End Session?',
+                        style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        '$_presentCount students marked present.\nAre you sure you want to end "${widget.courseName}"?',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.white70, fontSize: 14),
+                      ),
+                      const SizedBox(height: 32),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              child: const Text('CANCEL', style: TextStyle(color: Colors.white60, fontWeight: FontWeight.bold)),
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () {
+                                Navigator.of(context).pop();
+                                _handleEndAttendance();
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.error,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 16),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                elevation: 0,
+                              ),
+                              child: const Text('END SESSION', style: TextStyle(fontWeight: FontWeight.bold)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -161,17 +223,20 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   }
 
   Future<void> _handleEndAttendance() async {
+    // Navigate immediately to the idle screen for a responsive feel
+    final registration = await DeviceService.getRegistration();
+    if (mounted && registration != null) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (context) => IdleScreen(registration: registration)),
+      );
+    }
+
     try {
-      await ApiService.terminateSession(widget.sessionId);
+      // Fire and forget the termination call in the background
+      ApiService.terminateSession(widget.sessionId);
       SessionManager.clearSession(widget.sessionId);
-      final registration = await DeviceService.getRegistration();
-      if (mounted && registration != null) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => IdleScreen(registration: registration)),
-        );
-      }
     } catch (e) {
-      setState(() => _isSessionEnding = false);
+      Log.e('❌ Error ending session: $e');
     }
   }
 
@@ -185,12 +250,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
       body: Stack(
         children: [
           Opacity(
-            opacity: isDark ? 0.08 : 0.05,
-            child: Image.asset(
-              'assets/background.png',
-              width: size.width,
-              height: size.height,
-              fit: BoxFit.cover,
+            opacity: isDark ? 0.05 : 0.03,
+            child: Center(
+              child: Image.asset(
+                'assets/background.png',
+                width: size.width * 0.6,
+                fit: BoxFit.contain,
+              ),
             ),
           ),
           Column(

@@ -46,7 +46,13 @@ void main() async {
 Future<void> _initFirebase() async {
   try {
     if (Firebase.apps.isEmpty) {
-      await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+      // For Apple platforms, we try to use the native GoogleService-Info.plist automatically
+      // if DefaultFirebaseOptions fails.
+      if (defaultTargetPlatform == TargetPlatform.macOS || defaultTargetPlatform == TargetPlatform.iOS) {
+        await Firebase.initializeApp();
+      } else {
+        await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+      }
       debugPrint('Firebase initialized');
     } else {
       debugPrint('Firebase already initialized');
