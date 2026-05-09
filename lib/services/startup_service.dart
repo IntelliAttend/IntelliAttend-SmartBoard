@@ -4,7 +4,8 @@ import '../core/utils/logger.dart';
 
 class StartupService {
   static const String _appName = 'IntelliAttendSmartBoard';
-  static const String _registryKey = r'Software\Microsoft\Windows\CurrentVersion\Run';
+  static const String _registryKey =
+      r'Software\Microsoft\Windows\CurrentVersion\Run';
 
   /// Registers the application to start automatically on Windows logon.
   /// This is called automatically after a successful device registration.
@@ -15,15 +16,11 @@ class StartupService {
       final appPath = Platform.resolvedExecutable;
       // SEC-2 FIX: Paths with spaces (e.g., C:\Program Files\...) MUST be quoted.
       final quotedPath = '"$appPath"';
-      
-      final key = Registry.openPath(RegistryHive.currentUser, 
-          path: _registryKey, 
-          desiredAccessRights: AccessRights.allAccess);
-          
-      key.createValue(RegistryValue(_appName, 
-          RegistryValueType.string, 
-          quotedPath));
-          
+
+      final key = Registry.currentUser.createKey(_registryKey);
+
+      key.createValue(RegistryValue.string(_appName, quotedPath));
+
       key.close();
       Log.i('🚀 [Startup] Registered auto-launch: $quotedPath');
     } catch (e) {
@@ -36,10 +33,8 @@ class StartupService {
     if (!Platform.isWindows) return;
 
     try {
-      final key = Registry.openPath(RegistryHive.currentUser, 
-          path: _registryKey, 
-          desiredAccessRights: AccessRights.allAccess);
-          
+      final key = Registry.currentUser.createKey(_registryKey);
+
       key.deleteValue(_appName);
       key.close();
       Log.i('🗑️ [Startup] Unregistered auto-launch.');

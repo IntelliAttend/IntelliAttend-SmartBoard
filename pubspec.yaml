@@ -11,7 +11,7 @@ dependencies:
   
   # State Management & UI
   provider: ^6.1.1
-  google_fonts: ^6.1.0
+  google_fonts: ^8.1.0
   qr_flutter: ^4.1.0
   video_player: ^2.9.1
   
@@ -26,25 +26,25 @@ dependencies:
   # Storage & Security
   isar: ^3.1.0
   isar_flutter_libs: ^3.1.0
-  flutter_secure_storage: ^9.0.0
+  flutter_secure_storage: ^10.1.0
   shared_preferences: ^2.2.2
   
   # Firebase
-  firebase_core: ^2.24.2
-  cloud_firestore: ^4.14.0
+  firebase_core: ^4.7.0
+  cloud_firestore: ^6.3.0
 
   # Environment Variables
-  flutter_dotenv: ^5.1.0
+  flutter_dotenv: ^6.0.1
   
   # Window Management
-  window_manager: ^0.3.9
-  screen_brightness: ^0.2.2+1
+  window_manager: ^0.5.1
+  screen_brightness: ^2.1.7
   
   # Notifications
-  flutter_local_notifications: ^17.0.0
+  flutter_local_notifications: ^21.0.0
 
   # Windows Registry (for Startup)
-  registry: ^0.0.2
+  win32_registry: ^2.1.0
   
   # Logging
   logger: ^2.0.2+1
@@ -53,16 +53,16 @@ dependencies:
   path_provider: ^2.1.2
   
   # Network & Device Telemetry
-  connectivity_plus: ^5.0.2
-  device_info_plus: ^9.1.1
-  package_info_plus: ^5.0.1
-  web_socket_channel: ^2.4.0
-  firebase_auth: ^4.17.8
+  connectivity_plus: ^7.1.1
+  device_info_plus: ^12.4.0
+  package_info_plus: ^9.0.1
+  web_socket_channel: ^3.0.3
+  firebase_auth: ^6.4.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.0
+  flutter_lints: ^6.0.0
   isar_generator: ^3.1.0
   build_runner: ^2.4.7
 
@@ -71,3 +71,9 @@ flutter:
   assets:
     - .env
     - assets/background.png
+
+dependency_overrides:
+  flutter_secure_storage_windows:
+    path: local_plugins/flutter_secure_storage_windows
+  flutter_local_notifications_windows:
+    path: local_plugins/flutter_local_notifications_windows

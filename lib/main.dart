@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
@@ -18,7 +19,6 @@ import 'services/integrity_verifier.dart';
 import 'services/kiosk_service.dart';
 import 'services/notification_service.dart';
 import 'services/window_orchestrator_service.dart';
-import 'services/startup_service.dart';
 import 'services/pre_flight_service.dart';
 import 'services/sync_manager.dart';
 import 'firebase_options.dart';
@@ -46,8 +46,12 @@ class InitStatus {
 
   bool get isFatal => !isar || !secureStorage;
   String get message {
-    if (isFatal) return 'Critical initialization failed. Please reinstall or contact IT.';
-    if (!firebase) return 'Running in offline mode — real-time updates unavailable.';
+    if (isFatal) {
+      return 'Critical initialization failed. Please reinstall or contact IT.';
+    }
+    if (!firebase) {
+      return 'Running in offline mode — real-time updates unavailable.';
+    }
     return '';
   }
 }
@@ -61,21 +65,31 @@ void main() async {
 
   // 1. Initialize Desktop Windowing (Critical to do before or during startup)
   try {
-    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
+    if (!kIsWeb &&
+        (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
       await windowManager.ensureInitialized();
-      windowManager.waitUntilReadyToShow(const WindowOptions(
-        titleBarStyle: TitleBarStyle.hidden,
-        center: true,
-      ), () async {
-        await windowManager.show();
-        await windowManager.focus();
-        await windowManager.setFullScreen(true);
-        await windowManager.setAlwaysOnTop(true);
-        if (Platform.isWindows) {
-          await windowManager.setPreventClose(true);
-          await windowManager.setSkipTaskbar(true);
+      final windowReady = Completer<void>();
+      windowManager.waitUntilReadyToShow(
+          const WindowOptions(
+            titleBarStyle: TitleBarStyle.hidden,
+            center: true,
+          ), () async {
+        try {
+          await windowManager.show();
+          await windowManager.focus();
+          await windowManager.setFullScreen(true);
+          await windowManager.setAlwaysOnTop(true);
+          if (Platform.isWindows) {
+            await windowManager.setPreventClose(true);
+            await windowManager.setSkipTaskbar(true);
+          }
+        } finally {
+          if (!windowReady.isCompleted) {
+            windowReady.complete();
+          }
         }
       });
+      await windowReady.future;
     }
   } catch (e) {
     debugPrint('⚠️ [WindowManager] Init error: $e');
@@ -87,11 +101,11 @@ void main() async {
   // v6.4: Initialize Notification Service (no repo dependency)
   await NotificationService.init();
 
-  // 3. Runtime Integrity Verification
-  final tampered = await _verifyIntegrity();
-  
-  // 4. Initialize Core Services
+  // 3. Initialize Core Services
   final status = await _initAll();
+
+  // 4. Runtime Integrity Verification
+  final tampered = await _verifyIntegrity();
 
   // 5. Start Heartbeat Monitor (moved below repository initialization)
 
@@ -106,7 +120,7 @@ void main() async {
               const Icon(Icons.error_outline, size: 64, color: Colors.red),
               const SizedBox(height: 16),
               const Text('Device Integrity Check Failed',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               const Text('Contact IT Support. Code: TAMPER-01'),
             ],
@@ -119,7 +133,8 @@ void main() async {
   } else {
     final apiClient = ApiClient();
     globalAuthRepository = AuthRepository(apiClient);
-    globalDeviceRepository = DeviceRepository(SessionManager.isar, globalAuthRepository);
+    globalDeviceRepository =
+        DeviceRepository(SessionManager.isar, globalAuthRepository);
 
     // Trigger Migration Bridge
     globalDeviceRepository.performMigrationBridge();
@@ -135,7 +150,9 @@ void main() async {
         providers: [
           Provider<IDeviceRepository>.value(value: globalDeviceRepository),
           Provider<IAuthRepository>.value(value: globalAuthRepository),
-          ChangeNotifierProvider(create: (_) => RegistrationProvider(globalAuthRepository, globalDeviceRepository)),
+          ChangeNotifierProvider(
+              create: (_) => RegistrationProvider(
+                  globalAuthRepository, globalDeviceRepository)),
         ],
         child: IntelliAttendApp(isDegraded: !status.firebase),
       ),
@@ -148,15 +165,17 @@ void _initializeBackgroundProtocols() async {
     final registration = await globalDeviceRepository.getRegistration();
     if (registration != null) {
       // 1. Start Real-Time Firestore Mirroring for Timetable
-      SyncManager().init(registration.smartBoardId);
-      
+      final queryId = registration.classroomId ?? registration.smartBoardId;
+      SyncManager().init(queryId);
+
       // 2. Start T-10 / T-3 Countdown Watcher (data side)
       PreFlightService().startCountdownWatcher();
 
       // 3. Start Window Orchestrator (UI/window side) — must be after repos ready
       WindowOrchestratorService().start();
-      
-      Log.i('🚀 [Protocols] Background Synchronization, Countdown Watchers, and Window Orchestrator active.');
+
+      Log.i(
+          '🚀 [Protocols] Background Synchronization, Countdown Watchers, and Window Orchestrator active.');
     }
   } catch (e) {
     Log.e('❌ [Protocols] Background initialization failed: $e');
@@ -167,7 +186,8 @@ Future<bool> _verifyIntegrity() async {
   bool tampered = false;
 
   if (!IntegrityVerifier.verify()) {
-    Log.e('🚨 [Integrity] Critical constants hash mismatch — possible tampering');
+    Log.e(
+        '🚨 [Integrity] Critical constants hash mismatch — possible tampering');
     tampered = true;
   }
 
@@ -224,8 +244,10 @@ Future<bool> _tryInit(String name, Future<void> Function() fn) async {
 
 Future<void> _initFirebase() async {
   if (Firebase.apps.isEmpty) {
-    debugPrint('Initializing Firebase for platform: ${defaultTargetPlatform.name}');
-    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+    debugPrint(
+        'Initializing Firebase for platform: ${defaultTargetPlatform.name}');
+    await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform);
     debugPrint('Firebase initialized');
   } else {
     debugPrint('Firebase already initialized');
