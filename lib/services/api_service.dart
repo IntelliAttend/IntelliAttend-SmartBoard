@@ -28,7 +28,8 @@ class UnauthorizedException extends ApiException {
 }
 
 class ApiService {
-  static const String _defaultBaseUrl = 'https://api-dev.balaseetharamanjaneyulu.com';
+  static const String _defaultBaseUrl =
+      'https://api-dev.balaseetharamanjaneyulu.com';
 
   // ─── URL Resolution ───────────────────────────────────────────────────────
 
@@ -43,7 +44,8 @@ class ApiService {
   static Future<Uri> _buildUri(String path) async {
     final base = await _resolveBaseUrl();
     final baseUri = Uri.parse(base);
-    final cleanPath = '/${path.replaceAll(RegExp(r'/+'), '/')}'.replaceFirst(RegExp(r'^//+'), '/');
+    final cleanPath = '/${path.replaceAll(RegExp(r'/+'), '/')}'
+        .replaceFirst(RegExp(r'^//+'), '/');
     return baseUri.replace(path: cleanPath);
   }
 
@@ -78,10 +80,12 @@ class ApiService {
     try {
       late http.Response response;
       if (method == 'GET') {
-        response = await _client.get(uri, headers: mergedHeaders).timeout(timeout);
-      } else if (method == 'POST') {
         response =
-            await _client.post(uri, headers: mergedHeaders, body: body).timeout(timeout);
+            await _client.get(uri, headers: mergedHeaders).timeout(timeout);
+      } else if (method == 'POST') {
+        response = await _client
+            .post(uri, headers: mergedHeaders, body: body)
+            .timeout(timeout);
       } else {
         throw Exception('Unsupported HTTP method: $method');
       }
@@ -89,7 +93,8 @@ class ApiService {
       // Check for backend correlation ID echo
       final serverReqId = response.headers['x-request-id'];
       if (serverReqId != null && serverReqId != reqId) {
-        Log.w('[API] Correlation ID mismatch: client=$reqId, server=$serverReqId');
+        Log.w(
+            '[API] Correlation ID mismatch: client=$reqId, server=$serverReqId');
       }
 
       return response;
@@ -98,7 +103,6 @@ class ApiService {
       rethrow;
     }
   }
-
 
   // ─── Authentication ───────────────────────────────────────────────────────
 
@@ -142,7 +146,8 @@ class ApiService {
         final newToken = data['access_token']?.toString();
         if (newToken != null) {
           final expiresAt = data['expires_in'] is int
-              ? DateTime.now().millisecondsSinceEpoch + (data['expires_in'] as int) * 1000
+              ? DateTime.now().millisecondsSinceEpoch +
+                  (data['expires_in'] as int) * 1000
               : DateTime.now().millisecondsSinceEpoch + 900000;
           await SecureStorageService.storeAccessToken(newToken, expiresAt);
           Log.i('Access token refreshed');
@@ -157,7 +162,8 @@ class ApiService {
 
   // ─── Registration Flow ────────────────────────────────────────────────────
 
-  static Future<void> requestRegistrationOtp({required String smartBoardId}) async {
+  static Future<void> requestRegistrationOtp(
+      {required String smartBoardId}) async {
     final response = await _request(
       'POST',
       'api/v1/board/register/request-otp',
@@ -198,8 +204,8 @@ class ApiService {
 
   static Future<int> syncTime() async {
     final clientSent = DateTime.now().millisecondsSinceEpoch;
-    final response =
-        await _request('GET', 'api/v1/board/time', headers: await _authHeaders());
+    final response = await _request('GET', 'api/v1/board/time',
+        headers: await _authHeaders());
     if (response.statusCode != 200) throw _apiError('Time sync', response);
 
     final data = jsonDecode(response.body);
@@ -217,7 +223,8 @@ class ApiService {
   }
 
   static Future<Map<String, dynamic>> syncContext() async {
-    final response = await _request('GET', 'api/v1/board/sync-context', headers: await _authHeaders());
+    final response = await _request('GET', 'api/v1/board/sync-context',
+        headers: await _authHeaders());
 
     if (response.statusCode != 200) throw _apiError('Context sync', response);
     return jsonDecode(response.body) as Map<String, dynamic>;
@@ -233,7 +240,9 @@ class ApiService {
       body: jsonEncode({'otp': otp}),
     );
 
-    if (response.statusCode != 200) throw _apiError('Session initiation', response);
+    if (response.statusCode != 200) {
+      throw _apiError('Session initiation', response);
+    }
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
@@ -256,7 +265,9 @@ class ApiService {
       }),
     );
 
-    if (response.statusCode != 200) throw _apiError('Live attendance', response);
+    if (response.statusCode != 200) {
+      throw _apiError('Live attendance', response);
+    }
   }
 
   static Future<void> syncVault({
@@ -284,7 +295,9 @@ class ApiService {
       body: jsonEncode({'session_id': sessionId}),
     );
 
-    if (response.statusCode != 200) throw _apiError('Session termination', response);
+    if (response.statusCode != 200) {
+      throw _apiError('Session termination', response);
+    }
   }
 
   // ─── Heartbeat (AUDIT-1.3) ─────────────────────────────────────────────────
@@ -300,7 +313,7 @@ class ApiService {
     final headers = await _authHeaders();
     final response = await _request(
       'POST',
-      'v1/board/heartbeat',
+      'api/v1/device/heartbeat',
       headers: headers,
       body: jsonEncode({
         'screen_state': screenState,
@@ -311,20 +324,24 @@ class ApiService {
     );
 
     if (response.statusCode != 200) {
-      Log.w('[Heartbeat] API returned ${response.statusCode}: ${response.body}');
+      Log.w(
+          '[Heartbeat] API returned ${response.statusCode}: ${response.body}');
     }
   }
 
-  static Future<Map<String, dynamic>> getPreFlight(String slotId, {int retryCount = 1}) async {
+  static Future<Map<String, dynamic>> getPreFlight(String slotId,
+      {int retryCount = 1}) async {
     final response = await _request(
-      'GET', 
-      'api/v1/board/preflight?slot_id=$slotId', 
+      'GET',
+      'api/v1/board/preflight?slot_id=$slotId',
       headers: {
         ...await _authHeaders(),
         'X-Retry-Attempt': retryCount.toString(),
       },
     );
-    if (response.statusCode != 200) throw _apiError('Pre-flight Handshake', response);
+    if (response.statusCode != 200) {
+      throw _apiError('Pre-flight Handshake', response);
+    }
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
@@ -344,7 +361,9 @@ class ApiService {
       headers: await _authHeaders(),
       body: jsonEncode(data),
     );
-    if (response.statusCode != 200) Log.w('⚠️ [ApiService] Telemetry push failed: ${response.body}');
+    if (response.statusCode != 200) {
+      Log.w('⚠️ [ApiService] Telemetry push failed: ${response.body}');
+    }
   }
 
   // ─── Security & Registration (AUDIT-R1/R2) ──────────────────────────────────
@@ -379,36 +398,48 @@ class ApiService {
 
   static Exception _apiError(String operation, http.Response response) {
     Log.e('$operation failed (${response.statusCode}): ${response.body}');
-    
+
     String? serverMessage;
     try {
       final data = jsonDecode(response.body);
-      serverMessage = data['detail']?.toString() ?? data['message']?.toString() ?? data['error']?.toString();
+      serverMessage = data['detail']?.toString() ??
+          data['message']?.toString() ??
+          data['error']?.toString();
     } catch (_) {}
 
-    final userMessage = serverMessage ?? _userFriendlyMessage(response.statusCode);
-    
+    final userMessage =
+        serverMessage ?? _userFriendlyMessage(response.statusCode);
+
     if (response.statusCode == 404) {
       return UnregisteredException(userMessage);
     }
     if (response.statusCode == 401) {
       return UnauthorizedException(userMessage);
     }
-    
+
     return ApiException(userMessage, response.statusCode);
   }
 
   static String _userFriendlyMessage(int statusCode) {
     switch (statusCode) {
-      case 400: return 'Invalid request. Please check your input.';
-      case 401: return 'Session expired. Please restart the application.';
-      case 403: return 'Access denied. Please check your permissions.';
-      case 404: return 'Resource not found. Please try again.';
-      case 409: return 'Conflict — this operation was already completed.';
-      case 422: return 'Invalid format. Please check your input and try again.';
-      case 429: return 'Too many attempts. Please wait and try again.';
-      case >= 500 && <= 599: return 'Server error. Please try again later.';
-      default: return 'Network error ($statusCode). Please try again.';
+      case 400:
+        return 'Invalid request. Please check your input.';
+      case 401:
+        return 'Session expired. Please restart the application.';
+      case 403:
+        return 'Access denied. Please check your permissions.';
+      case 404:
+        return 'Resource not found. Please try again.';
+      case 409:
+        return 'Conflict — this operation was already completed.';
+      case 422:
+        return 'Invalid format. Please check your input and try again.';
+      case 429:
+        return 'Too many attempts. Please wait and try again.';
+      case >= 500 && <= 599:
+        return 'Server error. Please try again later.';
+      default:
+        return 'Network error ($statusCode). Please try again.';
     }
   }
 }

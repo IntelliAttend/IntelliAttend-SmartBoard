@@ -4,6 +4,7 @@ import 'dart:isolate';
 import 'dart:math';
 import 'package:crypto/crypto.dart';
 
+import '../core/utils/logger.dart';
 import 'time_sync_service.dart';
 
 /// Payload structure to pass static data into the memory-isolated thread.
@@ -69,7 +70,8 @@ class TotpEngine {
     // Idempotency guard — calling start() twice without stop() would leak the
     // first isolate, its ReceivePort, and the broadcast timer.
     if (_isolate != null) {
-      print('[v5.4 Engine] start() called but isolate already running; ignoring.');
+      Log.w(
+          '[v5.4 Engine] start() called but isolate already running; ignoring.');
       return;
     }
     _receivePort = ReceivePort();
@@ -109,7 +111,7 @@ class TotpEngine {
       _broadcastSkew();
     });
 
-    print('[v5.4 Engine] Live-skew Isolate Spawned for Session: $sessionId');
+    Log.i('[v5.4 Engine] Live-skew Isolate Spawned for Session: $sessionId');
   }
 
   void _broadcastSkew() {
@@ -117,7 +119,7 @@ class TotpEngine {
     if (port == null) return;
     final skew = TimeSyncService.getSkew();
     port.send(skew);
-    print('[v5.4 Engine] Skew refresh sent to TOTP isolate: ${skew}ms');
+    Log.d('[v5.4 Engine] Skew refresh sent to TOTP isolate: ${skew}ms');
   }
 
   void stop() {
@@ -169,7 +171,8 @@ class TotpEngine {
       final int timestampMs = DateTime.now().millisecondsSinceEpoch + skewMs;
 
       // 2. Construct Data String: session_id|timestamp_ms|nonce
-      final String nonce = base64.encode(List<int>.generate(4, (_) => Random().nextInt(256)));
+      final String nonce =
+          base64.encode(List<int>.generate(4, (_) => Random().nextInt(256)));
       final String dataString = '${payload.sessionId}|$timestampMs|$nonce';
 
       // 3. Encode to Standard Base64
@@ -187,7 +190,7 @@ class TotpEngine {
 
       // 6. Final Token Assembly: IATT::<payload>::<signature>
       String finalToken = 'IATT::$base64Payload::$signatureHex';
-      
+
       // v6.1: Trust Engine Offline Flag
       if (payload.isOffline) {
         finalToken += '_offline_generated';
@@ -195,7 +198,7 @@ class TotpEngine {
 
       payload.sendPort.send(finalToken);
     } catch (e) {
-      print('❌ [TotpEngine] Generation Error: $e');
+      Log.e('[TotpEngine] Generation Error: $e');
     }
   }
 }

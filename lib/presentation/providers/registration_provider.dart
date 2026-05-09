@@ -50,7 +50,8 @@ class RegistrationProvider extends ChangeNotifier {
       // form, not the login form. The user completed OTP verification before
       // the app crashed/closed — resume exactly where they left off.
       _step = RegistrationStep.otpSent;
-      Log.i('[RegistrationProvider] Restored token. Resuming at OTP (hardware binding) step.');
+      Log.i(
+          '[RegistrationProvider] Restored token. Resuming at OTP (hardware binding) step.');
       notifyListeners();
     }
   }
@@ -88,22 +89,29 @@ class RegistrationProvider extends ChangeNotifier {
       if (data != null) {
         _adminEmail = data['admin_email'];
         final bool isRegistered = data['is_registered'] ?? false;
-        
+
         if (isRegistered) {
           if (data['profile'] != null) {
-            await _authRepository.saveRegistration(data['profile'], SessionManager.isar);
+            await _authRepository.saveRegistration(
+                data['profile'], SessionManager.isar);
           }
           _step = RegistrationStep.completed;
-          Log.i('[RegistrationProvider] Login successful. Device is already registered.');
+          await StartupService.register();
+          await _deviceRepository.syncTimetable(fullSync: true);
+          Log.i(
+              '[RegistrationProvider] Login successful. Device is already registered.');
         } else {
           // Trigger OTP Initiation for the newly logged-in board
-          final initResult = await _authRepository.initiateRegistration(boardId, password);
+          final initResult =
+              await _authRepository.initiateRegistration(boardId, password);
           if (initResult != null) {
             _step = RegistrationStep.otpSent;
             _startOtpTimer();
-            Log.i('[RegistrationProvider] Login successful. OTP sent to $_adminEmail');
+            Log.i(
+                '[RegistrationProvider] Login successful. OTP sent to $_adminEmail');
           } else {
-            _errorMessage = 'Failed to initiate registration OTP. Please contact IT.';
+            _errorMessage =
+                'Failed to initiate registration OTP. Please contact IT.';
           }
         }
       } else {
@@ -114,7 +122,8 @@ class RegistrationProvider extends ChangeNotifier {
       _errorMessage = _getFirebaseAuthErrorMessage(e);
       Log.e('[RegistrationProvider] Auth Error: ${e.code}');
     } catch (e) {
-      _errorMessage = 'Connection error. Please check your internet and try again.';
+      _errorMessage =
+          'Connection error. Please check your internet and try again.';
       Log.e('[RegistrationProvider] Unexpected Error: $e');
     } finally {
       _isLoading = false;
@@ -126,7 +135,8 @@ class RegistrationProvider extends ChangeNotifier {
     final rateKey = 'reg_otp_$boardId';
     if (!RateLimiter.isAllowed(rateKey)) {
       final delay = RateLimiter.getDelay(rateKey);
-      _errorMessage = 'SECURITY LOCK: Too many attempts. Please wait ${delay.inSeconds}s';
+      _errorMessage =
+          'SECURITY LOCK: Too many attempts. Please wait ${delay.inSeconds}s';
       notifyListeners();
       return;
     }
@@ -138,11 +148,11 @@ class RegistrationProvider extends ChangeNotifier {
     try {
       // Step 3 (A): Verify OTP to get Verification Token
       final verifyResult = await _authRepository.verifyOtp(boardId, otp);
-      
+
       if (verifyResult != null && verifyResult['verification_token'] != null) {
         RateLimiter.reset(rateKey);
         _verificationToken = verifyResult['verification_token'];
-        
+
         // Persist token for L-1 recovery
         await SecureStorageService.storeRegistrationToken(_verificationToken!);
 
@@ -150,31 +160,31 @@ class RegistrationProvider extends ChangeNotifier {
 
         // Step 3 (B): Use token to bind hardware
         final registrationResult = await _authRepository.completeRegistration(
-          boardId, 
-          hardwareId, 
-          _verificationToken!
-        );
-        
+            boardId, hardwareId, _verificationToken!);
+
         if (registrationResult != null) {
           _otpTimer?.cancel();
           final profile = Map<String, dynamic>.from(registrationResult);
           profile['room_id'] = registrationResult['classroom_id'];
-          
+
           await _authRepository.saveRegistration(profile, SessionManager.isar);
           await SecureStorageService.clearRegistrationToken();
-          
+
           _step = RegistrationStep.completed;
-          
+
           // v6.4: Automatically register for Windows Startup on first success
           await StartupService.register();
-          
-          Log.i('[RegistrationProvider] Hardware bound successfully to $boardId');
+          await _deviceRepository.syncTimetable(fullSync: true);
+
+          Log.i(
+              '[RegistrationProvider] Hardware bound successfully to $boardId');
         } else {
           _errorMessage = 'Hardware binding failed. Please contact IT.';
         }
       } else {
         RateLimiter.recordAttempt(rateKey);
-        _errorMessage = 'Invalid OTP. Please check the code sent to your IT admin.';
+        _errorMessage =
+            'Invalid OTP. Please check the code sent to your IT admin.';
       }
     } catch (e) {
       _errorMessage = 'Verification failed. Please check your connection.';

@@ -1,12 +1,8 @@
 import 'package:isar/isar.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:dio/dio.dart';
-import 'package:firebase_core/firebase_core.dart';
-import '../../services/session_manager.dart';
 import '../../models/isar_schemas.dart';
-import '../../services/hardware_fingerprint_service.dart';
+import '../../services/api_service.dart';
 import '../../services/secure_storage_service.dart';
-import '../../services/time_sync_service.dart';
 import '../../core/utils/logger.dart';
 import 'auth_repository.dart';
 
@@ -21,8 +17,10 @@ abstract class IDeviceRepository {
     required String appVersion,
   });
   Future<void> syncTimetable({bool fullSync = false});
-  Stream<List<TimetableEntry>> watchTodaySchedule(DeviceRegistration registration);
-  Stream<Map<String, dynamic>?> watchActiveSession(DeviceRegistration registration);
+  Stream<List<TimetableEntry>> watchTodaySchedule(
+      DeviceRegistration registration);
+  Stream<Map<String, dynamic>?> watchActiveSession(
+      DeviceRegistration registration);
   Stream<Map<String, dynamic>?> watchSpecificSession(String sessionId);
   Future<List<TimetableEntry>> getTodayTimeline();
   Future<List<TimetableEntry>> getWeeklyTimeline();
@@ -31,9 +29,8 @@ abstract class IDeviceRepository {
 
 class DeviceRepository implements IDeviceRepository {
   final Isar _isar;
-  final IAuthRepository _authRepository;
 
-  DeviceRepository(this._isar, this._authRepository);
+  DeviceRepository(this._isar, IAuthRepository authRepository);
 
   @override
   Future<bool> isRegistered() async {
@@ -64,7 +61,8 @@ class DeviceRepository implements IDeviceRepository {
       final hasToken = await SecureStorageService.getRefreshToken() != null;
 
       if (reg != null && reg.smartBoardId.isNotEmpty && !hasToken) {
-        Log.i('[MigrationBridge] Detected legacy registration for ${reg.smartBoardId}. Accountability login required.');
+        Log.i(
+            '[MigrationBridge] Detected legacy registration for ${reg.smartBoardId}. Accountability login required.');
         // Silent migration is disabled in the new Accountable Device model.
         // The device will prompt for Admin Authentication on next boot.
       }
@@ -80,14 +78,10 @@ class DeviceRepository implements IDeviceRepository {
     required String appVersion,
   }) async {
     try {
-      await (_authRepository as AuthRepository).apiClient.dio.post(
-        '/api/v1/device/heartbeat',
-        data: {
-          'screen_state': screenState,
-          'uptime_seconds': uptimeSeconds,
-          'app_version': appVersion,
-          'timestamp_ms': DateTime.now().millisecondsSinceEpoch,
-        },
+      await ApiService.sendHeartbeat(
+        screenState: screenState,
+        uptimeSeconds: uptimeSeconds,
+        appVersion: appVersion,
       );
     } catch (e) {
       Log.w('[DeviceRepository] Heartbeat failed: $e');
@@ -132,7 +126,8 @@ class DeviceRepository implements IDeviceRepository {
   }
 
   @override
-  Stream<List<TimetableEntry>> watchTodaySchedule(DeviceRegistration registration) {
+  Stream<List<TimetableEntry>> watchTodaySchedule(
+      DeviceRegistration registration) {
     final now = DateTime.now();
     final dayName = _getDayNameString(now);
     final classroomId = registration.classroomId ?? registration.smartBoardId;
@@ -143,22 +138,23 @@ class DeviceRepository implements IDeviceRepository {
         .where('day_of_week', isEqualTo: dayName)
         .snapshots()
         .map((snapshot) {
-          return snapshot.docs.map((doc) {
-            final data = doc.data();
-            return TimetableEntry()
-              ..dayOfWeek = now.weekday
-              ..startTime = data['start_time'] ?? ''
-              ..endTime = data['end_time'] ?? ''
-              ..courseName = data['subject_name'] ?? 'Unknown'
-              ..facultyName = data['faculty_name'] ?? 'Unknown'
-              ..sectionId = data['section_id']?.toString() ?? 'N/A'
-              ..slotId = doc.id;
-          }).toList();
-        });
+      return snapshot.docs.map((doc) {
+        final data = doc.data();
+        return TimetableEntry()
+          ..dayOfWeek = now.weekday
+          ..startTime = data['start_time'] ?? ''
+          ..endTime = data['end_time'] ?? ''
+          ..courseName = data['subject_name'] ?? 'Unknown'
+          ..facultyName = data['faculty_name'] ?? 'Unknown'
+          ..sectionId = data['section_id']?.toString() ?? 'N/A'
+          ..slotId = doc.id;
+      }).toList();
+    });
   }
 
   @override
-  Stream<Map<String, dynamic>?> watchActiveSession(DeviceRegistration registration) {
+  Stream<Map<String, dynamic>?> watchActiveSession(
+      DeviceRegistration registration) {
     final queryId = registration.classroomId ?? registration.smartBoardId;
     return FirebaseFirestore.instance
         .collection('ActiveSessions')
@@ -167,12 +163,12 @@ class DeviceRepository implements IDeviceRepository {
         .limit(1)
         .snapshots()
         .map((snapshot) {
-          if (snapshot.docs.isEmpty) return null;
-          final doc = snapshot.docs.first;
-          final data = doc.data();
-          data['session_id'] = doc.id;
-          return data;
-        });
+      if (snapshot.docs.isEmpty) return null;
+      final doc = snapshot.docs.first;
+      final data = doc.data();
+      data['session_id'] = doc.id;
+      return data;
+    });
   }
 
   @override
@@ -182,11 +178,11 @@ class DeviceRepository implements IDeviceRepository {
         .doc(sessionId)
         .snapshots()
         .map((doc) {
-          if (!doc.exists) return null;
-          final data = doc.data()!;
-          data['session_id'] = doc.id;
-          return data;
-        });
+      if (!doc.exists) return null;
+      final data = doc.data()!;
+      data['session_id'] = doc.id;
+      return data;
+    });
   }
 
   @override
@@ -212,21 +208,27 @@ class DeviceRepository implements IDeviceRepository {
   @override
   Future<TimetableEntry?> getCurrentSlot() async {
     final now = DateTime.now();
-    final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+    final timeStr =
+        "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
     final today = await getTodayTimeline();
-    
+
     for (final entry in today) {
-      if (entry.startTime.compareTo(timeStr) <= 0 && timeStr.compareTo(entry.endTime) < 0) {
+      if (entry.startTime.compareTo(timeStr) <= 0 &&
+          timeStr.compareTo(entry.endTime) < 0) {
         return entry;
       }
     }
     return null;
   }
 
-  Future<void> _updateIsarCache(List<TimetableEntry> entries, int? dayOfWeek) async {
+  Future<void> _updateIsarCache(
+      List<TimetableEntry> entries, int? dayOfWeek) async {
     await _isar.writeTxn(() async {
       if (dayOfWeek != null) {
-        await _isar.timetableEntrys.filter().dayOfWeekEqualTo(dayOfWeek).deleteAll();
+        await _isar.timetableEntrys
+            .filter()
+            .dayOfWeekEqualTo(dayOfWeek)
+            .deleteAll();
       } else {
         await _isar.timetableEntrys.clear();
       }
@@ -235,13 +237,30 @@ class DeviceRepository implements IDeviceRepository {
   }
 
   String _getDayNameString(DateTime date) {
-    final days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    final days = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday'
+    ];
     return days[date.weekday - 1];
   }
 
   int _getDayNumber(String dayName) {
-    final days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    final idx = days.indexWhere((d) => d.toLowerCase() == dayName.toLowerCase());
+    final days = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday'
+    ];
+    final idx =
+        days.indexWhere((d) => d.toLowerCase() == dayName.toLowerCase());
     return idx != -1 ? idx + 1 : DateTime.now().weekday;
   }
 }
