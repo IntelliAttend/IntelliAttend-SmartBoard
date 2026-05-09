@@ -35,7 +35,7 @@ class DefaultFirebaseOptions {
   // Native iOS/macOS config (EXTRACTED FROM GoogleService-Info.plist)
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyBazEmYqABDjU9627m5AaVH47piSsB78G8',
-    appId: '1:738499328288:web:7a4c7b8c9d0e1f2a3b4c5d', // Reverted to :web: to match native plist
+    appId: '1:738499328288:ios:7a4c7b8c9d0e1f2a3b4c5d',
     messagingSenderId: '738499328288',
     projectId: 'intelliattend-a2564',
     storageBucket: 'intelliattend-a2564.firebasestorage.app',

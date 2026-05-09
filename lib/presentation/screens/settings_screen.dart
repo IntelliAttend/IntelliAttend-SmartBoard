@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 import '../../core/theme/app_theme.dart';
-import '../../services/device_service.dart';
+import '../../data/repositories/device_repository.dart';
 import '../../models/isar_schemas.dart';
+import '../../main.dart';
 import '../widgets/glass_container.dart';
 import 'registration_screen.dart';
 import '../../services/secure_storage_service.dart';
@@ -41,7 +42,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _handleForceSync() async {
     setState(() => _isSyncing = true);
     try {
-      await DeviceService.syncTimetable();
+      await globalDeviceRepository.syncTimetable();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Timetable synced successfully')),
@@ -78,7 +79,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCEL')),
           ElevatedButton(
             onPressed: () async {
-              await DeviceService.clearRegistration();
+              await globalDeviceRepository.clearRegistration();
               if (mounted) {
                 Navigator.of(context).pushAndRemoveUntil(
                   MaterialPageRoute(builder: (context) => const RegistrationScreen()),

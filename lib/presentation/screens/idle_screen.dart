@@ -2,21 +2,28 @@
 // No server API calls, no polling, no heartbeats
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui';
+import 'package:crypto/crypto.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/config/app_config.dart';
 import '../../core/utils/logger.dart';
-import '../../services/device_service.dart';
+import '../../data/repositories/device_repository.dart';
+import 'package:provider/provider.dart';
 import '../../services/session_manager.dart';
+import '../../main.dart';
 import '../../services/api_service.dart';
+import '../../services/hardware_fingerprint_service.dart';
 import '../../services/secure_storage_service.dart';
+import '../../services/rate_limiter.dart';
 import '../../models/isar_schemas.dart';
 import '../widgets/glass_container.dart';
 import '../widgets/pin_input.dart';
 import '../widgets/timeline_slot.dart';
+import 'registration_screen.dart';
 import 'attendance_screen.dart';
 import 'settings_screen.dart';
 import 'timetable_screen.dart';
@@ -25,10 +32,14 @@ import 'notifications_screen.dart';
 import '../../services/time_sync_service.dart';
 import '../../core/config/app_config.dart';
 import 'package:video_player/video_player.dart';
+import '../../services/pre_flight_service.dart';
+
+enum PreFlightStatus { none, connecting, ready }
 
 class IdleScreen extends StatefulWidget {
   final DeviceRegistration registration;
-  const IdleScreen({super.key, required this.registration});
+  final bool isDegraded;
+  const IdleScreen({super.key, required this.registration, this.isDegraded = false});
   
   @override
   State<IdleScreen> createState() => _IdleScreenState();
@@ -54,6 +65,9 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   bool _isVideoInitialized = false;
   String _idleTheme = 'auto'; // 'auto', 'white', or 'dark'
   bool _forceShowCard = false; // For starting session in advance via lock icon tap
+  PreFlightStatus _preFlightStatus = PreFlightStatus.none;
+  bool _isReadyCheckDone = false;
+  StreamSubscription<Map<String, dynamic>?>? _preFlightSessionSubscription;
 
   // Cinematic Transition
   late AnimationController _cinematicController;
@@ -186,7 +200,8 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _loadInitialData() async {
-    final initialTimeline = await DeviceService.getTodayTimeline();
+    final deviceRepository = context.read<IDeviceRepository>();
+    final initialTimeline = await deviceRepository.getTodayTimeline();
     if (mounted) {
       setState(() {
         _todayTimeline = initialTimeline;
@@ -203,6 +218,7 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     _inactivityTimer?.cancel();
     _timetableSubscription?.cancel();
     _sessionSubscription?.cancel();
+    _preFlightSessionSubscription?.cancel();
     _attendanceSubscription?.cancel();
     _preClassTimer?.cancel();
     _cinematicController.dispose();
@@ -227,9 +243,9 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       return;
     }
     
-    final smartBoardId = widget.registration.smartBoardId;
+    final deviceRepository = context.read<IDeviceRepository>();
     
-    _timetableSubscription = DeviceService.watchTodaySchedule(widget.registration).listen(
+    _timetableSubscription = deviceRepository.watchTodaySchedule(widget.registration).listen(
       (entries) {
         if (mounted) {
           setState(() {
@@ -241,21 +257,12 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       onError: (e) => Log.e('❌ [Idle] Timetable stream error: $e'),
     );
 
-    _sessionSubscription = DeviceService.watchActiveSession(widget.registration).listen(
+    _sessionSubscription = deviceRepository.watchActiveSession(widget.registration).listen(
       (sessionData) {
         if (mounted) {
           if (sessionData != null) {
-            final sessionId = sessionData['session_id']?.toString();
-            if (sessionId != null) {
-              _attendanceSubscription?.cancel();
-              _attendanceSubscription = DeviceService.watchAttendanceCount(sessionId).listen((count) {
-                if (mounted) setState(() => _presentCount = count);
-              });
-            }
+            // ... handle attendance if needed ...
             _igniteWithActiveSession(sessionData);
-          } else {
-            _attendanceSubscription?.cancel();
-            if (mounted) setState(() => _presentCount = 0);
           }
         }
       },
@@ -265,13 +272,11 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
 
   void _igniteWithActiveSession(Map<String, dynamic> data) async {
     final sessionId = data['session_id']?.toString();
-    var sessionSecret = data['session_secret']?.toString();
-    
-    if (sessionId != null && (sessionSecret == null || sessionSecret.isEmpty)) {
-      sessionSecret = await SecureStorageService.getSessionSecret(sessionId);
-    }
+    if (sessionId == null) return;
 
-    if (sessionId != null && sessionSecret != null && sessionSecret.isNotEmpty) {
+    final sessionSecret = await SecureStorageService.getSessionSecret(sessionId);
+
+    if (sessionSecret != null && sessionSecret.isNotEmpty) {
       final course = data['course_name']?.toString() ?? _bedrockEntry?.courseName ?? 'Active Class';
       final faculty = data['faculty_name']?.toString() ?? _bedrockEntry?.facultyName ?? 'Professor';
       
@@ -294,10 +299,27 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   TimetableEntry? _findCurrentSlot(List<TimetableEntry> entries) {
     if (entries.isEmpty) return null;
     final now = TimeSyncService.timeNow;
-    final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+    final currentMinutes = now.hour * 60 + now.minute;
+    
     for (final entry in entries) {
-      if (entry.startTime.compareTo(timeStr) <= 0 && entry.endTime.compareTo(timeStr) > 0) {
-        return entry;
+      final startParts = entry.startTime.split(':');
+      final endParts = entry.endTime.split(':');
+      if (startParts.length != 2 || endParts.length != 2) continue;
+
+      int startMins = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
+      int endMins = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+
+      // Handle wraparound (e.g., 23:20 to 00:20)
+      if (endMins < startMins) {
+        // If current time is after start (e.g. 23:30) OR before end (e.g. 00:10)
+        if (currentMinutes >= startMins || currentMinutes < endMins) {
+          return entry;
+        }
+      } else {
+        // Standard session
+        if (currentMinutes >= startMins && currentMinutes < endMins) {
+          return entry;
+        }
       }
     }
     return null;
@@ -311,8 +333,21 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
         });
       }
       _checkUpcomingClass();
+      _checkDayChange();
     });
     _checkUpcomingClass();
+  }
+
+  int? _lastQueryDay;
+  void _checkDayChange() {
+    final today = TimeSyncService.timeNow.weekday;
+    if (_lastQueryDay != null && _lastQueryDay != today) {
+      Log.i('📅 [Idle] Day changed from $_lastQueryDay to $today. Refreshing stream...');
+      _lastQueryDay = today;
+      _timetableSubscription?.cancel();
+      _startRealTimeListener();
+    }
+    _lastQueryDay ??= today;
   }
 
   void _checkUpcomingClass() {
@@ -328,8 +363,13 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       final parts = entry.startTime.split(':');
       if (parts.length != 2) continue;
       
-      final entryMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
-      final diff = entryMinutes - currentMinutes;
+      int entryMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
+      int diff = entryMinutes - currentMinutes;
+      
+      // Handle wraparound (e.g. current 23:50, next 00:50)
+      if (diff < -1200) { // If entry is more than 20 hours in the "past", it's likely tomorrow early morning
+        diff += 1440; // 24 hours
+      }
       
       if (diff > 0 && diff < minDiff) {
         minDiff = diff;
@@ -343,14 +383,96 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
           _upcomingSlot = nextEntry;
           _showStartingSoon = true;
         });
+        
+        // Trigger Per-Session Warm-Up
+        if (_preFlightStatus == PreFlightStatus.none) {
+          _triggerWarmUp(nextEntry.slotId);
+        }
+
+        // v6.1 Phase 3: Silent Health Check at T-1m
+        if (minDiff == 1 && !_isReadyCheckDone) {
+          _isReadyCheckDone = true;
+          ApiService.syncReadyCheck().catchError((e) => Log.w('⚠️ Ready check failed: $e'));
+        }
+
+        // v6.1 Fallback: The "Offline Shield" at T-0
+        if (minDiff == 0 && _preFlightStatus != PreFlightStatus.ready && !_isLoading) {
+          Log.w('🛡️ [IdleScreen] T-0 reached without Pre-Flight success. Activating Offline Shield...');
+          _igniteOfflineMode(nextEntry);
+        }
       }
     } else {
-      if (mounted && _showStartingSoon) {
+      _isReadyCheckDone = false;
+      // Check for Daily Boot (10 min before first class)
+      // Since _todayTimeline is already sorted by academic day in DeviceService, we just check the first item
+      if (nextEntry != null && minDiff <= 10) {
+        final bool isFirstClass = _todayTimeline.isNotEmpty && _todayTimeline.first.slotId == nextEntry.slotId;
+        if (isFirstClass) {
+          PreFlightService().runDailyBoot();
+        }
+      }
+
+      if (mounted && _showStartingSoon && minDiff > 5) {
         setState(() {
           _showStartingSoon = false;
-          // Also reset force show if we were waiting for a class that has now started or been removed
+          _upcomingSlot = null;
           _forceShowCard = false;
+          _preFlightStatus = PreFlightStatus.none;
+          _preFlightSessionSubscription?.cancel();
         });
+      }
+    }
+  }
+
+  void _igniteOfflineMode(TimetableEntry entry) {
+    final offlineSessionId = 'OFFLINE_${entry.slotId}_${DateTime.now().year}${DateTime.now().month}${DateTime.now().day}';
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => AttendanceScreen(
+          sessionId: offlineSessionId,
+          sessionSecret: 'OFFLINE_SECRET_KEY',
+          capacity: widget.registration.capacity,
+          courseName: entry.courseName,
+          facultyName: entry.facultyName,
+          isOffline: true,
+        ),
+      ),
+    );
+  }
+
+  void _triggerWarmUp(String slotId) async {
+    try {
+      setState(() => _preFlightStatus = PreFlightStatus.connecting);
+      final result = await PreFlightService().runPerSessionWarmUp(slotId);
+      
+      if (result != null && result['status'] == 'ready') {
+        final sessionId = result['pre_allocated_session_id']?.toString();
+        if (mounted) {
+          setState(() => _preFlightStatus = PreFlightStatus.ready);
+          if (sessionId != null) {
+            _preFlightSessionSubscription?.cancel();
+            _preFlightSessionSubscription = globalDeviceRepository.watchSpecificSession(sessionId).listen((data) {
+              if (data != null && data['status'] == 'active') {
+                _igniteWithActiveSession(data);
+              }
+            });
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        if (e is UnregisteredException) {
+          Log.w('🚨 [IdleScreen] Pre-flight failed: Device unregistered. Redirecting...');
+          await context.read<IDeviceRepository>().clearRegistration();
+          if (mounted) {
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute(builder: (context) => const RegistrationScreen()),
+              (route) => false,
+            );
+          }
+        } else {
+          setState(() => _preFlightStatus = PreFlightStatus.none);
+        }
       }
     }
   }
@@ -361,12 +483,30 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       setState(() => _errorMessage = 'Please enter a valid 6-digit PIN');
       return;
     }
+    final rateKey = 'session_pin_${widget.registration.smartBoardId}';
+    if (!RateLimiter.isAllowed(rateKey)) {
+      setState(() => _errorMessage = 'Too many attempts. Please wait before trying again.');
+      return;
+    }
     setState(() { _isLoading = true; _errorMessage = null; });
     try {
       final result = await ApiService.initiateSession(otp);
+      RateLimiter.reset(rateKey);
       final data = result['data'] ?? result;
       final sessionId = data['session_id']?.toString();
-      final sessionSecret = data['session_secret']?.toString();
+      final half1 = data['session_secret_half1']?.toString();
+      late String sessionSecret;
+      if (half1 != null) {
+        final deviceId = await HardwareFingerprintService.getDeviceId();
+        final half2 = Hmac(sha256, utf8.encode(deviceId))
+            .convert(utf8.encode(half1))
+            .toString()
+            .substring(0, 16);
+        sessionSecret = '$half1$half2';
+      } else {
+        sessionSecret = data['session_secret']?.toString() ?? '';
+        data.remove('session_secret');
+      }
       final rosterCount = data['roster_count'] is int ? data['roster_count'] : int.tryParse(data['roster_count']?.toString() ?? '0') ?? 0;
       final facultyName = data['faculty_name']?.toString() ?? 'Professor';
       final courseName = data['course_name']?.toString() ?? 'Active Class';
@@ -385,14 +525,28 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
           MaterialPageRoute(
             builder: (context) => AttendanceScreen(
               sessionId: sessionId, sessionSecret: sessionSecret,
-              capacity: rosterCount > 0 ? rosterCount : widget.registration.capacity,
-              courseName: courseName, facultyName: facultyName,
+              capacity: widget.registration.capacity,
+              courseName: courseName,
+              facultyName: facultyName,
             ),
           ),
         );
       }
     } catch (e) {
-      if (mounted) setState(() => _errorMessage = e.toString().replaceFirst('Exception: ', ''));
+      if (mounted) {
+        if (e is UnregisteredException) {
+          Log.w('🚨 [IdleScreen] Device unregistered on server. Redirecting to Registration...');
+          await context.read<IDeviceRepository>().clearRegistration();
+          if (mounted) {
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute(builder: (context) => const RegistrationScreen()),
+              (route) => false,
+            );
+          }
+        } else {
+          setState(() => _errorMessage = e.toString().replaceFirst('Exception: ', ''));
+        }
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -571,6 +725,20 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
               letterSpacing: -1,
             ),
           ),
+          const SizedBox(width: 12),
+          _buildPreFlightDot(),
+          if (widget.isDegraded)
+            Padding(
+              padding: const EdgeInsets.only(left: 12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.9),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Text('OFFLINE MODE', style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+            ),
           const Spacer(),
           _buildNavLinks(textColor),
           const SizedBox(width: 40),
@@ -578,6 +746,51 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
         ],
       ),
     );
+  }
+
+  Widget _buildPreFlightDot() {
+    if (_preFlightStatus == PreFlightStatus.none) return const SizedBox.shrink();
+    
+    final color = _preFlightStatus == PreFlightStatus.connecting ? Colors.orange : Colors.green;
+    final label = _preFlightStatus == PreFlightStatus.connecting ? "Connecting..." : "System Ready";
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(color: color.withOpacity(0.5), blurRadius: 4, spreadRadius: 1)
+            ],
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(
+            color: color,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _getPreFlightStatusText() {
+    switch (_preFlightStatus) {
+      case PreFlightStatus.none: return 'PENDING';
+      case PreFlightStatus.connecting: return 'WARMING UP...';
+      case PreFlightStatus.ready: return 'READY';
+    }
+  }
+
+  Color _getIndicatorColor() {
+    return _preFlightStatus == PreFlightStatus.ready ? AppColors.successLime : AppColors.primaryTeal;
   }
 
   Widget _buildNavLinks(Color color) {
@@ -589,7 +802,7 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
         _navItem('Welcome', activeColor, true, () {}),
         const SizedBox(width: 30),
         _navItem('Timetable', inactiveColor, false, () async {
-          final weekly = await DeviceService.getWeeklyTimeline();
+          final weekly = await globalDeviceRepository.getWeeklyTimeline();
           if (mounted) {
             Navigator.of(context).push(MaterialPageRoute(builder: (context) => TimetableScreen(weeklyTimeline: weekly)));
           }
@@ -853,7 +1066,7 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'STATUS: READY',
+                'STATUS: ${_getPreFlightStatusText()}',
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.bold,
@@ -863,7 +1076,7 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
               ),
               Row(
                 children: [
-                  Container(width: 8, height: 8, decoration: const BoxDecoration(shape: BoxShape.circle, color: AppColors.primaryTeal)),
+                  Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: _getIndicatorColor())),
                   const SizedBox(width: 8),
                   Text(
                     'ENCRYPTED SESSION',

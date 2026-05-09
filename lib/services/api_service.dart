@@ -1,13 +1,31 @@
 import 'dart:convert';
-import 'dart:io';
+import 'package:uuid/uuid.dart';
 
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import '../core/utils/logger.dart';
 import 'hardware_fingerprint_service.dart';
+import 'ssl_pinning_service.dart';
 import 'time_sync_service.dart';
 import 'secure_storage_service.dart';
+
+class ApiException implements Exception {
+  final String userMessage;
+  final int statusCode;
+  ApiException(this.userMessage, this.statusCode);
+
+  @override
+  String toString() => userMessage;
+}
+
+class UnregisteredException extends ApiException {
+  UnregisteredException(String message) : super(message, 404);
+}
+
+class UnauthorizedException extends ApiException {
+  UnauthorizedException(String message) : super(message, 401);
+}
 
 class ApiService {
   static const String _defaultBaseUrl = 'https://api-dev.balaseetharamanjaneyulu.com';
@@ -17,16 +35,6 @@ class ApiService {
   static Future<String> _resolveBaseUrl() async {
     final envUrl = dotenv.env['API_BASE_URL'];
     if (envUrl != null && envUrl.isNotEmpty) return envUrl;
-
-    try {
-      final overrideFile = File('server_override.txt');
-      if (await overrideFile.exists()) {
-        final content = (await overrideFile.readAsString()).trim();
-        if (content.isNotEmpty) return content;
-      }
-    } catch (e) {
-      Log.w('Override file error: $e');
-    }
 
     return _defaultBaseUrl;
   }
@@ -39,18 +47,69 @@ class ApiService {
     return baseUri.replace(path: cleanPath);
   }
 
+  static http.Client get _client => SslPinningService.client;
+
+  // ─── Correlation ID (AUDIT-2.8) ───────────────────────────────────────────
+  //
+  // Every outbound API call gets a unique X-Request-ID so that errors can be
+  // traced from the SmartBoard UI to the backend logs. The format is:
+  //   <timestamp_ms>-<random_6digit>
+  // Example: 1715112345678-483291
+
+  static final _uuid = const Uuid();
+  static String _generateRequestId() => _uuid.v4();
+
+  /// Centralized request handler to enforce timeouts (AUDIT-2.3) and
+  /// inject correlation IDs (AUDIT-2.8) consistently.
+  static Future<http.Response> _request(
+    String method,
+    String path, {
+    Map<String, String>? headers,
+    Object? body,
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    final uri = await _buildUri(path);
+    final reqId = _generateRequestId();
+    final mergedHeaders = headers ?? {};
+    mergedHeaders['X-Request-ID'] = reqId;
+
+    Log.d('[API] $method $path → req=$reqId');
+
+    try {
+      late http.Response response;
+      if (method == 'GET') {
+        response = await _client.get(uri, headers: mergedHeaders).timeout(timeout);
+      } else if (method == 'POST') {
+        response =
+            await _client.post(uri, headers: mergedHeaders, body: body).timeout(timeout);
+      } else {
+        throw Exception('Unsupported HTTP method: $method');
+      }
+
+      // Check for backend correlation ID echo
+      final serverReqId = response.headers['x-request-id'];
+      if (serverReqId != null && serverReqId != reqId) {
+        Log.w('[API] Correlation ID mismatch: client=$reqId, server=$serverReqId');
+      }
+
+      return response;
+    } catch (e) {
+      Log.e('[API] $method $path failed: $e');
+      rethrow;
+    }
+  }
+
+
   // ─── Authentication ───────────────────────────────────────────────────────
 
   static Future<Map<String, String>> _authHeaders() async {
     final headers = <String, String>{'Content-Type': 'application/json'};
-    
-    // ─── Hardware Identity (Zero-Trust) ─────────────────────────────────────
-    final deviceId = await HardwareFingerprintService.getWindowsFingerprint();
+
+    final deviceId = await HardwareFingerprintService.getDeviceId();
     if (deviceId.isNotEmpty && deviceId != 'null') {
       headers['X-Device-ID'] = deviceId;
     }
 
-    // ─── Token Authentication ──────────────────────────────────────────────
     String? token = await SecureStorageService.getValidAccessToken();
     token ??= await _refreshToken();
     if (token != null) {
@@ -58,7 +117,6 @@ class ApiService {
       return headers;
     }
 
-    // ─── API Key Fallback ──────────────────────────────────────────────────
     final apiKey = await SecureStorageService.getApiKey();
     if (apiKey != null && apiKey.isNotEmpty) {
       headers['X-API-Key'] = apiKey;
@@ -72,9 +130,9 @@ class ApiService {
     if (refreshToken == null) return null;
 
     try {
-      final uri = await _buildUri('api/v1/board/auth/refresh');
-      final response = await http.post(
-        uri,
+      final response = await _request(
+        'POST',
+        'api/v1/board/auth/refresh',
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'refresh_token': refreshToken}),
       );
@@ -100,9 +158,9 @@ class ApiService {
   // ─── Registration Flow ────────────────────────────────────────────────────
 
   static Future<void> requestRegistrationOtp({required String smartBoardId}) async {
-    final uri = await _buildUri('api/v1/board/register/request-otp');
-    final response = await http.post(
-      uri,
+    final response = await _request(
+      'POST',
+      'api/v1/board/register/request-otp',
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'classroom_id': smartBoardId}),
     );
@@ -117,10 +175,10 @@ class ApiService {
     required String otp,
     String? deviceName,
   }) async {
-    final hardwareId = await HardwareFingerprintService.getWindowsFingerprint();
-    final uri = await _buildUri('api/v1/board/register');
-    final response = await http.post(
-      uri,
+    final hardwareId = await HardwareFingerprintService.getDeviceId();
+    final response = await _request(
+      'POST',
+      'api/v1/board/register',
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'classroom_id': smartBoardId,
@@ -139,10 +197,9 @@ class ApiService {
   // ─── Time & Context ───────────────────────────────────────────────────────
 
   static Future<int> syncTime() async {
-    final uri = await _buildUri('api/v1/board/time');
     final clientSent = DateTime.now().millisecondsSinceEpoch;
-
-    final response = await http.get(uri, headers: await _authHeaders());
+    final response =
+        await _request('GET', 'api/v1/board/time', headers: await _authHeaders());
     if (response.statusCode != 200) throw _apiError('Time sync', response);
 
     final data = jsonDecode(response.body);
@@ -160,8 +217,7 @@ class ApiService {
   }
 
   static Future<Map<String, dynamic>> syncContext() async {
-    final uri = await _buildUri('api/v1/board/sync-context');
-    final response = await http.get(uri, headers: await _authHeaders());
+    final response = await _request('GET', 'api/v1/board/sync-context', headers: await _authHeaders());
 
     if (response.statusCode != 200) throw _apiError('Context sync', response);
     return jsonDecode(response.body) as Map<String, dynamic>;
@@ -170,9 +226,9 @@ class ApiService {
   // ─── Session Operations ───────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> initiateSession(String otp) async {
-    final uri = await _buildUri('api/v1/board/session/initiate');
-    final response = await http.post(
-      uri,
+    final response = await _request(
+      'POST',
+      'api/v1/board/session/initiate',
       headers: await _authHeaders(),
       body: jsonEncode({'otp': otp}),
     );
@@ -187,9 +243,9 @@ class ApiService {
     required String smartBoardId,
     required String entryType,
   }) async {
-    final uri = await _buildUri('api/v1/board/session/attendance/record-live');
-    final response = await http.post(
-      uri,
+    final response = await _request(
+      'POST',
+      'api/v1/board/session/attendance/record-live',
       headers: await _authHeaders(),
       body: jsonEncode({
         'student_id': studentId,
@@ -207,9 +263,9 @@ class ApiService {
     required String sessionId,
     required List<Map<String, dynamic>> queuedScans,
   }) async {
-    final uri = await _buildUri('api/v1/board/sync/vault');
-    final response = await http.post(
-      uri,
+    final response = await _request(
+      'POST',
+      'api/v1/board/sync/vault',
       headers: await _authHeaders(),
       body: jsonEncode({
         'session_id': sessionId,
@@ -221,9 +277,9 @@ class ApiService {
   }
 
   static Future<void> terminateSession(String sessionId) async {
-    final uri = await _buildUri('api/v1/board/session/terminate');
-    final response = await http.post(
-      uri,
+    final response = await _request(
+      'POST',
+      'api/v1/board/session/terminate',
       headers: await _authHeaders(),
       body: jsonEncode({'session_id': sessionId}),
     );
@@ -231,9 +287,100 @@ class ApiService {
     if (response.statusCode != 200) throw _apiError('Session termination', response);
   }
 
+  // ─── Heartbeat (AUDIT-1.3) ─────────────────────────────────────────────────
+  //
+  // Called every 60s by HeartbeatService. Writes to board_heartbeats/<device_id>
+  // in Firestore so IT can monitor board health.
+
+  static Future<void> sendHeartbeat({
+    required String screenState,
+    required int uptimeSeconds,
+    required String appVersion,
+  }) async {
+    final headers = await _authHeaders();
+    final response = await _request(
+      'POST',
+      'v1/board/heartbeat',
+      headers: headers,
+      body: jsonEncode({
+        'screen_state': screenState,
+        'uptime_seconds': uptimeSeconds,
+        'app_version': appVersion,
+        'timestamp_ms': DateTime.now().millisecondsSinceEpoch,
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      Log.w('[Heartbeat] API returned ${response.statusCode}: ${response.body}');
+    }
+  }
+
+  static Future<Map<String, dynamic>> getPreFlight(String slotId, {int retryCount = 1}) async {
+    final response = await _request(
+      'GET', 
+      'api/v1/board/preflight?slot_id=$slotId', 
+      headers: {
+        ...await _authHeaders(),
+        'X-Retry-Attempt': retryCount.toString(),
+      },
+    );
+    if (response.statusCode != 200) throw _apiError('Pre-flight Handshake', response);
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  static Future<void> syncReadyCheck() async {
+    final response = await _request(
+      'GET',
+      'api/v1/board/ready',
+      headers: await _authHeaders(),
+    );
+    if (response.statusCode != 200) throw _apiError('Ready check', response);
+  }
+
+  static Future<void> sendHardwareTelemetry(Map<String, dynamic> data) async {
+    final response = await _request(
+      'POST',
+      'api/v1/board/telemetry', // Aligned with doc and TelemetryService
+      headers: await _authHeaders(),
+      body: jsonEncode(data),
+    );
+    if (response.statusCode != 200) Log.w('⚠️ [ApiService] Telemetry push failed: ${response.body}');
+  }
+
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
   static Exception _apiError(String operation, http.Response response) {
-    return Exception('$operation failed: ${response.statusCode}\n${response.body}');
+    Log.e('$operation failed (${response.statusCode}): ${response.body}');
+    
+    String? serverMessage;
+    try {
+      final data = jsonDecode(response.body);
+      serverMessage = data['detail']?.toString() ?? data['message']?.toString() ?? data['error']?.toString();
+    } catch (_) {}
+
+    final userMessage = serverMessage ?? _userFriendlyMessage(response.statusCode);
+    
+    if (response.statusCode == 404) {
+      return UnregisteredException(userMessage);
+    }
+    if (response.statusCode == 401) {
+      return UnauthorizedException(userMessage);
+    }
+    
+    return ApiException(userMessage, response.statusCode);
+  }
+
+  static String _userFriendlyMessage(int statusCode) {
+    switch (statusCode) {
+      case 400: return 'Invalid request. Please check your input.';
+      case 401: return 'Session expired. Please restart the application.';
+      case 403: return 'Access denied. Please check your permissions.';
+      case 404: return 'Resource not found. Please try again.';
+      case 409: return 'Conflict — this operation was already completed.';
+      case 422: return 'Invalid format. Please check your input and try again.';
+      case 429: return 'Too many attempts. Please wait and try again.';
+      case >= 500 && <= 599: return 'Server error. Please try again later.';
+      default: return 'Network error ($statusCode). Please try again.';
+    }
   }
 }

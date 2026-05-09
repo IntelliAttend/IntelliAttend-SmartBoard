@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
+import 'dart:math';
 import 'package:crypto/crypto.dart';
 
 import 'time_sync_service.dart';
@@ -18,6 +19,7 @@ class _TotpIsolatePayload {
   final String sessionSecret;
   final int windowDurationMillis;
   final int initialSkewMs;
+  final bool isOffline;
 
   _TotpIsolatePayload({
     required this.sendPort,
@@ -25,6 +27,7 @@ class _TotpIsolatePayload {
     required this.sessionSecret,
     required this.windowDurationMillis,
     required this.initialSkewMs,
+    this.isOffline = false,
   });
 }
 
@@ -40,6 +43,7 @@ class TotpEngine {
   final String sessionId;
   final String sessionSecret;
   final Duration windowDuration;
+  final bool isOffline;
 
   /// How often the main isolate refreshes the worker's view of the server
   /// time skew. 30s is a good balance: NTP and OS time corrections rarely
@@ -56,6 +60,7 @@ class TotpEngine {
     required this.sessionId,
     required this.sessionSecret,
     this.windowDuration = const Duration(milliseconds: 3500),
+    this.isOffline = false,
   });
 
   Stream<String> get qrStream => _qrStreamController.stream;
@@ -92,6 +97,7 @@ class TotpEngine {
       sessionSecret: sessionSecret,
       windowDurationMillis: windowDuration.inMilliseconds,
       initialSkewMs: currentSkew,
+      isOffline: isOffline,
     );
 
     _isolate = await Isolate.spawn(_isolateWorker, payload);
@@ -162,8 +168,9 @@ class TotpEngine {
       // 1. Calculate Corrected Unix Epoch in Milliseconds (Virtual Server Clock).
       final int timestampMs = DateTime.now().millisecondsSinceEpoch + skewMs;
 
-      // 2. Construct Data String: session_id|timestamp_ms
-      final String dataString = '${payload.sessionId}|$timestampMs';
+      // 2. Construct Data String: session_id|timestamp_ms|nonce
+      final String nonce = base64.encode(List<int>.generate(4, (_) => Random().nextInt(256)));
+      final String dataString = '${payload.sessionId}|$timestampMs|$nonce';
 
       // 3. Encode to Standard Base64
       final String base64Payload = base64.encode(utf8.encode(dataString));
@@ -179,7 +186,12 @@ class TotpEngine {
       final String signatureHex = digest.toString();
 
       // 6. Final Token Assembly: IATT::<payload>::<signature>
-      final String finalToken = 'IATT::$base64Payload::$signatureHex';
+      String finalToken = 'IATT::$base64Payload::$signatureHex';
+      
+      // v6.1: Trust Engine Offline Flag
+      if (payload.isOffline) {
+        finalToken += '_offline_generated';
+      }
 
       payload.sendPort.send(finalToken);
     } catch (e) {

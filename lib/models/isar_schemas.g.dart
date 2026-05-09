@@ -1593,65 +1593,45 @@ const DeviceRegistrationSchema = CollectionSchema(
   name: r'DeviceRegistration',
   id: -214276878105497287,
   properties: {
-    r'accessToken': PropertySchema(
-      id: 0,
-      name: r'accessToken',
-      type: IsarType.string,
-    ),
-    r'apiKey': PropertySchema(
-      id: 1,
-      name: r'apiKey',
-      type: IsarType.string,
-    ),
     r'building': PropertySchema(
-      id: 2,
+      id: 0,
       name: r'building',
       type: IsarType.string,
     ),
     r'capacity': PropertySchema(
-      id: 3,
+      id: 1,
       name: r'capacity',
       type: IsarType.long,
     ),
     r'classroomId': PropertySchema(
-      id: 4,
+      id: 2,
       name: r'classroomId',
       type: IsarType.string,
     ),
     r'department': PropertySchema(
-      id: 5,
+      id: 3,
       name: r'department',
       type: IsarType.string,
     ),
     r'hardwareId': PropertySchema(
-      id: 6,
+      id: 4,
       name: r'hardwareId',
       type: IsarType.string,
     ),
-    r'refreshToken': PropertySchema(
-      id: 7,
-      name: r'refreshToken',
-      type: IsarType.string,
-    ),
     r'registrationDate': PropertySchema(
-      id: 8,
+      id: 5,
       name: r'registrationDate',
       type: IsarType.dateTime,
     ),
     r'roomName': PropertySchema(
-      id: 9,
+      id: 6,
       name: r'roomName',
       type: IsarType.string,
     ),
     r'smartBoardId': PropertySchema(
-      id: 10,
+      id: 7,
       name: r'smartBoardId',
       type: IsarType.string,
-    ),
-    r'tokenExpiryMs': PropertySchema(
-      id: 11,
-      name: r'tokenExpiryMs',
-      type: IsarType.long,
     )
   },
   estimateSize: _deviceRegistrationEstimateSize,
@@ -1688,18 +1668,6 @@ int _deviceRegistrationEstimateSize(
   Map<Type, List<int>> allOffsets,
 ) {
   var bytesCount = offsets.last;
-  {
-    final value = object.accessToken;
-    if (value != null) {
-      bytesCount += 3 + value.length * 3;
-    }
-  }
-  {
-    final value = object.apiKey;
-    if (value != null) {
-      bytesCount += 3 + value.length * 3;
-    }
-  }
   bytesCount += 3 + object.building.length * 3;
   {
     final value = object.classroomId;
@@ -1709,12 +1677,6 @@ int _deviceRegistrationEstimateSize(
   }
   bytesCount += 3 + object.department.length * 3;
   bytesCount += 3 + object.hardwareId.length * 3;
-  {
-    final value = object.refreshToken;
-    if (value != null) {
-      bytesCount += 3 + value.length * 3;
-    }
-  }
   bytesCount += 3 + object.roomName.length * 3;
   bytesCount += 3 + object.smartBoardId.length * 3;
   return bytesCount;
@@ -1726,18 +1688,14 @@ void _deviceRegistrationSerialize(
   List<int> offsets,
   Map<Type, List<int>> allOffsets,
 ) {
-  writer.writeString(offsets[0], object.accessToken);
-  writer.writeString(offsets[1], object.apiKey);
-  writer.writeString(offsets[2], object.building);
-  writer.writeLong(offsets[3], object.capacity);
-  writer.writeString(offsets[4], object.classroomId);
-  writer.writeString(offsets[5], object.department);
-  writer.writeString(offsets[6], object.hardwareId);
-  writer.writeString(offsets[7], object.refreshToken);
-  writer.writeDateTime(offsets[8], object.registrationDate);
-  writer.writeString(offsets[9], object.roomName);
-  writer.writeString(offsets[10], object.smartBoardId);
-  writer.writeLong(offsets[11], object.tokenExpiryMs);
+  writer.writeString(offsets[0], object.building);
+  writer.writeLong(offsets[1], object.capacity);
+  writer.writeString(offsets[2], object.classroomId);
+  writer.writeString(offsets[3], object.department);
+  writer.writeString(offsets[4], object.hardwareId);
+  writer.writeDateTime(offsets[5], object.registrationDate);
+  writer.writeString(offsets[6], object.roomName);
+  writer.writeString(offsets[7], object.smartBoardId);
 }
 
 DeviceRegistration _deviceRegistrationDeserialize(
@@ -1747,19 +1705,15 @@ DeviceRegistration _deviceRegistrationDeserialize(
   Map<Type, List<int>> allOffsets,
 ) {
   final object = DeviceRegistration();
-  object.accessToken = reader.readStringOrNull(offsets[0]);
-  object.apiKey = reader.readStringOrNull(offsets[1]);
-  object.building = reader.readString(offsets[2]);
-  object.capacity = reader.readLong(offsets[3]);
-  object.classroomId = reader.readStringOrNull(offsets[4]);
-  object.department = reader.readString(offsets[5]);
-  object.hardwareId = reader.readString(offsets[6]);
+  object.building = reader.readString(offsets[0]);
+  object.capacity = reader.readLong(offsets[1]);
+  object.classroomId = reader.readStringOrNull(offsets[2]);
+  object.department = reader.readString(offsets[3]);
+  object.hardwareId = reader.readString(offsets[4]);
   object.id = id;
-  object.refreshToken = reader.readStringOrNull(offsets[7]);
-  object.registrationDate = reader.readDateTime(offsets[8]);
-  object.roomName = reader.readString(offsets[9]);
-  object.smartBoardId = reader.readString(offsets[10]);
-  object.tokenExpiryMs = reader.readLongOrNull(offsets[11]);
+  object.registrationDate = reader.readDateTime(offsets[5]);
+  object.roomName = reader.readString(offsets[6]);
+  object.smartBoardId = reader.readString(offsets[7]);
   return object;
 }
 
@@ -1771,29 +1725,21 @@ P _deviceRegistrationDeserializeProp<P>(
 ) {
   switch (propertyId) {
     case 0:
-      return (reader.readStringOrNull(offset)) as P;
+      return (reader.readString(offset)) as P;
     case 1:
-      return (reader.readStringOrNull(offset)) as P;
-    case 2:
-      return (reader.readString(offset)) as P;
-    case 3:
       return (reader.readLong(offset)) as P;
-    case 4:
+    case 2:
       return (reader.readStringOrNull(offset)) as P;
-    case 5:
+    case 3:
       return (reader.readString(offset)) as P;
+    case 4:
+      return (reader.readString(offset)) as P;
+    case 5:
+      return (reader.readDateTime(offset)) as P;
     case 6:
       return (reader.readString(offset)) as P;
     case 7:
-      return (reader.readStringOrNull(offset)) as P;
-    case 8:
-      return (reader.readDateTime(offset)) as P;
-    case 9:
       return (reader.readString(offset)) as P;
-    case 10:
-      return (reader.readString(offset)) as P;
-    case 11:
-      return (reader.readLongOrNull(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
   }
@@ -1997,314 +1943,6 @@ extension DeviceRegistrationQueryWhere
 
 extension DeviceRegistrationQueryFilter
     on QueryBuilder<DeviceRegistration, DeviceRegistration, QFilterCondition> {
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      accessTokenIsNull() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(const FilterCondition.isNull(
-        property: r'accessToken',
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      accessTokenIsNotNull() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(const FilterCondition.isNotNull(
-        property: r'accessToken',
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      accessTokenEqualTo(
-    String? value, {
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.equalTo(
-        property: r'accessToken',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      accessTokenGreaterThan(
-    String? value, {
-    bool include = false,
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.greaterThan(
-        include: include,
-        property: r'accessToken',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      accessTokenLessThan(
-    String? value, {
-    bool include = false,
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.lessThan(
-        include: include,
-        property: r'accessToken',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      accessTokenBetween(
-    String? lower,
-    String? upper, {
-    bool includeLower = true,
-    bool includeUpper = true,
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.between(
-        property: r'accessToken',
-        lower: lower,
-        includeLower: includeLower,
-        upper: upper,
-        includeUpper: includeUpper,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      accessTokenStartsWith(
-    String value, {
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.startsWith(
-        property: r'accessToken',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      accessTokenEndsWith(
-    String value, {
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.endsWith(
-        property: r'accessToken',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      accessTokenContains(String value, {bool caseSensitive = true}) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.contains(
-        property: r'accessToken',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      accessTokenMatches(String pattern, {bool caseSensitive = true}) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.matches(
-        property: r'accessToken',
-        wildcard: pattern,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      accessTokenIsEmpty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.equalTo(
-        property: r'accessToken',
-        value: '',
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      accessTokenIsNotEmpty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.greaterThan(
-        property: r'accessToken',
-        value: '',
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      apiKeyIsNull() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(const FilterCondition.isNull(
-        property: r'apiKey',
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      apiKeyIsNotNull() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(const FilterCondition.isNotNull(
-        property: r'apiKey',
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      apiKeyEqualTo(
-    String? value, {
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.equalTo(
-        property: r'apiKey',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      apiKeyGreaterThan(
-    String? value, {
-    bool include = false,
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.greaterThan(
-        include: include,
-        property: r'apiKey',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      apiKeyLessThan(
-    String? value, {
-    bool include = false,
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.lessThan(
-        include: include,
-        property: r'apiKey',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      apiKeyBetween(
-    String? lower,
-    String? upper, {
-    bool includeLower = true,
-    bool includeUpper = true,
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.between(
-        property: r'apiKey',
-        lower: lower,
-        includeLower: includeLower,
-        upper: upper,
-        includeUpper: includeUpper,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      apiKeyStartsWith(
-    String value, {
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.startsWith(
-        property: r'apiKey',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      apiKeyEndsWith(
-    String value, {
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.endsWith(
-        property: r'apiKey',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      apiKeyContains(String value, {bool caseSensitive = true}) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.contains(
-        property: r'apiKey',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      apiKeyMatches(String pattern, {bool caseSensitive = true}) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.matches(
-        property: r'apiKey',
-        wildcard: pattern,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      apiKeyIsEmpty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.equalTo(
-        property: r'apiKey',
-        value: '',
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      apiKeyIsNotEmpty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.greaterThan(
-        property: r'apiKey',
-        value: '',
-      ));
-    });
-  }
-
   QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
       buildingEqualTo(
     String value, {
@@ -2980,160 +2618,6 @@ extension DeviceRegistrationQueryFilter
   }
 
   QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      refreshTokenIsNull() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(const FilterCondition.isNull(
-        property: r'refreshToken',
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      refreshTokenIsNotNull() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(const FilterCondition.isNotNull(
-        property: r'refreshToken',
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      refreshTokenEqualTo(
-    String? value, {
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.equalTo(
-        property: r'refreshToken',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      refreshTokenGreaterThan(
-    String? value, {
-    bool include = false,
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.greaterThan(
-        include: include,
-        property: r'refreshToken',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      refreshTokenLessThan(
-    String? value, {
-    bool include = false,
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.lessThan(
-        include: include,
-        property: r'refreshToken',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      refreshTokenBetween(
-    String? lower,
-    String? upper, {
-    bool includeLower = true,
-    bool includeUpper = true,
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.between(
-        property: r'refreshToken',
-        lower: lower,
-        includeLower: includeLower,
-        upper: upper,
-        includeUpper: includeUpper,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      refreshTokenStartsWith(
-    String value, {
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.startsWith(
-        property: r'refreshToken',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      refreshTokenEndsWith(
-    String value, {
-    bool caseSensitive = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.endsWith(
-        property: r'refreshToken',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      refreshTokenContains(String value, {bool caseSensitive = true}) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.contains(
-        property: r'refreshToken',
-        value: value,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      refreshTokenMatches(String pattern, {bool caseSensitive = true}) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.matches(
-        property: r'refreshToken',
-        wildcard: pattern,
-        caseSensitive: caseSensitive,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      refreshTokenIsEmpty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.equalTo(
-        property: r'refreshToken',
-        value: '',
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      refreshTokenIsNotEmpty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.greaterThan(
-        property: r'refreshToken',
-        value: '',
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
       registrationDateEqualTo(DateTime value) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.equalTo(
@@ -3460,80 +2944,6 @@ extension DeviceRegistrationQueryFilter
       ));
     });
   }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      tokenExpiryMsIsNull() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(const FilterCondition.isNull(
-        property: r'tokenExpiryMs',
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      tokenExpiryMsIsNotNull() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(const FilterCondition.isNotNull(
-        property: r'tokenExpiryMs',
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      tokenExpiryMsEqualTo(int? value) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.equalTo(
-        property: r'tokenExpiryMs',
-        value: value,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      tokenExpiryMsGreaterThan(
-    int? value, {
-    bool include = false,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.greaterThan(
-        include: include,
-        property: r'tokenExpiryMs',
-        value: value,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      tokenExpiryMsLessThan(
-    int? value, {
-    bool include = false,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.lessThan(
-        include: include,
-        property: r'tokenExpiryMs',
-        value: value,
-      ));
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterFilterCondition>
-      tokenExpiryMsBetween(
-    int? lower,
-    int? upper, {
-    bool includeLower = true,
-    bool includeUpper = true,
-  }) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addFilterCondition(FilterCondition.between(
-        property: r'tokenExpiryMs',
-        lower: lower,
-        includeLower: includeLower,
-        upper: upper,
-        includeUpper: includeUpper,
-      ));
-    });
-  }
 }
 
 extension DeviceRegistrationQueryObject
@@ -3544,34 +2954,6 @@ extension DeviceRegistrationQueryLinks
 
 extension DeviceRegistrationQuerySortBy
     on QueryBuilder<DeviceRegistration, DeviceRegistration, QSortBy> {
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      sortByAccessToken() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'accessToken', Sort.asc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      sortByAccessTokenDesc() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'accessToken', Sort.desc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      sortByApiKey() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'apiKey', Sort.asc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      sortByApiKeyDesc() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'apiKey', Sort.desc);
-    });
-  }
-
   QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
       sortByBuilding() {
     return QueryBuilder.apply(this, (query) {
@@ -3643,20 +3025,6 @@ extension DeviceRegistrationQuerySortBy
   }
 
   QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      sortByRefreshToken() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'refreshToken', Sort.asc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      sortByRefreshTokenDesc() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'refreshToken', Sort.desc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
       sortByRegistrationDate() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'registrationDate', Sort.asc);
@@ -3697,52 +3065,10 @@ extension DeviceRegistrationQuerySortBy
       return query.addSortBy(r'smartBoardId', Sort.desc);
     });
   }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      sortByTokenExpiryMs() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'tokenExpiryMs', Sort.asc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      sortByTokenExpiryMsDesc() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'tokenExpiryMs', Sort.desc);
-    });
-  }
 }
 
 extension DeviceRegistrationQuerySortThenBy
     on QueryBuilder<DeviceRegistration, DeviceRegistration, QSortThenBy> {
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      thenByAccessToken() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'accessToken', Sort.asc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      thenByAccessTokenDesc() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'accessToken', Sort.desc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      thenByApiKey() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'apiKey', Sort.asc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      thenByApiKeyDesc() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'apiKey', Sort.desc);
-    });
-  }
-
   QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
       thenByBuilding() {
     return QueryBuilder.apply(this, (query) {
@@ -3828,20 +3154,6 @@ extension DeviceRegistrationQuerySortThenBy
   }
 
   QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      thenByRefreshToken() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'refreshToken', Sort.asc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      thenByRefreshTokenDesc() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'refreshToken', Sort.desc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
       thenByRegistrationDate() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'registrationDate', Sort.asc);
@@ -3882,38 +3194,10 @@ extension DeviceRegistrationQuerySortThenBy
       return query.addSortBy(r'smartBoardId', Sort.desc);
     });
   }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      thenByTokenExpiryMs() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'tokenExpiryMs', Sort.asc);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QAfterSortBy>
-      thenByTokenExpiryMsDesc() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addSortBy(r'tokenExpiryMs', Sort.desc);
-    });
-  }
 }
 
 extension DeviceRegistrationQueryWhereDistinct
     on QueryBuilder<DeviceRegistration, DeviceRegistration, QDistinct> {
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QDistinct>
-      distinctByAccessToken({bool caseSensitive = true}) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addDistinctBy(r'accessToken', caseSensitive: caseSensitive);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QDistinct>
-      distinctByApiKey({bool caseSensitive = true}) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addDistinctBy(r'apiKey', caseSensitive: caseSensitive);
-    });
-  }
-
   QueryBuilder<DeviceRegistration, DeviceRegistration, QDistinct>
       distinctByBuilding({bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
@@ -3950,13 +3234,6 @@ extension DeviceRegistrationQueryWhereDistinct
   }
 
   QueryBuilder<DeviceRegistration, DeviceRegistration, QDistinct>
-      distinctByRefreshToken({bool caseSensitive = true}) {
-    return QueryBuilder.apply(this, (query) {
-      return query.addDistinctBy(r'refreshToken', caseSensitive: caseSensitive);
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QDistinct>
       distinctByRegistrationDate() {
     return QueryBuilder.apply(this, (query) {
       return query.addDistinctBy(r'registrationDate');
@@ -3976,13 +3253,6 @@ extension DeviceRegistrationQueryWhereDistinct
       return query.addDistinctBy(r'smartBoardId', caseSensitive: caseSensitive);
     });
   }
-
-  QueryBuilder<DeviceRegistration, DeviceRegistration, QDistinct>
-      distinctByTokenExpiryMs() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addDistinctBy(r'tokenExpiryMs');
-    });
-  }
 }
 
 extension DeviceRegistrationQueryProperty
@@ -3990,19 +3260,6 @@ extension DeviceRegistrationQueryProperty
   QueryBuilder<DeviceRegistration, int, QQueryOperations> idProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'id');
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, String?, QQueryOperations>
-      accessTokenProperty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addPropertyName(r'accessToken');
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, String?, QQueryOperations> apiKeyProperty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addPropertyName(r'apiKey');
     });
   }
 
@@ -4040,13 +3297,6 @@ extension DeviceRegistrationQueryProperty
     });
   }
 
-  QueryBuilder<DeviceRegistration, String?, QQueryOperations>
-      refreshTokenProperty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addPropertyName(r'refreshToken');
-    });
-  }
-
   QueryBuilder<DeviceRegistration, DateTime, QQueryOperations>
       registrationDateProperty() {
     return QueryBuilder.apply(this, (query) {
@@ -4065,13 +3315,6 @@ extension DeviceRegistrationQueryProperty
       smartBoardIdProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'smartBoardId');
-    });
-  }
-
-  QueryBuilder<DeviceRegistration, int?, QQueryOperations>
-      tokenExpiryMsProperty() {
-    return QueryBuilder.apply(this, (query) {
-      return query.addPropertyName(r'tokenExpiryMs');
     });
   }
 }

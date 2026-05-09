@@ -39,10 +39,6 @@ class DeviceRegistration {
   late int capacity;
   late DateTime registrationDate;
   
-  String? apiKey;
-  String? accessToken;
-  int? tokenExpiryMs;
-  String? refreshToken;
 }
 
 @collection
@@ -71,4 +67,5 @@ class TimetableEntry {
   late String courseName;
   late String facultyName;
   late String sectionId;
+  late String slotId;      // Document ID from Firestore
 }

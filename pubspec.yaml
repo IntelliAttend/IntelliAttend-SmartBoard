@@ -15,9 +15,13 @@ dependencies:
   qr_flutter: ^4.1.0
   video_player: ^2.9.1
   
+  # Networking
+  dio: ^5.4.1
+  
   # Core Logic & Cryptography
   crypto: ^3.0.3
   http: ^1.1.0
+  uuid: ^4.3.3
   
   # Storage & Security
   isar: ^3.1.0

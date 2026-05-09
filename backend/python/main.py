@@ -1,158 +1,256 @@
 import os
-import secrets
 import hmac
 import hashlib
+import secrets
+import base64
+import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List, Dict
+from typing import Optional
 import uvicorn
 import firebase_admin
 from firebase_admin import credentials, firestore
-from fastapi import FastAPI, Header, HTTPException, Depends, status
+from fastapi import FastAPI, Depends, HTTPException, status, Request, Response, APIRouter, Header
+from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
+
+from services.board_service import BoardService
+from services.session_service import SessionService
+from services.active_sessions_service import ActiveSessionsService
+from models.board_auth_schema import TelemetryPayload, SessionInitiateRequest, SessionCreateRequest
+
+# Configure Logging (v6.0 Measurement Requirement)
+LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOG_DIR, "app.log")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("IntelliAttend")
 
 app = FastAPI(title="IntelliAttend SmartBoard Engine")
 
-# --- 1. Firebase Admin Initialization ---
+# v6.1: Bandwidth Saving - Enable Gzip Compression
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", "internal-v1")
+    response: Response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    logger.info(f"{request.method} {request.url.path} | ID: {request_id} | Status: {response.status_code}")
+    return response
+
 SERVICE_ACCOUNT_PATH = os.path.join(os.path.dirname(__file__), "serviceAccountKey.json")
 
 try:
     if os.path.exists(SERVICE_ACCOUNT_PATH):
         cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
         firebase_admin.initialize_app(cred)
-        print("[The Brain] Firebase initialized.")
     else:
         firebase_admin.initialize_app()
-        print("[The Brain] Firebase initialized via Default Credentials.")
     db = firestore.client()
+    logger.info("[The Brain] Firebase initialized.")
 except Exception as e:
-    print(f"[The Brain] CRITICAL: Firebase Init Error: {e}")
+    logger.error(f"[The Brain] Firebase Init Error: {e}")
     db = None
 
-# --- 2. Data Models ---
+class HeartbeatRequest(BaseModel):
+    screen_state: str = "unknown"
+    uptime_seconds: int = 0
+    app_version: str = "unknown"
+    timestamp_ms: int = 0
 
-class ScheduleResponse(BaseModel):
-    has_class: bool
-    room_id: str
-    room_name: str
-    course_id: Optional[str] = None
-    course_name: Optional[str] = None
-    faculty_name: Optional[str] = None
-    section_id: Optional[str] = None
-    start_time: Optional[str] = None
-    end_time: Optional[str] = None
-    roster_count: int = 0
-
-class SessionInitiateRequest(BaseModel):
-    otp: str = Field(..., min_length=6, max_length=6)
-
-class AttendanceVerifyRequest(BaseModel):
-    session_id: str
-    student_id: str
-    student_name: str
-    scanned_token: str
-    grid_index: int
-
-# --- 3. Dependency: Hardware Signature Validation ---
-
-async def verify_board_signature(x_board_mac: str = Header(None)):
-    print(f"[The Brain] Incoming Request | Hardware Header: {x_board_mac or 'MISSING'}")
+# --- Shared Logic ---
+async def _initiate_session_logic(request: SessionInitiateRequest, board_data: dict, is_offline_fallback: bool = False):
+    device_id = board_data.get("device_id")
     
-    if not x_board_mac:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, 
-            detail="Hardware Identity Breach: X-Board-MAC missing"
+    # v6.1: Trust Engine Handling for Offline Fallback
+    otp = request.otp
+    if otp.endswith("_offline_generated"):
+        logger.warning(f"⚠️ [TrustEngine] Offline Fallback detected for device {device_id}. Loosening timestamp validation.")
+        otp = otp.replace("_offline_generated", "")
+
+    # v6.2: Atomic Ignition - Generate and return the secret key
+    session_secret = secrets.token_hex(16)
+    
+    session = await SessionService.find_session_by_otp(otp, db)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found or OTP invalid")
+    if "error" in session:
+        raise HTTPException(status_code=400, detail=session["error"])
+
+    # Atomic Actions: Mark Faculty Attendance + Store Secret
+    try:
+        await SessionService.ignite_session_atomic(
+            session_id=session["session_id"],
+            secret=session_secret,
+            db=db
         )
-    
-    if db:
-        device_doc = db.collection("RegisteredDevices").document(x_board_mac).get()
-        if not device_doc.exists:
-            print(f"[The Brain] Access Denied: Unregistered Hardware {x_board_mac}")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, 
-                detail="Unregistered Hardware Signature"
-            )
-        
-        device_data = device_doc.to_dict()
-        print(f"[The Brain] Access Granted: {device_data.get('room_name')} ({x_board_mac})")
-        return device_data
-    
-    # Dev Fallback for local testing if Firestore is unreachable
-    return {"room_id": "ROOM_CSE_402", "room_name": "CSE Seminar Hall 402", "roster_count": 55}
-
-# --- 4. Endpoints ---
-
-@app.get("/v1/board/schedule/current", response_model=ScheduleResponse)
-async def get_current_schedule(device_info: dict = Depends(verify_board_signature)):
-    """
-    PHASE 4: Fetch the current class detail for this SmartBoard.
-    In production, this queries the 'schedules' collection in Firestore.
-    """
-    now = datetime.now(timezone.utc)
-    
-    # Simulation: In a real app, you'd query Firestore:
-    # db.collection("Schedules").where("room_id", "==", device_info['room_id'])...
-    
-    # Mocking a class that is happening RIGHT NOW
-    mock_class = {
-        "has_class": True,
-        "room_id": device_info['room_id'],
-        "room_name": device_info['room_name'],
-        "course_id": "CS102",
-        "course_name": "Data Structures & Algorithms",
-        "faculty_name": "Dr. Sarah Johnson",
-        "section_id": "SEC-B",
-        "start_time": (now - timedelta(minutes=10)).isoformat(),
-        "end_time": (now + timedelta(minutes=50)).isoformat(),
-        "roster_count": device_info.get('roster_count', 60)
-    }
-    
-    return mock_class
-
-@app.post("/v1/board/session/initiate")
-async def initiate_session(request: SessionInitiateRequest, device_info: dict = Depends(verify_board_signature)):
-    session_id = f"SESS_{secrets.token_hex(4).upper()}"
-    session_secret = secrets.token_hex(32)
-    server_time = datetime.now(timezone.utc).isoformat()
-    
-    # Fetch schedule again to bind session to course
-    schedule_data = await get_current_schedule(device_info)
-    
-    if not schedule_data['has_class']:
-        raise HTTPException(status_code=400, detail="No scheduled class for this time.")
-
-    if db:
-        db.collection("ActiveSessions").document(session_id).set({
-            "room_id": device_info["room_id"],
-            "room_name": device_info["room_name"],
-            "course_name": schedule_data['course_name'],
-            "faculty_name": schedule_data['faculty_name'],
-            "session_secret": session_secret,
-            "status": "active",
-            "created_at": firestore.SERVER_TIMESTAMP,
-            "roster_count": schedule_data['roster_count']
-        })
-
-    # The "Nuclear Flattening" fix (v5.4):
-    # We return the session identifiers at the root AND inside the 'data' block.
-    # This prevents "Missing session identifiers" errors regardless of how the
-    # client-side JSON parser flattens the response.
-    handshake_payload = {
-        "session_id": session_id,
-        "session_secret": session_secret,
-        "server_time": server_time,
-        "course_name": schedule_data['course_name'],
-        "faculty_name": schedule_data['faculty_name'],
-        "roster_count": schedule_data['roster_count']
-    }
+    except Exception as e:
+        logger.error(f"❌ [Atomic] Ignition failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to ignite session")
 
     return {
         "status": "success",
-        "session_id": session_id,      # Flattened Root Key
-        "session_secret": session_secret,  # Flattened Root Key
-        "data": handshake_payload
+        "data": {
+            "session_id": session["session_id"],
+            "session_secret": session_secret,
+            "faculty_name": session.get("faculty_name", "Professor"),
+            "course_name": session.get("course_name", "Active Class"),
+            "roster_count": session.get("roster_count", 0)
+        }
     }
 
-# ... (attendance/verify remains same as previous step)
+# --- Legacy & Heartbeat Routes ---
+@app.post("/v1/board/heartbeat")
+async def board_heartbeat(
+    request: HeartbeatRequest,
+    board_data: dict = Depends(BoardService.get_board_data(db)),
+):
+    device_id = board_data.get("device_id")
+    if db:
+        db.collection("board_heartbeats").document(device_id).set({
+            "last_heartbeat_at": firestore.SERVER_TIMESTAMP,
+            "screen_state": request.screen_state,
+            "uptime_seconds": request.uptime_seconds,
+            "app_version": request.app_version,
+            "board_id": device_id,
+        })
+    return {"status": "ok", "device_id": device_id}
+
+@app.post("/v1/board/session/initiate")
+async def initiate_session_legacy(
+    request: SessionInitiateRequest,
+    board_data: dict = Depends(BoardService.get_board_data(db)),
+):
+    return await _initiate_session_logic(request, board_data)
+
+# --- Standard API Router (api/v1/board) ---
+api_router = APIRouter(prefix="/api/v1/board")
+
+@api_router.get("/time")
+async def get_server_time():
+    return {
+        "status": "success",
+        "server_timestamp_ms": int(datetime.now(timezone.utc).timestamp() * 1000)
+    }
+
+@api_router.get("/ready")
+async def board_ready(board_data: dict = Depends(BoardService.get_board_data(db))):
+    """v6.1 Phase 3: Silent Health Check to warm up TCP connection."""
+    return {"status": "ready", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+@api_router.get("/preflight")
+async def get_preflight(
+    response: Response,
+    slot_id: str,
+    x_retry_attempt: Optional[int] = Header(None, alias="X-Retry-Attempt"),
+    board_data: dict = Depends(BoardService.get_board_data(db))
+):
+    if x_retry_attempt and x_retry_attempt > 1:
+        logger.warning(f"⚡ [PreFlight] High-priority retry detected (Attempt: {x_retry_attempt}) for slot {slot_id}")
+    
+    logger.info(f"⚡ [PreFlight] Request for slot: {slot_id}")
+    
+    # v6.1: Idempotency & Caching
+    response.headers["Cache-Control"] = "public, max-age=120"
+    
+    if not db:
+        return {
+            "status": "ready",
+            "server_timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+            "pre_allocated_session_id": SessionService.generate_deterministic_id(slot_id),
+            "session_secret_half1": "MOCK_HALF_1",
+            "slot_verification": {"subject_name": "Mock Class", "faculty_name": "Mock Prof"}
+        }
+    
+    room_id = board_data.get("room_id")
+    slot_doc = db.collection("timetable_slots").document(slot_id).get()
+    if not slot_doc.exists:
+        raise HTTPException(status_code=404, detail="Slot not found")
+    
+    slot_data = slot_doc.to_dict()
+    session_id = SessionService.generate_deterministic_id(slot_id)
+    session_doc = db.collection("Sessions").document(session_id).get()
+
+    if not session_doc.exists:
+        half1 = base64.urlsafe_b64encode(secrets.token_bytes(16)).decode().rstrip("=")
+        session_data = {
+            "session_secret_half1": half1,
+            "status": "pre_allocated",
+            "slot_id": slot_id,
+            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            "course_name": slot_data.get("subject_name", ""),
+            "faculty_name": slot_data.get("faculty_name", ""),
+            "created_at": firestore.SERVER_TIMESTAMP,
+        }
+        db.collection("Sessions").document(session_id).set(session_data)
+        db.collection("ActiveSessions").document(session_id).set({
+            "session_id": session_id,
+            "room_id": room_id,
+            "status": "pre_allocated",
+            "course_name": session_data["course_name"],
+            "faculty_name": session_data["faculty_name"],
+            "created_at": firestore.SERVER_TIMESTAMP,
+        })
+    else:
+        session_data = session_doc.to_dict()
+
+    return {
+        "status": "ready",
+        "server_timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+        "pre_allocated_session_id": session_id,
+        "session_secret_half1": session_data.get("session_secret_half1"),
+        "slot_verification": {
+            "subject_name": slot_data.get("subject_name", "Unknown"),
+            "faculty_name": slot_data.get("faculty_name", "Unknown"),
+        }
+    }
+
+@api_router.post("/telemetry")
+async def receive_telemetry(payload: TelemetryPayload, board_data: dict = Depends(BoardService.get_board_data(db))):
+    if db:
+        db.collection("smart_boards").document(board_data["device_id"]).update({
+            "health": {**payload.model_dump(), "last_seen": firestore.SERVER_TIMESTAMP}
+        })
+    return {"status": "success"}
+
+@api_router.get("/sync-context")
+async def sync_context(board_data: dict = Depends(BoardService.get_board_data(db))):
+    return {"status": "success", "data": board_data}
+
+@api_router.post("/session/initiate")
+async def initiate_session_api(request: SessionInitiateRequest, board_data: dict = Depends(BoardService.get_board_data(db))):
+    return await _initiate_session_logic(request, board_data)
+
+@api_router.post("/session/attendance/record-live")
+async def record_attendance():
+    return {"status": "success"}
+
+@api_router.post("/session/terminate")
+async def terminate_session():
+    return {"status": "success"}
+
+app.include_router(api_router)
+
+# --- Faculty Control ---
+@app.post("/v1/board/session/create")
+async def create_session_endpoint(request: SessionCreateRequest):
+    logger.info(f"🚀 [Faculty] Creating session for: {request.course_name}")
+    if not db:
+        # Mock for measurement if DB is down
+        sid = SessionService.generate_deterministic_id(request.slot_id or "MOCK")
+        return {"status": "success", "session_id": sid, "data": {"session_id": sid, "otp": "123456"}}
+    
+    session = await SessionService.create_session(request.model_dump(), db)
+    await ActiveSessionsService.create_active_session(session["session_id"], session["session_secret_half1"], db)
+    return {"status": "success", "session_id": session["session_id"], "data": {"session_id": session["session_id"], "otp": session["otp"]}}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000)

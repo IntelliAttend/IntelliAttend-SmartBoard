@@ -27,7 +27,7 @@ headers['Authorization'] = 'Bearer $accessToken';  // Expires in 15min!
 | **Replay Attack** | ✗ Vulnerable (MAC never expires) | ✓ Protected (token expiry) |
 | **MAC Spoofing** | ✗ Fully vulnerable | ✓ Not applicable (MAC not used for auth) |
 | **Token Theft Impact** | Full access forever | Limited to 15 minutes |
-| **Local Storage** | Plain text Isar DB | XOR encrypted (upgrade to AES-GCM recommended) |
+| **Local Storage** | Plain text Isar DB | OS keychain (flutter_secure_storage) |
 | **Network Interception** | Critical (MAC = password) | Minimal (JWT expires quickly) |
 | **Re-registration** | Deadlock possible | ✓ Force re-register supported |
 
@@ -35,60 +35,67 @@ headers['Authorization'] = 'Bearer $accessToken';  // Expires in 15min!
 
 ## 🛠️ Files Modified/Created
 
-### 1. **`lib/models/isar_schemas.dart`** (MODIFIED)
-Added secure token storage fields:
+### 1. **`lib/models/isar_schemas.dart`** (MODIFIED — tokens removed)
+**Tokens are NEVER stored in Isar.** All cryptographic secrets use the OS keychain exclusively:
+
 ```dart
 class DeviceRegistration {
-  // ... existing fields ...
-  
-  // v5.4: Cryptographic tokens
-  String? apiKey;        // Long-lived API key from server
-  String? accessToken;    // Short-lived JWT (15min)
-  int? tokenExpiryMs;     // When access token expires
-  String? refreshToken;   // For obtaining new access tokens
+  // Metadata only — NO token fields
+  late String smartBoardId;
+  String? classroomId;
+  late String hardwareId;
+  late String roomName;
+  late String building;
+  late String department;
+  late int capacity;
+  late DateTime registrationDate;
 }
 ```
 
+Tokens (`apiKey`, `accessToken`, `refreshToken`) are stored via `SecureStorageService` → OS keychain.
+
 ### 2. **`lib/services/secure_storage_service.dart`** (NEW)
-Encrypted storage for cryptographic secrets:
+OS keychain via `flutter_secure_storage`:
 - `storeApiKey()` / `getApiKey()` - Long-lived API key
 - `storeAccessToken()` / `getValidAccessToken()` - JWT with auto-expiry check
 - `storeRefreshToken()` / `getRefreshToken()` - Refresh token
+- `storeSessionSecret()` / `getSessionSecret()` - Per-session secrets (keychain, not Isar)
 - `clearAll()` - Secure wipe for re-registration
 
-Uses device fingerprint + env salt for encryption key derivation.
+**Encryption:** Platform-native (Windows DPAPI, Android Keystore, macOS Keychain). No custom key derivation.
 
 ### 3. **`lib/services/api_service.dart`** (MODIFIED)
-Updated authentication headers:
+Updated authentication + pinned HTTP client:
 ```dart
-static Future<Map<String, String>> _getHeaders() async {
-  // 1. Try JWT access token first (valid for 15min)
-  String? accessToken = await SecureStorageService.getValidAccessToken();
+// All HTTP calls now use pinned client
+static http.Client get _client => SslPinningService.client;
+
+static Future<Map<String, String>> _authHeaders() async {
+  // 1. Hardware identity (zero-trust identification, NOT auth)
+  final deviceId = await HardwareFingerprintService.getWindowsFingerprint();
+  headers['X-Device-ID'] = deviceId;
   
-  // 2. Auto-refresh if expired
-  if (accessToken == null) {
-    accessToken = await _refreshAccessToken();
-  }
-  
-  // 3. Use JWT if available
-  if (accessToken != null) {
-    headers['Authorization'] = 'Bearer $accessToken';
+  // 2. Try JWT access token first
+  String? token = await SecureStorageService.getValidAccessToken();
+  token ??= await _refreshToken();
+  if (token != null) {
+    headers['Authorization'] = 'Bearer $token';
     return headers;
   }
   
-  // 4. Fallback to API key
+  // 3. Fallback to API key
   final apiKey = await SecureStorageService.getApiKey();
-  if (apiKey != null) {
-    headers['X-API-Key'] = apiKey;
-    return headers;
-  }
+  if (apiKey != null) headers['X-API-Key'] = apiKey;
   
-  // 5. Last resort: device ID (registration flow only)
-  // NO LONGER USING MAC AS PASSWORD!
+  return headers;
 }
 ```
 
-Added `_refreshAccessToken()` method for automatic token renewal.
+Added:
+- `_refreshToken()` — automatic JWT renewal
+- `SslPinningService.client` — SHA-256 certificate pinning
+- Removed `X-Board-MAC` (replaced by `X-Device-ID` for identification only)
+- Removed `dart:io` import
 
 ### 4. **`lib/services/device_service.dart`** (MODIFIED)
 Updated registration to extract and store tokens:
@@ -111,13 +118,6 @@ static Future<void> registerWithOtp(...) async {
   // ...
 }
 ```
-
-### 5. **`.env`** (MODIFIED)
-Added encryption salt:
-```
-ENCRYPTION_SALT=intelliattend-secure-salt-2026-change-me
-```
-⚠️ **CHANGE THIS TO A RANDOM STRING FOR PRODUCTION!**
 
 ### 6. **`v5.4_SECURITY_MIGRATION.md`** (NEW)
 Comprehensive guide for backend team with:
@@ -222,9 +222,8 @@ const decoded = jwt.verify(token, process.env.JWT_SECRET);
 - [ ] Test full registration → token → API call flow
 
 ### For Production (TODO 🔐):
-- [ ] Upgrade XOR encryption to AES-GCM
-- [ ] Use platform secure enclave/keychain
-- [ ] Change `ENCRYPTION_SALT` to random string
+- [ ] Server-side QR nonce deduplication
+- [ ] Server-side rate limiting on /request-otp, /register, /session/initiate
 - [ ] Implement token revocation on logout
 - [ ] Add rate limiting on refresh endpoint
 

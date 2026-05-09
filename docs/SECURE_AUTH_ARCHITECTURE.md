@@ -1,5 +1,5 @@
 # Architectural Transition: Secure Cryptographic Authentication
-**Status:** PROPOSED / MANDATORY  
+**Status:** IMPLEMENTED (v5.7)  
 **Target Teams:** Server, SmartBoard  
 **Objective:** Transition from "Hardware Trust" (Static Fingerprints) to "Cryptographic Trust" (Rotational Tokens).
 
@@ -71,8 +71,7 @@ We are moving to an enterprise-grade authentication model where hardware fingerp
 
 ### Secure Storage & Persistence:
 - **Move away from Isar for secrets:** The `Refresh Token` and `JWT` must be stored in `flutter_secure_storage` (Windows Credential Manager / Android Keystore).
-- **Isar Usage:** Use Isar only for non-sensitive cache (e.g., schedule, room name).
-- **Encryption:** If using Isar for any sensitive data, initialize it with a `StorageKey` derived from the hardware fingerprint.
+- **Isar Usage:** Use Isar only for non-sensitive cache (e.g., schedule, room name). No secrets in Isar. Currently opened without a StorageKey (no sensitive data stored).
 
 ### Networking Service:
 - **Auto-Refresh Logic:** Update the API service to detect `401 Unauthorized` responses. If detected, attempt to refresh the JWT using the `Refresh Token` before failing.

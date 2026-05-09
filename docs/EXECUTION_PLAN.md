@@ -30,8 +30,8 @@ Strict isolation is the golden rule. Each component has a specific jurisdiction.
 
 ### Sprint 3: Production Hardening
 *Goal: Resilience and Security.*
-- **Crash Recovery**: Implement Isar database to persist `session_secret` locally for instant reboot recovery.
-- **Offline Mode**: Queue scans locally if Wi-Fi drops and sync when back online.
+- **Crash Recovery**: Store `session_secret` via SecureStorageService (OS keychain) — not in Isar.
+- **Offline Mode**: Queue scans locally in `QueuedScan` (Isar) if Wi-Fi drops, flush via periodic timer when online.
 
 ---
 

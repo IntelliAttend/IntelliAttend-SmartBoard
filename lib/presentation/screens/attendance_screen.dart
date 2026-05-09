@@ -8,11 +8,12 @@ import '../../core/theme/app_theme.dart';
 import '../../services/totp_engine.dart';
 import '../../services/session_manager.dart';
 import '../../services/api_service.dart';
-import '../../services/device_service.dart';
+import '../../data/repositories/device_repository.dart';
 import '../widgets/glass_container.dart';
 import 'idle_screen.dart';
 import 'settings_screen.dart';
 import '../../core/utils/logger.dart';
+import '../../main.dart';
 
 class AttendanceScreen extends StatefulWidget {
   final String sessionId;
@@ -20,6 +21,7 @@ class AttendanceScreen extends StatefulWidget {
   final int capacity;
   final String courseName;
   final String facultyName;
+  final bool isOffline;
   final List<String>? initialVerifiedIds;
 
   const AttendanceScreen({
@@ -29,6 +31,7 @@ class AttendanceScreen extends StatefulWidget {
     required this.capacity,
     required this.courseName,
     required this.facultyName,
+    this.isOffline = false,
     this.initialVerifiedIds,
   });
 
@@ -60,6 +63,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     _totpEngine = TotpEngine(
       sessionId: widget.sessionId,
       sessionSecret: widget.sessionSecret,
+      isOffline: widget.isOffline,
     );
     
     _totpEngine.qrStream.listen((token) {
@@ -119,7 +123,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     _progressController.stop();
     if (mounted) {
       SessionManager.clearSession(widget.sessionId);
-      DeviceService.getRegistration().then((registration) {
+      globalDeviceRepository.getRegistration().then((registration) {
         if (mounted && registration != null) {
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(builder: (context) => IdleScreen(registration: registration)),
@@ -224,7 +228,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
 
   Future<void> _handleEndAttendance() async {
     // Navigate immediately to the idle screen for a responsive feel
-    final registration = await DeviceService.getRegistration();
+    final registration = await globalDeviceRepository.getRegistration();
     if (mounted && registration != null) {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (context) => IdleScreen(registration: registration)),

@@ -11,10 +11,12 @@ class SyncManager {
   SyncManager._internal();
 
   StreamSubscription<ConnectivityResult>? _connectivitySubscription;
+  Timer? _syncTimer;
   bool _isSyncing = false;
   late Isar _isar;
 
-  /// Initializes the SyncManager to watch for connectivity changes.
+  /// Initializes the SyncManager to watch for connectivity changes
+  /// and periodically flush queued scans during an active session.
   void init() {
     _isar = SessionManager.isar;
     _connectivitySubscription = Connectivity().onConnectivityChanged.listen((result) {
@@ -22,6 +24,9 @@ class SyncManager {
         _attemptSync();
       }
     });
+    
+    // Periodic retry timer
+    _syncTimer = Timer.periodic(const Duration(seconds: 30), (_) => _attemptSync());
     
     // Also try initial sync
     _attemptSync();
@@ -84,5 +89,6 @@ class SyncManager {
 
   void dispose() {
     _connectivitySubscription?.cancel();
+    _syncTimer?.cancel();
   }
 }

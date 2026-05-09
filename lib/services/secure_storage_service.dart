@@ -1,8 +1,7 @@
-import 'dart:io';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../core/utils/logger.dart';
 
 /// v5.7: Platform-aware OS-keychain-backed secure storage.
 ///
@@ -38,29 +37,18 @@ class SecureStorageService {
     mOptions: MacOsOptions(accessibility: KeychainAccessibility.first_unlock),
   );
 
-  static bool _forceFallback = false;
-  static bool get _shouldUseFallback => _forceFallback || (kDebugMode && Platform.isMacOS);
-
   static SharedPreferences? _prefs;
 
   static Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
-    if (kDebugMode) {
-      debugPrint('🔐 [SecureStorage] Initialized (SharedPreferences available as fallback)');
-    }
   }
 
   static Future<void> _write(String key, String value) async {
-    if (_shouldUseFallback) {
-      await _prefs!.setString(key, value);
-      return;
-    }
     try {
       await _secure.write(key: key, value: value);
     } catch (e) {
       if (e.toString().contains('-34018') || e.toString().contains('errSecMissingEntitlement')) {
-        debugPrint('⚠️ [SecureStorage] Keychain Access Failed. Falling back to SharedPreferences.');
-        _forceFallback = true;
+        Log.e('🚨 [SecureStorage] KEYCHAIN UNAVAILABLE (-34018). Secrets written to SharedPreferences plaintext. IMMEDIATE IT ACTION REQUIRED.');
         await _prefs!.setString(key, value);
       } else {
         rethrow;
@@ -69,14 +57,11 @@ class SecureStorageService {
   }
 
   static Future<String?> _read(String key) async {
-    if (_shouldUseFallback) {
-      return _prefs?.getString(key);
-    }
     try {
       return await _secure.read(key: key);
     } catch (e) {
       if (e.toString().contains('-34018')) {
-        _forceFallback = true;
+        Log.e('🚨 [SecureStorage] KEYCHAIN UNAVAILABLE (-34018). Reading from SharedPreferences fallback. IT ACTION REQUIRED.');
         return _prefs?.getString(key);
       }
       rethrow;
@@ -84,15 +69,10 @@ class SecureStorageService {
   }
 
   static Future<void> _delete(String key) async {
-    if (_shouldUseFallback) {
-      await _prefs?.remove(key);
-      return;
-    }
     try {
       await _secure.delete(key: key);
     } catch (e) {
       if (e.toString().contains('-34018')) {
-        _forceFallback = true;
         await _prefs?.remove(key);
       } else {
         rethrow;

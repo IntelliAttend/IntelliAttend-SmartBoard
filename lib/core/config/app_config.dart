@@ -1,48 +1,19 @@
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import '../utils/logger.dart';
 
-/// Centralized configuration manager for IntelliAttend.
-/// Handles environment variables and validates system requirements.
 class AppConfig {
-  static final AppConfig _instance = AppConfig._internal();
-  factory AppConfig() => _instance;
-  AppConfig._internal();
+  static String get baseUrl => dotenv.env['API_BASE_URL'] ?? 'https://api-dev.balaseetharamanjaneyulu.com';
+  
+  static String get sslFingerprint => dotenv.env['SSL_PIN_FINGERPRINT'] ?? '';
+  
+  static String get localApiUrl => dotenv.env['LOCAL_API_URL'] ?? 'http://127.0.0.1:8000/v1/board/telemetry';
 
-  /// The Cloud API Gateway URL
-  static String get apiBaseUrl => dotenv.env['API_BASE_URL']!;
+  static bool get isDebug => dotenv.env['DEBUG']?.toLowerCase() == 'true';
 
-  /// The Local "Brain" API URL
-  static String get localApiUrl => dotenv.env['LOCAL_API_URL']!;
+  static bool get enableVideoBreaks => dotenv.env['ENABLE_VIDEO_BREAKS']?.toLowerCase() == 'true' || false;
 
-  /// v2.0 Roadmap: Cinematic Video Backgrounds for Breaks
-  /// Currently disabled for v1.0 Release.
-  static const bool enableVideoBreaks = false;
-
-  /// Validates that all required environment variables are present.
-  /// Throws an [Exception] if critical configuration is missing.
   static void validate() {
-    Log.i('🔍 [AppConfig] Validating environment configuration...');
-    
-    final requiredKeys = [
-      'API_BASE_URL',
-      'LOCAL_API_URL',
-    ];
-
-    List<String> missingKeys = [];
-    for (var key in requiredKeys) {
-      if (!dotenv.env.containsKey(key) || dotenv.env[key]!.isEmpty) {
-        missingKeys.add(key);
-      }
+    if (dotenv.env['API_BASE_URL'] == null) {
+      print('⚠️ [AppConfig] API_BASE_URL not set in .env. Falling back to default.');
     }
-
-    if (missingKeys.isNotEmpty) {
-      final error = '❌ CRITICAL CONFIG MISSING: ${missingKeys.join(", ")}';
-      Log.e(error);
-      throw Exception(error);
-    }
-
-    Log.i('✅ [AppConfig] Environment validation successful.');
-    Log.d('📡 Cloud URL: ${apiBaseUrl}');
-    Log.d('🏠 Local URL: ${localApiUrl}');
   }
 }

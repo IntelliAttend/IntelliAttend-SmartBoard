@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/isar_schemas.dart';
@@ -9,7 +10,9 @@ class SessionManager {
   static Future<void> init() async {
     if (_isar != null) return;
     
-    final dir = await getApplicationDocumentsDirectory();
+    await _migrateFromOldPath();
+    
+    final dir = await getApplicationSupportDirectory();
     final schemas = [
       ActiveSessionSchema, 
       QueuedScanSchema, 
@@ -46,6 +49,25 @@ class SessionManager {
         Log.e('🚨 [SessionManager] CRITICAL: Fatal Isar Failure: $retryError');
         rethrow;
       }
+    }
+  }
+
+  static Future<void> _migrateFromOldPath() async {
+    try {
+      final oldDir = await getApplicationDocumentsDirectory();
+      final newDir = await getApplicationSupportDirectory();
+      
+      final oldFile = File('${oldDir.path}/intelliattend_vault_v2.isar');
+      final newFile = File('${newDir.path}/intelliattend_vault_v2.isar');
+      
+      if (await oldFile.exists() && !await newFile.exists()) {
+        await newFile.parent.create(recursive: true);
+        await oldFile.copy(newFile.path);
+        await oldFile.delete();
+        Log.i('📦 [SessionManager] Isar database migrated from Documents to AppSupport');
+      }
+    } catch (e) {
+      Log.w('⚠️ [SessionManager] Migration from old path skipped: $e');
     }
   }
 

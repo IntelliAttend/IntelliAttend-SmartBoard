@@ -1,14 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../core/theme/app_theme.dart';
 import 'registration_screen.dart';
 import 'idle_screen.dart';
 import 'settings_screen.dart';
-import '../../services/device_service.dart';
+import '../../data/repositories/device_repository.dart';
+import '../../services/api_service.dart';
+import '../../core/utils/logger.dart';
 import '../../models/isar_schemas.dart';
 import '../widgets/glass_container.dart';
 
 class BootScreen extends StatefulWidget {
-  const BootScreen({super.key});
+  final bool isDegraded;
+  const BootScreen({super.key, this.isDegraded = false});
 
   @override
   State<BootScreen> createState() => _BootScreenState();
@@ -25,9 +29,10 @@ class _BootScreenState extends State<BootScreen> {
   }
 
   Future<void> _performHandshake() async {
+    final deviceRepository = context.read<IDeviceRepository>();
     try {
       await Future.delayed(const Duration(seconds: 2));
-      final isRegistered = await DeviceService.isRegistered();
+      final isRegistered = await deviceRepository.isRegistered();
 
       if (!isRegistered) {
         if (mounted) {
@@ -38,25 +43,36 @@ class _BootScreenState extends State<BootScreen> {
         return;
       }
 
-      final registration = await DeviceService.getRegistration();
+      final registration = await deviceRepository.getRegistration();
       if (registration == null) {
         if (mounted) Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (context) => const RegistrationScreen()));
         return;
       }
 
       try {
-        await DeviceService.syncTimetable(fullSync: true);
+        await deviceRepository.syncTimetable(fullSync: true);
       } catch (e) {
         debugPrint('⚠️ [Boot] Timetable sync failed: $e');
       }
 
       if (mounted) {
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => IdleScreen(registration: registration)),
+          MaterialPageRoute(builder: (context) => IdleScreen(registration: registration, isDegraded: widget.isDegraded)),
         );
       }
     } catch (e) {
       if (mounted) {
+        if (e is UnregisteredException) {
+          Log.w('⚠️ [Boot] Device is not configured on server. Wiping local state...');
+          await deviceRepository.clearRegistration();
+          if (mounted) {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (context) => const RegistrationScreen()),
+            );
+          }
+          return;
+        }
+
         setState(() => _errorMessage = 'Error: $e');
         Future.delayed(const Duration(seconds: 5), () {
           if (mounted) {
@@ -86,47 +102,52 @@ class _BootScreenState extends State<BootScreen> {
                 ),
               ),
             ),
-            // Settings Button (Top Left)
+
+            // Top Left Settings Button
             Positioned(
-              top: 24,
-              left: 24,
-              child: FutureBuilder<DeviceRegistration?>(
-                future: DeviceService.getRegistration(),
-                builder: (context, snapshot) {
-                  // Only show if registered, or show dummy registration if not
-                  return Tooltip(
-                    message: 'System Settings',
-                    child: MouseRegion(
-                      cursor: SystemMouseCursors.click,
-                      child: GestureDetector(
-                        onTap: () {
-                          final reg = snapshot.data ?? DeviceRegistration()
-                            ..smartBoardId = 'UNREGISTERED'
-                            ..roomName = 'New Device'
-                            ..building = 'Unknown'
-                            ..department = 'Unknown'
-                            ..hardwareId = 'Unknown';
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) => SettingsScreen(registration: reg),
+              top: 40,
+              left: 40,
+              child: Consumer<IDeviceRepository>(
+                builder: (context, deviceRepository, child) {
+                  return FutureBuilder<DeviceRegistration?>(
+                    future: deviceRepository.getRegistration(),
+                    builder: (context, snapshot) {
+                      return Tooltip(
+                        message: 'System Settings',
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.click,
+                          child: GestureDetector(
+                            onTap: () {
+                              final reg = snapshot.data ?? (DeviceRegistration()
+                                ..smartBoardId = 'UNREGISTERED'
+                                ..roomName = 'New Device'
+                                ..building = 'Unknown'
+                                ..department = 'Unknown'
+                                ..hardwareId = 'Unknown');
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (context) => SettingsScreen(registration: reg),
+                                ),
+                              );
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.black12),
+                              ),
+                              child: const Icon(Icons.settings_outlined, color: AppColors.textPrimaryLight, size: 28),
                             ),
-                          );
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.black12),
                           ),
-                          child: const Icon(Icons.settings_outlined, color: AppColors.textPrimaryLight, size: 28),
                         ),
-                      ),
-                    ),
+                      );
+                    },
                   );
                 },
               ),
             ),
+
             Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -138,26 +159,46 @@ class _BootScreenState extends State<BootScreen> {
                       decoration: BoxDecoration(
                         color: AppColors.primary.withValues(alpha: 0.1),
                         shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(color: AppColors.primary.withValues(alpha: 0.2), blurRadius: 40, spreadRadius: 10),
-                        ],
                       ),
-                      child: const Icon(Icons.security_rounded, size: 84, color: AppColors.primary),
+                      child: const Icon(
+                        Icons.settings_input_antenna_rounded,
+                        size: 80,
+                        color: AppColors.primary,
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 64),
-                  const SizedBox(width: 40, height: 40, child: CircularProgressIndicator(strokeWidth: 3, color: AppColors.primary)),
                   const SizedBox(height: 48),
                   Text(
                     'INTELLIATTEND',
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(letterSpacing: 12, fontWeight: FontWeight.w900, color: AppColors.primaryTeal),
+                    style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 8,
+                          color: AppColors.textPrimaryLight,
+                        ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 16),
                   Text(
                     _statusMessage,
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(letterSpacing: 4, color: AppColors.textSecondaryLight),
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: AppColors.textSecondaryLight,
+                          letterSpacing: 2,
+                          fontWeight: FontWeight.w500,
+                        ),
                   ),
-                  if (_errorMessage != null) _buildErrorDisplay(),
+                  const SizedBox(height: 64),
+                  const SizedBox(
+                    width: 200,
+                    child: LinearProgressIndicator(
+                      backgroundColor: Colors.black12,
+                      valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                      minHeight: 2,
+                    ),
+                  ),
+                  if (_errorMessage != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 48),
+                      child: _buildErrorDisplay(),
+                    ),
                 ],
               ),
             ),
@@ -180,17 +221,44 @@ class _BootScreenState extends State<BootScreen> {
 
   Widget _buildErrorDisplay() {
     return Container(
-      padding: const EdgeInsets.all(16),
-      margin: const EdgeInsets.only(top: 32, left: 48, right: 48),
+      constraints: const BoxConstraints(maxWidth: 600),
+      padding: const EdgeInsets.all(32),
       decoration: BoxDecoration(
-        color: AppColors.error.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 30, offset: const Offset(0, 10)),
+        ],
+        border: Border.all(color: AppColors.error.withOpacity(0.2)),
       ),
-      child: Text(
-        _errorMessage!,
-        style: const TextStyle(color: AppColors.error, fontSize: 12),
-        textAlign: TextAlign.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.info_outline_rounded, color: AppColors.error, size: 48),
+          const SizedBox(height: 24),
+          const Text(
+            'SYSTEM CONFIGURATION REQUIRED',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, letterSpacing: 1.5, color: Color(0xFF1E293B)),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _errorMessage!.contains('404') || _errorMessage!.toLowerCase().contains('configured')
+                ? 'This device is not yet configured for this classroom.\nPlease contact the IT Department or System Administrator.'
+                : _errorMessage!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Color(0xFF64748B), fontSize: 14, height: 1.5),
+          ),
+          const SizedBox(height: 24),
+          TextButton.icon(
+            onPressed: () => _performHandshake(),
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            label: const Text('RETRY INITIALIZATION'),
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.primary,
+              textStyle: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -206,7 +274,7 @@ class _BootScreenState extends State<BootScreen> {
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCEL')),
           ElevatedButton(
             onPressed: () async {
-              await DeviceService.clearRegistration();
+              await context.read<IDeviceRepository>().clearRegistration();
               if (mounted) {
                 Navigator.of(context).pushReplacement(
                   MaterialPageRoute(builder: (context) => const RegistrationScreen()),

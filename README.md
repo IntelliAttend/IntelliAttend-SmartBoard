@@ -90,10 +90,13 @@ flutter build macos
 #### Security Features
 - ✅ JWT-based authentication (short-lived)
 - ✅ Automatic token refresh
-- ✅ Encrypted local storage (XOR with device fingerprint)
+- ✅ Encrypted local storage (OS keychain via flutter_secure_storage)
+- ✅ Certificate pinning (SHA-256 via SSL_PIN_FINGERPRINT)
+- ✅ HMAC split-knowledge session secret delivery
 - ✅ MAC address NO LONGER used for auth
-- ✅ Replay attack protection (token expiry)
+- ✅ Replay attack protection (token expiry + QR nonce)
 - ✅ Re-registration without deadlocks
+- ✅ Runtime integrity verification (startup block on tamper)
 
 #### Critical Security Fix
 **Problem:** v5.3 used `X-Board-MAC` header as password (MAC is public, static, spoofable)
@@ -167,13 +170,17 @@ const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
 ### Key Components
 
-#### v5.4 Security Services
+#### v5.7 Security Services
 | File | Purpose |
 |------|---------|
-| `lib/services/secure_storage_service.dart` | **NEW** - Encrypted token storage |
-| `lib/services/api_service.dart` | Updated - JWT auth + auto-refresh |
-| `lib/services/device_service.dart` | Updated - Token extraction on registration |
-| `lib/models/isar_schemas.dart` | Updated - Added token fields |
+| `lib/services/secure_storage_service.dart` | OS keychain-backed encrypted storage (no Isar) |
+| `lib/services/api_service.dart` | JWT auth + auto-refresh + pinned HTTP client |
+| `lib/services/device_service.dart` | Token extraction on registration, strips session_secret from Firestore |
+| `lib/services/ssl_pinning_service.dart` | **NEW** - SHA-256 certificate pinning |
+| `lib/services/integrity_verifier.dart` | **NEW** - Runtime integrity + code signature verification |
+| `lib/services/rate_limiter.dart` | **NEW** - Exponential backoff rate limiter |
+| `lib/services/kiosk_service.dart` | **NEW** - Windows kiosk hotkey blocking |
+| `lib/core/utils/logger.dart` | **UPDATED** - Release-mode filter + secret redaction |
 
 #### Screens
 | Screen | Purpose |
@@ -204,10 +211,8 @@ Create `.env` file:
 ```bash
 API_BASE_URL=https://api-dev.balaseetharamanjaneyulu.com
 LOCAL_API_URL=http://127.0.0.1:8000/v1/board/telemetry
-ENCRYPTION_SALT=change_this_to_random_string_for_production
-```
 
-⚠️ **Change `ENCRYPTION_SALT` for production!**
+```
 
 ### 3. Firebase Setup (Optional)
 For real-time roster updates and alerts:
@@ -278,7 +283,6 @@ Firebase is optional but enables:
 ### DevOps/IT Team
 - [ ] Firebase project setup (if using real-time features)
 - [ ] Production environment variables
-- [ ] Change `ENCRYPTION_SALT` to random string
 - [ ] Deploy backend with v5.4 endpoints
 - [ ] Monitor authentication errors
 
@@ -321,32 +325,39 @@ Firebase is optional but enables:
 intelliattend_smartboard/
 ├── lib/
 │   ├── models/
-│   │   └── isar_schemas.dart          # Updated: +token fields
+│   │   └── isar_schemas.dart          # No token fields (keychain only)
 │   ├── services/
-│   │   ├── api_service.dart           # Updated: JWT auth
-│   │   ├── device_service.dart        # Updated: Token extraction
-│   │   ├── secure_storage_service.dart # NEW: Encrypted storage
+│   │   ├── api_service.dart           # JWT auth + pinned client
+│   │   ├── device_service.dart        # Token extraction, session secret stripping
+│   │   ├── secure_storage_service.dart # OS keychain (flutter_secure_storage)
+│   │   ├── ssl_pinning_service.dart   # SHA-256 certificate pinning
+│   │   ├── integrity_verifier.dart    # Runtime tamper detection
+│   │   ├── rate_limiter.dart          # Exponential backoff
+│   │   ├── kiosk_service.dart         # Windows hotkey blocking
 │   │   ├── session_manager.dart
+│   │   ├── sync_manager.dart          # Periodic queued scan flush
 │   │   └── hardware_fingerprint_service.dart
 │   ├── presentation/
 │   │   └── screens/
 │   │       ├── boot_screen.dart
-│   │       ├── idle_screen.dart       # Fixed: UI overflow
-│   │       ├── attendance_screen.dart
-│   │       └── registration_screen.dart
+│   │       ├── idle_screen.dart       # HMAC split-knowledge, rate-limited PIN
+│   │       ├── attendance_screen.dart # Queued scan on network failure
+│   │       ├── registration_screen.dart
+│   │       └── init_failure_screen.dart # NEW: init error screen
 │   ├── core/
-│   │   ├── theme/
 │   │   └── utils/
-│   └── main.dart
+│   │       └── logger.dart            # Release filter + secret redaction
+│   └── main.dart                      # Integrity check blocks startup
 ├── macos/
 │   └── Runner/
 │       └── (add GoogleService-Info.plist here for Firebase)
-├── .env                                # Updated: +ENCRYPTION_SALT
+├── windows/
+│   └── ...                            # Windows kiosk deployment config
+├── .env                                # Environment configuration
 ├── pubspec.yaml
-├── BACKEND_API_SECURITY_v5.4.md       # NEW
-├── BACKEND_QUICKSTART_v5.4.md          # NEW
-├── SECURITY_IMPLEMENTATION_SUMMARY.md  # NEW
-├── FIREBASE_QUICKSTART.md              # NEW
+├── docs/
+│   ├── DEPLOYMENT_WINDOWS.md          # Assigned Access kiosk setup
+│   └── ...
 └── README.md                          # This file
 ```
 
@@ -355,8 +366,8 @@ intelliattend_smartboard/
 ## Known Issues & TODOs
 
 ### Frontend (Low Priority)
-- [ ] Upgrade XOR encryption to AES-256-GCM for production
-- [ ] Use platform secure enclave (iOS/Android) or Windows DPAPI
+- [ ] Server-side QR nonce dedup (backend work)
+- [ ] Server-side rate limiting (backend work)
 - [ ] Add token revocation UI for admins
 
 ### Backend (HIGH PRIORITY)

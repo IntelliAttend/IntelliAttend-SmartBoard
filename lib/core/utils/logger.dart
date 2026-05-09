@@ -1,40 +1,58 @@
+import 'package:flutter/foundation.dart';
 import 'package:logger/logger.dart';
 
-/// A professional logging wrapper for the IntelliAttend project.
-/// Standardizes log formatting and provides level-based filtering.
+class _RedactingFilter extends LogFilter {
+  @override
+  bool shouldLog(LogEvent event) {
+    if (kReleaseMode && event.level.index < Level.warning.index) return false;
+    return true;
+  }
+}
+
+class _RedactingOutput extends LogOutput {
+  @override
+  void output(OutputEvent event) {
+    for (final line in event.lines) {
+      final redacted = line
+          .replaceAllMapped(
+            RegExp(r'session_secret_[a-z0-9]+|eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+'),
+            (_) => '[REDACTED]',
+          );
+      debugPrint(redacted);
+    }
+  }
+}
+
 class Log {
   static final Logger _logger = Logger(
+    filter: _RedactingFilter(),
     printer: PrettyPrinter(
-      methodCount: 0, 
-      errorMethodCount: 8, 
-      lineLength: 80, 
-      colors: true, 
-      printEmojis: true, 
-      printTime: true, 
+      methodCount: 0,
+      errorMethodCount: kReleaseMode ? 0 : 8,
+      lineLength: 80,
+      colors: !kReleaseMode,
+      printEmojis: !kReleaseMode,
+      printTime: !kReleaseMode,
     ),
+    output: _RedactingOutput(),
   );
 
-  /// DEBUG: Fine-grained informational events that are most useful to debug an application.
   static void d(dynamic message, [dynamic error, StackTrace? stackTrace]) {
     _logger.d(message, error: error, stackTrace: stackTrace);
   }
 
-  /// INFO: Informational messages that highlight the progress of the application at coarse-grained level.
   static void i(dynamic message, [dynamic error, StackTrace? stackTrace]) {
     _logger.i(message, error: error, stackTrace: stackTrace);
   }
 
-  /// WARNING: Potentially harmful situations.
   static void w(dynamic message, [dynamic error, StackTrace? stackTrace]) {
     _logger.w(message, error: error, stackTrace: stackTrace);
   }
 
-  /// ERROR: Error events that might still allow the application to continue running.
   static void e(dynamic message, [dynamic error, StackTrace? stackTrace]) {
     _logger.e(message, error: error, stackTrace: stackTrace);
   }
 
-  /// FATAL: Very severe error events that will presumably lead the application to abort.
   static void f(dynamic message, [dynamic error, StackTrace? stackTrace]) {
     _logger.f(message, error: error, stackTrace: stackTrace);
   }

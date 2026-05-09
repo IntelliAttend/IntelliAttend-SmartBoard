@@ -57,4 +57,3 @@ class PinInput extends StatelessWidget {
     );
   }
 }
-

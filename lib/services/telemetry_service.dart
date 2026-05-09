@@ -21,7 +21,7 @@ class TelemetryService {
     try {
       final packageInfo = await PackageInfo.fromPlatform();
       final connectivityResult = await Connectivity().checkConnectivity();
-      final fingerprint = await HardwareFingerprintService.getWindowsFingerprint();
+      final fingerprint = await HardwareFingerprintService.getDeviceId();
 
       Map<String, dynamic> hardware = {};
       String osVersion = "Unknown";

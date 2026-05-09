@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
-import '../../services/device_service.dart';
+import '../providers/registration_provider.dart';
 import 'boot_screen.dart';
 
 class RegistrationScreen extends StatefulWidget {
@@ -12,54 +15,13 @@ class RegistrationScreen extends StatefulWidget {
 
 class _RegistrationScreenState extends State<RegistrationScreen> {
   final _formKey = GlobalKey<FormState>();
+  final _passwordController = TextEditingController();
   final _smartBoardIdController = TextEditingController();
   final _otpController = TextEditingController();
-  
-  bool _isLoading = false;
-  bool _isOtpSent = false;
-  String? _errorMessage;
-
-  Future<void> _handleRequestOtp() async {
-    if (_smartBoardIdController.text.isEmpty) {
-      setState(() => _errorMessage = 'Please enter a SmartBoard ID first.');
-      return;
-    }
-    setState(() { _isLoading = true; _errorMessage = null; });
-    try {
-      await DeviceService.requestOtp(smartBoardId: _smartBoardIdController.text);
-      setState(() => _isOtpSent = true);
-    } catch (e) {
-      setState(() => _errorMessage = e.toString().replaceFirst('Exception: ', ''));
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _handleVerifyAndRegister() async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() { _isLoading = true; _errorMessage = null; });
-    try {
-      await DeviceService.registerWithOtp(
-        smartBoardId: _smartBoardIdController.text,
-        otp: _otpController.text,
-        deviceName: 'SmartBoard ${_smartBoardIdController.text}',
-        rosterCount: 60,
-      );
-      await DeviceService.syncTimetable();
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => const BootScreen()),
-        );
-      }
-    } catch (e) {
-      setState(() => _errorMessage = e.toString().replaceFirst('Exception: ', ''));
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
 
   @override
   void dispose() {
+    _passwordController.dispose();
     _smartBoardIdController.dispose();
     _otpController.dispose();
     super.dispose();
@@ -67,110 +29,192 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 500),
-            child: Container(
-              padding: const EdgeInsets.all(48),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(32),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.04),
-                    blurRadius: 40,
-                    offset: const Offset(0, 10),
+    return Consumer<RegistrationProvider>(
+      builder: (context, provider, child) {
+        if (provider.step == RegistrationStep.completed) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (context) => const BootScreen()),
+            );
+          });
+        }
+
+        return Scaffold(
+          backgroundColor: AppColors.bgLight,
+          body: Stack(
+            children: [
+              // 1. Uniform Background Pattern (matching BootScreen/IdleScreen)
+              Opacity(
+                opacity: 0.03,
+                child: Center(
+                  child: Image.asset(
+                    'assets/background.png',
+                    width: MediaQuery.of(context).size.width * 0.6,
+                    fit: BoxFit.contain,
                   ),
-                ],
-              ),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(24),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary.withOpacity(0.08),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.app_registration_rounded, size: 48, color: AppColors.primary),
-                    ),
-                    const SizedBox(height: 32),
-                    const Text(
-                      'DEVICE REGISTRATION',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w900,
-                        color: Color(0xFF1E293B),
-                        letterSpacing: 1.5,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Bind this hardware to your institution.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Color(0xFF64748B), fontSize: 14),
-                    ),
-                    const SizedBox(height: 48),
-                    if (_errorMessage != null) _buildErrorBanner(),
-                    _buildTextField(
-                      controller: _smartBoardIdController,
-                      label: 'SmartBoard ID',
-                      hint: 'e.g. IASB-4208',
-                      icon: Icons.monitor_rounded,
-                      enabled: !_isOtpSent,
-                    ),
-                    if (_isOtpSent) ...[
-                      const SizedBox(height: 24),
-                      _buildTextField(
-                        controller: _otpController,
-                        label: 'Administrative PIN',
-                        hint: 'Enter 6-digit OTP',
-                        icon: Icons.security_rounded,
-                        keyboardType: TextInputType.number,
-                      ),
-                    ],
-                    const SizedBox(height: 48),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 64,
-                      child: ElevatedButton(
-                        onPressed: _isLoading ? null : (_isOtpSent ? _handleVerifyAndRegister : _handleRequestOtp),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.primary,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                          elevation: 0,
-                        ),
-                        child: _isLoading 
-                          ? const CircularProgressIndicator(color: Colors.white)
-                          : Text(
-                              _isOtpSent ? 'VERIFY & BOND DEVICE' : 'REQUEST REGISTRATION PIN', 
-                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, letterSpacing: 1)
-                            ),
-                      ),
-                    ),
-                    if (_isOtpSent)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 16),
-                        child: TextButton(
-                          onPressed: () => setState(() => _isOtpSent = false),
-                          child: Text('Use different SmartBoard ID', style: TextStyle(color: Color(0xFF64748B), fontSize: 13)),
-                        ),
-                      ),
-                  ],
                 ),
               ),
-            ),
+              // 2. Main Content
+              Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 500),
+                    child: Container(
+                      padding: const EdgeInsets.all(48),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceLight,
+                        borderRadius: BorderRadius.circular(24),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.04),
+                            blurRadius: 40,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
+                        border: Border.all(color: Colors.black.withOpacity(0.05)),
+                      ),
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(24),
+                              decoration: BoxDecoration(
+                                color: AppColors.primaryTeal.withOpacity(0.1),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.security_rounded,
+                                  size: 48, color: AppColors.primaryTeal),
+                            ),
+                            const SizedBox(height: 32),
+                            Text(
+                              provider.step == RegistrationStep.otpSent
+                                  ? 'BOND HARDWARE'
+                                  : 'SYSTEM AUTHENTICATION',
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                                fontWeight: FontWeight.w900,
+                                color: AppColors.textPrimaryLight,
+                                letterSpacing: 1.5,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              provider.step == RegistrationStep.otpSent
+                                  ? 'Verify identity to link this board.'
+                                  : 'Authenticate with your SmartBoard ID.',
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                color: AppColors.textSecondaryLight,
+                              ),
+                            ),
+                            const SizedBox(height: 48),
+                            if (provider.errorMessage != null)
+                              _buildErrorBanner(provider.errorMessage!),
+                            _buildTextField(
+                              controller: _smartBoardIdController,
+                              label: 'SmartBoard ID',
+                              hint: 'e.g. IASB-XXXX',
+                              icon: Icons.monitor_rounded,
+                              enabled: provider.step == RegistrationStep.idle,
+                            ),
+                            const SizedBox(height: 24),
+                            _buildTextField(
+                              controller: _passwordController,
+                              label: 'System Password',
+                              hint: '••••••••',
+                              icon: Icons.lock_outline_rounded,
+                              enabled: provider.step == RegistrationStep.idle,
+                              isPassword: true,
+                            ),
+                            if (provider.step == RegistrationStep.otpSent) ...[
+                              const SizedBox(height: 24),
+                              Text(
+                                'Identity Verified. Please enter the PIN sent to:\n${provider.adminEmail ?? "IT Administrator"}',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                    color: AppColors.primaryTeal,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(height: 16),
+                              _buildTextField(
+                                controller: _otpController,
+                                label: 'Administrative PIN',
+                                hint: 'Enter 6-digit OTP',
+                                icon: Icons.vpn_key_rounded,
+                                keyboardType: TextInputType.number,
+                                maxLength: 6,
+                              ),
+                            ],
+                            const SizedBox(height: 48),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 60,
+                              child: ElevatedButton(
+                                onPressed: provider.isLoading
+                                    ? null
+                                    : () {
+                                        if (provider.step == RegistrationStep.otpSent) {
+                                          if (_formKey.currentState!.validate()) {
+                                            provider.verifyOtp(
+                                                _smartBoardIdController.text,
+                                                _otpController.text);
+                                          }
+                                        } else {
+                                          if (_formKey.currentState!.validate()) {
+                                            provider.login(
+                                                _smartBoardIdController.text,
+                                                _passwordController.text);
+                                          }
+                                        }
+                                      },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.primaryTeal,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                  elevation: 0,
+                                ),
+                                child: provider.isLoading
+                                    ? const SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                            color: Colors.white, strokeWidth: 2))
+                                    : Text(
+                                        provider.step == RegistrationStep.otpSent
+                                            ? 'VERIFY & BOND DEVICE'
+                                            : 'AUTHENTICATE SYSTEM',
+                                        style: const TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w800,
+                                            letterSpacing: 1)),
+                              ),
+                            ),
+                            if (provider.step == RegistrationStep.otpSent)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 16),
+                                child: TextButton(
+                                  onPressed: provider.reset,
+                                  child: const Text('Cancel & Start Over',
+                                      style: TextStyle(
+                                          color: AppColors.textSecondaryLight, fontSize: 13)),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -181,46 +225,65 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     required IconData icon,
     TextInputType keyboardType = TextInputType.text,
     bool enabled = true,
+    int? maxLength,
+    bool isPassword = false,
   }) {
     return TextFormField(
       controller: controller,
       keyboardType: keyboardType,
       enabled: enabled,
+      obscureText: isPassword,
+      maxLength: maxLength,
+      maxLengthEnforcement: maxLength != null
+          ? MaxLengthEnforcement.enforced
+          : MaxLengthEnforcement.none,
       validator: (v) => v == null || v.isEmpty ? 'Required' : null,
-      style: const TextStyle(color: Color(0xFF1E293B), fontWeight: FontWeight.w600),
+      style:
+          TextStyle(color: AppColors.textPrimaryLight, fontWeight: FontWeight.w600, fontFamily: GoogleFonts.inter().fontFamily),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+        labelStyle: const TextStyle(color: AppColors.textSecondaryLight, fontSize: 13),
         hintText: hint,
-        hintStyle: TextStyle(color: Color(0xFFCBD5E1), fontSize: 14),
-        prefixIcon: Icon(icon, color: AppColors.primary, size: 20),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: Color(0xFFE2E8F0))),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: AppColors.primary, width: 2)),
-        disabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: Color(0xFFF1F5F9))),
+        hintStyle: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 14),
+        prefixIcon: Icon(icon, color: AppColors.primaryTeal, size: 20),
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: AppColors.primaryTeal, width: 2)),
+        disabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Color(0xFFF1F5F9))),
         filled: true,
         fillColor: Colors.white,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
       ),
     );
   }
 
-  Widget _buildErrorBanner() {
+  Widget _buildErrorBanner(String message) {
     return Container(
       padding: const EdgeInsets.all(16),
       margin: const EdgeInsets.only(bottom: 32),
       decoration: BoxDecoration(
         color: const Color(0xFFFEF2F2),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFFEE2E2)),
       ),
       child: Row(
         children: [
-          const Icon(Icons.error_outline_rounded, color: Color(0xFFB91C1C), size: 20),
+          const Icon(Icons.error_outline_rounded,
+              color: AppColors.error, size: 20),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              _errorMessage!,
-              style: const TextStyle(color: Color(0xFFB91C1C), fontSize: 13, fontWeight: FontWeight.w500),
+              message,
+              style: const TextStyle(
+                  color: AppColors.error,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500),
             ),
           ),
         ],
