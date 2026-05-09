@@ -31,10 +31,12 @@ class _BootScreenState extends State<BootScreen> {
   Future<void> _performHandshake() async {
     final deviceRepository = context.read<IDeviceRepository>();
     try {
-      await Future.delayed(const Duration(seconds: 2));
-      final isRegistered = await deviceRepository.isRegistered();
+      // Step 1: Rapid Local Check (OS-style persistence)
+      final registration = await deviceRepository.getRegistration();
+      final isRegistered = registration != null && registration.smartBoardId.isNotEmpty;
 
       if (!isRegistered) {
+        Log.i('[Boot] No local registration found. Redirecting to Registration.');
         if (mounted) {
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(builder: (context) => const RegistrationScreen()),
@@ -43,44 +45,35 @@ class _BootScreenState extends State<BootScreen> {
         return;
       }
 
-      final registration = await deviceRepository.getRegistration();
-      if (registration == null) {
-        if (mounted) Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (context) => const RegistrationScreen()));
-        return;
-      }
-
-      try {
-        await deviceRepository.syncTimetable(fullSync: true);
-      } catch (e) {
-        debugPrint('⚠️ [Boot] Timetable sync failed: $e');
-      }
-
+      // Step 2: Instant UI Transition
+      // We trust the local Isar cache to provide immediate dashboard access
+      Log.i('[Boot] Local identity confirmed for ${registration.smartBoardId}. Entering Idle state.');
       if (mounted) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (context) => IdleScreen(registration: registration, isDegraded: widget.isDegraded)),
         );
       }
-    } catch (e) {
-      if (mounted) {
-        if (e is UnregisteredException) {
-          Log.w('⚠️ [Boot] Device is not configured on server. Wiping local state...');
-          await deviceRepository.clearRegistration();
-          if (mounted) {
-            Navigator.of(context).pushReplacement(
-              MaterialPageRoute(builder: (context) => const RegistrationScreen()),
-            );
-          }
-          return;
-        }
 
-        setState(() => _errorMessage = 'Error: $e');
-        Future.delayed(const Duration(seconds: 5), () {
-          if (mounted) {
-            setState(() => _errorMessage = null);
-            _performHandshake();
-          }
-        });
+      // Step 3: Background Resynchronization
+      // We perform network tasks asynchronously to ensure zero-lag startup
+      _backgroundSync(deviceRepository);
+
+    } catch (e) {
+      Log.e('[Boot] Critical handshake error: $e');
+      if (mounted) {
+        setState(() => _errorMessage = 'SYSTEM INITIALIZATION FAILED\n$e');
       }
+    }
+  }
+
+  Future<void> _backgroundSync(IDeviceRepository repository) async {
+    try {
+      // Try to refresh the timetable and check for server-side revocation
+      await repository.syncTimetable(fullSync: false);
+      Log.i('[Boot] Background sync completed successfully.');
+    } catch (e) {
+      // If network fails, we stay in "Degraded" mode but REMAIN logged in locally
+      Log.w('[Boot] Background sync failed. Operating in Offline Mode: $e');
     }
   }
 
