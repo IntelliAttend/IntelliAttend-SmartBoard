@@ -16,7 +16,14 @@ from pydantic import BaseModel, Field
 from services.board_service import BoardService
 from services.session_service import SessionService
 from services.active_sessions_service import ActiveSessionsService
-from models.board_auth_schema import TelemetryPayload, SessionInitiateRequest, SessionCreateRequest
+from services.auth_service import AuthService
+from models.board_auth_schema import (
+    TelemetryPayload, 
+    SessionInitiateRequest, 
+    SessionCreateRequest,
+    DeviceVerifyRequest,
+    DeviceCompleteRequest
+)
 
 # Configure Logging (v6.0 Measurement Requirement)
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
@@ -237,6 +244,55 @@ async def record_attendance():
 async def terminate_session():
     return {"status": "success"}
 
+# --- Registration API Router (api/v1/device/register) ---
+auth_router = APIRouter(prefix="/api/v1/device/register")
+
+def _extract_bearer_token(request: Request) -> Optional[str]:
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        return auth_header.split(" ")[1]
+    return None
+
+@auth_router.post("/login")
+async def initiate_device_registration(request: DeviceRegisterInitiateRequest):
+    """Phase 2: Ignition Login (Trigger OTP)"""
+    if not db:
+        return {"status": "error", "message": "Database not initialized"}
+    
+    result = await AuthService.initiate_registration(request.board_id, db)
+    if not result:
+        raise HTTPException(status_code=400, detail="Board ID not provisioned")
+        
+    return result
+
+@auth_router.post("/complete")
+async def complete_device_registration(http_request: Request, request: DeviceRegisterCompleteRequest):
+    """Phase 3: Hardware Binding"""
+    if not db:
+        return {"status": "error", "message": "Database not initialized"}
+    
+    # Optional: Extract Firebase UID from token to link accounts
+    firebase_id_token = _extract_bearer_token(http_request)
+    firebase_uid = None
+    if firebase_id_token:
+        decoded = await AuthService.verify_firebase_token(firebase_id_token)
+        if decoded:
+            firebase_uid = decoded.get("uid")
+
+    result = await AuthService.complete_registration(
+        board_id=request.board_id,
+        otp=request.otp,
+        hardware_id=request.hardware_id,
+        db=db,
+        firebase_uid=firebase_uid
+    )
+    
+    if not result:
+        raise HTTPException(status_code=400, detail="Registration Failed: Invalid OTP or Board ID")
+        
+    return result
+
+app.include_router(auth_router)
 app.include_router(api_router)
 
 # --- Faculty Control ---

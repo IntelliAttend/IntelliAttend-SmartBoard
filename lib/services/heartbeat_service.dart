@@ -59,7 +59,7 @@ class HeartbeatService {
         appVersion: _cachedVersion ?? 'unknown',
       );
     } catch (e) {
-      if (e is DioException && e.response?.statusCode == 401) {
+      if (e is DioException && (e.response?.statusCode == 401 || e.response?.statusCode == 404)) {
         Log.e('🚨 [Heartbeat] Authentication lost or device revoked. Forcing logout...');
         await stop();
         await _deviceRepository?.clearRegistration();

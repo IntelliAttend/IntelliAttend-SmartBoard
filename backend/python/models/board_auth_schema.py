@@ -23,3 +23,12 @@ class SessionCreateRequest(BaseModel):
     section_id: str = ""
     roster_count: int = 0
     slot_id: Optional[str] = None
+
+class DeviceRegisterInitiateRequest(BaseModel):
+    board_id: str
+
+class DeviceRegisterCompleteRequest(BaseModel):
+    board_id: str
+    otp: str
+    hardware_id: str
+
