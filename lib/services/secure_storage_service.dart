@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../core/utils/logger.dart';
 
 /// v5.7: Platform-aware OS-keychain-backed secure storage.
@@ -25,7 +24,9 @@ class SecureStorageService {
   static const String _keyRefreshToken = 'refresh_token';
   static const String _keyAccessToken = 'access_token';
   static const String _keyTokenExpiry = 'token_expiry';
+  static const String _keyClockSkew = 'clock_skew_ms';
   static const String _keyIdleTheme = 'idle_break_theme'; // 'white' or 'dark'
+  static const String _keyRegToken = 'registration_token';
 
   // Android: encrypted SharedPreferences (Android Keystore).
   // iOS / macOS: Keychain (kSecClassGenericPassword, after-first-unlock).
@@ -37,22 +38,18 @@ class SecureStorageService {
     mOptions: MacOsOptions(accessibility: KeychainAccessibility.first_unlock),
   );
 
-  static SharedPreferences? _prefs;
-
   static Future<void> init() async {
-    _prefs = await SharedPreferences.getInstance();
+    // v6.3: SharedPreferences fallback removed for security hardening.
   }
 
   static Future<void> _write(String key, String value) async {
     try {
       await _secure.write(key: key, value: value);
     } catch (e) {
-      if (e.toString().contains('-34018') || e.toString().contains('errSecMissingEntitlement')) {
-        Log.e('🚨 [SecureStorage] KEYCHAIN UNAVAILABLE (-34018). Secrets written to SharedPreferences plaintext. IMMEDIATE IT ACTION REQUIRED.');
-        await _prefs!.setString(key, value);
-      } else {
-        rethrow;
-      }
+      Log.e('🚨 [SecureStorage] FATAL: OS Keychain Write Failure ($e). Session data at risk.');
+      // v6.3: Disable silent fallback to plaintext SharedPreferences.
+      // If the hardware keychain is broken, we cannot trust the storage.
+      rethrow;
     }
   }
 
@@ -60,10 +57,7 @@ class SecureStorageService {
     try {
       return await _secure.read(key: key);
     } catch (e) {
-      if (e.toString().contains('-34018')) {
-        Log.e('🚨 [SecureStorage] KEYCHAIN UNAVAILABLE (-34018). Reading from SharedPreferences fallback. IT ACTION REQUIRED.');
-        return _prefs?.getString(key);
-      }
+      Log.e('🚨 [SecureStorage] FATAL: OS Keychain Read Failure ($e).');
       rethrow;
     }
   }
@@ -72,11 +66,8 @@ class SecureStorageService {
     try {
       await _secure.delete(key: key);
     } catch (e) {
-      if (e.toString().contains('-34018')) {
-        await _prefs?.remove(key);
-      } else {
-        rethrow;
-      }
+      Log.e('🚨 [SecureStorage] FATAL: OS Keychain Delete Failure ($e).');
+      rethrow;
     }
   }
 
@@ -152,6 +143,24 @@ class SecureStorageService {
   static Future<String?> getIdleTheme() => _read(_keyIdleTheme);
 
   // ─────────────────────────────────────────────────────────────────────
+  // Clock Skew (Time Drift Offset)
+  // ─────────────────────────────────────────────────────────────────────
+  static Future<void> storeClockSkew(int skewMs) => 
+      _write(_keyClockSkew, skewMs.toString());
+
+  static Future<int?> getClockSkew() async {
+    final val = await _read(_keyClockSkew);
+    return val != null ? int.tryParse(val) : null;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Registration Flow (AUDIT-L1)
+  // ─────────────────────────────────────────────────────────────────────
+  static Future<void> storeRegistrationToken(String token) => _write(_keyRegToken, token);
+  static Future<String?> getRegistrationToken() => _read(_keyRegToken);
+  static Future<void> clearRegistrationToken() => _delete(_keyRegToken);
+
+  // ─────────────────────────────────────────────────────────────────────
   // Bulk wipe — used by registration reset and tamper-detection paths.
   // ─────────────────────────────────────────────────────────────────────
   static Future<void> clearAll() async {
@@ -159,9 +168,14 @@ class SecureStorageService {
     await _delete(_keyAccessToken);
     await _delete(_keyRefreshToken);
     await _delete(_keyTokenExpiry);
-    // Note: we don't wipe session_secret_* here because they're keyed by
-    // a dynamic sessionId. Callers that end a session should explicitly
-    // call `clearSessionSecret(sessionId)`. A nuclear option would be
-    // `_secure.deleteAll()` but that risks wiping unrelated app keys.
+    // SEC-3 FIX: Also wipe keys added in v6.3 — stale skew or a dangling
+    // registration token could confuse the next registration flow on this device.
+    await _delete(_keyClockSkew);
+    await _delete(_keyRegToken);
+    await _delete(_keyIdleTheme);
+    // Note: session_secret_* keys are keyed by dynamic sessionId.
+    // Callers that end a session should call clearSessionSecret(sessionId).
+    // For a nuclear wipe, use _secure.deleteAll() — but that risks clearing
+    // unrelated OS-level keys on shared keychains.
   }
 }

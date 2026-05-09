@@ -257,27 +257,95 @@ class _BootScreenState extends State<BootScreen> {
   }
 
   void _showWipeConfirmation() {
+    final pinController = TextEditingController();
+    bool isVerifying = false;
+    String? pinError;
+
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: const Text('Wipe Registration?'),
-        content: const Text('This will clear all local data and require re-registration. Use only for troubleshooting.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCEL')),
-          ElevatedButton(
-            onPressed: () async {
-              await context.read<IDeviceRepository>().clearRegistration();
-              if (mounted) {
-                Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(builder: (context) => const RegistrationScreen()),
-                );
-              }
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
-            child: const Text('WIPE DATA'),
+      barrierDismissible: false,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: AppColors.surface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          title: const Text('Security Authorization Required', style: TextStyle(fontWeight: FontWeight.w900)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Enter Administrative PIN to authorize system wipe. This will permanently revoke this board\'s credentials.'),
+              const SizedBox(height: 24),
+              TextField(
+                controller: pinController,
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                decoration: InputDecoration(
+                  labelText: 'Admin PIN',
+                  errorText: pinError,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  prefixIcon: const Icon(Icons.security),
+                ),
+                onChanged: (_) {
+                  if (pinError != null) setDialogState(() => pinError = null);
+                },
+              ),
+              if (isVerifying)
+                const Padding(
+                  padding: EdgeInsets.only(top: 16),
+                  child: LinearProgressIndicator(),
+                ),
+            ],
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: isVerifying ? null : () => Navigator.pop(context),
+              child: const Text('CANCEL'),
+            ),
+            ElevatedButton(
+              onPressed: isVerifying ? null : () async {
+                final pin = pinController.text;
+                if (pin.length < 6) {
+                  setDialogState(() => pinError = 'Enter 6-digit PIN');
+                  return;
+                }
+
+                setDialogState(() => isVerifying = true);
+                
+                final isValid = await ApiService.verifyAdminPin(pin);
+                
+                if (!isValid) {
+                  setDialogState(() {
+                    isVerifying = false;
+                    pinError = 'Invalid Authorization PIN';
+                  });
+                  return;
+                }
+
+                // Authorized: Proceed with server-side revocation and local wipe
+                try {
+                  await ApiService.deregisterBoard();
+                } catch (e) {
+                  Log.w('⚠️ [Boot] Server-side revocation failed: $e');
+                  // We continue with local wipe anyway to ensure device is cleared
+                }
+
+                await context.read<IDeviceRepository>().clearRegistration();
+                
+                if (mounted) {
+                  Navigator.of(context).pushReplacement(
+                    MaterialPageRoute(builder: (context) => const RegistrationScreen()),
+                  );
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.redAccent,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+              child: const Text('AUTHORIZE WIPE'),
+            ),
+          ],
+        ),
       ),
     );
   }

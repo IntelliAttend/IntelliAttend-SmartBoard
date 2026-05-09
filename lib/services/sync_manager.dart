@@ -12,6 +12,8 @@ class SyncManager {
   SyncManager._internal();
 
   StreamSubscription? _timetableSubscription;
+  StreamSubscription? _connectivitySubscription;
+  Timer? _syncTimer;
   bool _isSyncing = false;
   late Isar _isar;
 

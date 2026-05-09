@@ -27,6 +27,40 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     super.dispose();
   }
 
+  void _showExitDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.power_settings_new_rounded, color: Colors.red),
+            SizedBox(width: 10),
+            Text('Exit Application?'),
+          ],
+        ),
+        content: const Text(
+          'This device has not been registered yet.\n\nAre you sure you want to close IntelliAttend?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('STAY'),
+          ),
+          ElevatedButton(
+            onPressed: () => SystemNavigator.pop(),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('EXIT'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<RegistrationProvider>(
@@ -54,7 +88,46 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   ),
                 ),
               ),
-              // 2. Main Content
+              // 2. Exit Button (top-right) — No PIN required.
+              //    The device is NOT yet registered; there is nothing to protect.
+              //    If an admin doesn't have credentials, they must be able to close the app.
+              Positioned(
+                top: 24,
+                right: 24,
+                child: Tooltip(
+                  message: 'Exit Application',
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      onTap: () => _showExitDialog(context),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.red.shade200),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.power_settings_new_rounded, size: 16, color: Colors.red.shade600),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Exit App',
+                              style: TextStyle(
+                                color: Colors.red.shade700,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              // 3. Main Content
               Center(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(24),
@@ -140,15 +213,31 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                                     fontWeight: FontWeight.bold),
                               ),
                               const SizedBox(height: 16),
-                              _buildTextField(
-                                controller: _otpController,
-                                label: 'Administrative PIN',
-                                hint: 'Enter 6-digit OTP',
-                                icon: Icons.vpn_key_rounded,
-                                keyboardType: TextInputType.number,
-                                maxLength: 6,
-                              ),
-                            ],
+                                _buildTextField(
+                                  controller: _otpController,
+                                  label: 'Administrative PIN',
+                                  hint: 'Enter 6-digit OTP',
+                                  icon: Icons.vpn_key_rounded,
+                                  keyboardType: TextInputType.number,
+                                  maxLength: 6,
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const Icon(Icons.timer_outlined, size: 14, color: Colors.orange),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'Expires in: ${provider.formattedOtpTime}',
+                                      style: const TextStyle(
+                                        color: Colors.orange,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             const SizedBox(height: 48),
                             SizedBox(
                               width: double.infinity,

@@ -38,6 +38,13 @@ dependencies:
   
   # Window Management
   window_manager: ^0.3.9
+  screen_brightness: ^0.2.2+1
+  
+  # Notifications
+  flutter_local_notifications: ^17.0.0
+
+  # Windows Registry (for Startup)
+  registry: ^0.0.2
   
   # Logging
   logger: ^2.0.2+1

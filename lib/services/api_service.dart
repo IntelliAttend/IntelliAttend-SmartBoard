@@ -347,6 +347,34 @@ class ApiService {
     if (response.statusCode != 200) Log.w('⚠️ [ApiService] Telemetry push failed: ${response.body}');
   }
 
+  // ─── Security & Registration (AUDIT-R1/R2) ──────────────────────────────────
+
+  static Future<bool> verifyAdminPin(String pin) async {
+    try {
+      final response = await _request(
+        'POST',
+        'api/v1/auth/verify-admin-pin',
+        headers: await _authHeaders(),
+        body: jsonEncode({'pin': pin}),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      Log.e('[API] Admin PIN verification failed: $e');
+      return false;
+    }
+  }
+
+  static Future<void> deregisterBoard() async {
+    final response = await _request(
+      'POST',
+      'api/v1/board/deregister',
+      headers: await _authHeaders(),
+    );
+    if (response.statusCode != 200 && response.statusCode != 401) {
+      throw _apiError('Deregistration', response);
+    }
+  }
+
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
   static Exception _apiError(String operation, http.Response response) {

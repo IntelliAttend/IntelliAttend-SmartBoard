@@ -33,6 +33,7 @@ import '../../services/time_sync_service.dart';
 import '../../core/config/app_config.dart';
 import 'package:video_player/video_player.dart';
 import '../../services/pre_flight_service.dart';
+import '../../services/kiosk_service.dart';
 
 enum PreFlightStatus { none, connecting, ready }
 
@@ -67,7 +68,7 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   bool _forceShowCard = false; // For starting session in advance via lock icon tap
   PreFlightStatus _preFlightStatus = PreFlightStatus.none;
   bool _isReadyCheckDone = false;
-  StreamSubscription<Map<String, dynamic>?>? _preFlightSessionSubscription;
+  StreamSubscription<dynamic>? _preFlightSessionSubscription; // cleanup handle for warm-up
 
   // Cinematic Transition
   late AnimationController _cinematicController;
@@ -78,6 +79,9 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
+    // v6.4: Set to Soft Mode on Idle screen to allow on-demand minimize
+    KioskService.setMode(KioskMode.soft);
+
     _cinematicController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 10), // Slow 10s transition
@@ -218,9 +222,9 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     _inactivityTimer?.cancel();
     _timetableSubscription?.cancel();
     _sessionSubscription?.cancel();
-    _preFlightSessionSubscription?.cancel();
     _attendanceSubscription?.cancel();
     _preClassTimer?.cancel();
+    _preFlightSessionSubscription?.cancel();
     _cinematicController.dispose();
     super.dispose();
   }
@@ -261,8 +265,7 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       (sessionData) {
         if (mounted) {
           if (sessionData != null) {
-            // ... handle attendance if needed ...
-            _igniteWithActiveSession(sessionData);
+            _resumeFromCachedSession(sessionData);
           }
         }
       },
@@ -270,11 +273,13 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     );
   }
 
-  void _igniteWithActiveSession(Map<String, dynamic> data) async {
+  /// Recovery-only path: Resumes a session if the board was already ignited with a PIN
+  /// and the secret is already stored in secure storage (e.g. after a crash).
+  void _resumeFromCachedSession(Map<String, dynamic> data) async {
     final sessionId = data['session_id']?.toString();
     if (sessionId == null) return;
 
-    // We only ignite if we already have the secret (meaning the PIN was verified on this board)
+    // Only ignite if we already have the secret (meaning the PIN was verified on this board previously)
     final sessionSecret = await SecureStorageService.getSessionSecret(sessionId);
 
     if (sessionSecret != null && sessionSecret.isNotEmpty) {
@@ -413,10 +418,11 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
           ApiService.syncReadyCheck().catchError((e) => Log.w('⚠️ Ready check failed: $e'));
         }
 
-        // v6.1 Fallback: The "Offline Shield" at T-0
-        if (minDiff == 0 && _preFlightStatus != PreFlightStatus.ready && !_isLoading) {
-          Log.w('🛡️ [IdleScreen] T-0 reached without Pre-Flight success. Activating Offline Shield...');
-          _igniteOfflineMode(nextEntry);
+        // v6.1 Fallback: Show warning if T-0 reached without Pre-Flight success
+        if (minDiff == 0 && _preFlightStatus != PreFlightStatus.ready) {
+          setState(() {
+            _errorMessage = 'System sync delayed. Enter PIN to proceed.';
+          });
         }
       }
     } else {
@@ -442,21 +448,6 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     }
   }
 
-  void _igniteOfflineMode(TimetableEntry entry) {
-    final offlineSessionId = 'OFFLINE_${entry.slotId}_${DateTime.now().year}${DateTime.now().month}${DateTime.now().day}';
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (context) => AttendanceScreen(
-          sessionId: offlineSessionId,
-          sessionSecret: 'OFFLINE_SECRET_KEY',
-          capacity: widget.registration.capacity,
-          courseName: entry.courseName,
-          facultyName: entry.facultyName,
-          isOffline: true,
-        ),
-      ),
-    );
-  }
 
   void _triggerWarmUp(String slotId) async {
     try {
@@ -464,18 +455,12 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       final result = await PreFlightService().runPerSessionWarmUp(slotId);
       
       if (result != null && result['status'] == 'ready') {
-        final sessionId = result['pre_allocated_session_id']?.toString();
         if (mounted) {
           setState(() => _preFlightStatus = PreFlightStatus.ready);
-          if (sessionId != null) {
-            _preFlightSessionSubscription?.cancel();
-            _preFlightSessionSubscription = globalDeviceRepository.watchSpecificSession(sessionId).listen((data) {
-              if (data != null && data['status'] == 'active') {
-                _igniteWithActiveSession(data);
-              }
-            });
-          }
+          Log.i('✅ [Idle] Board ARMED. SessionID received. Waiting for faculty PIN...');
         }
+      } else {
+        if (mounted) setState(() => _preFlightStatus = PreFlightStatus.none);
       }
     } catch (e) {
       if (mounted) {
@@ -490,6 +475,7 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
           }
         } else {
           setState(() => _preFlightStatus = PreFlightStatus.none);
+          Log.w('⚠️ [Idle] Pre-flight failed. Faculty may still proceed manually: $e');
         }
       }
     }
@@ -864,6 +850,11 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('IntelliAttend Support: Help is on the way!')));
           }, 
           icon: Icon(Icons.help_outline, color: iconColor)
+        ),
+        IconButton(
+          onPressed: () => KioskService.setMode(KioskMode.suspended),
+          icon: Icon(Icons.minimize_rounded, color: iconColor),
+          tooltip: 'Minimize to Desktop',
         ),
         IconButton(
           onPressed: () async {

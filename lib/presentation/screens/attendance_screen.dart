@@ -8,11 +8,13 @@ import '../../core/theme/app_theme.dart';
 import '../../services/totp_engine.dart';
 import '../../services/session_manager.dart';
 import '../../services/api_service.dart';
+import '../../services/kiosk_service.dart';
 import '../../data/repositories/device_repository.dart';
 import '../widgets/glass_container.dart';
 import 'idle_screen.dart';
 import 'settings_screen.dart';
 import '../../core/utils/logger.dart';
+import '../../core/config/app_config.dart';
 import '../../main.dart';
 
 class AttendanceScreen extends StatefulWidget {
@@ -49,12 +51,18 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   bool _qrRotationStopped = false;
   int _presentCount = 0;
   List<int> _presentSeatIndices = [];
-  int _secondsRemaining = 300; // 5 minutes default
+  int _secondsRemaining = 0; // Loaded from AppConfig on initState
   Timer? _countdownTimer;
 
   @override
   void initState() {
     super.initState();
+    
+    // v6.4: Strictly Human Security Baseline - Lock Kiosk & Max Brightness
+    KioskService.setMode(KioskMode.locked);
+    // DESIGN-3: Read countdown from config, not hardcoded
+    _secondsRemaining = AppConfig.otpRotationWindowSeconds;
+
     _progressController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 3500),
@@ -73,16 +81,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     });
 
     _totpEngine.start();
-    _qrRotationTimer = Timer(const Duration(seconds: 60), () {
-      if (mounted) {
-        setState(() => _qrRotationStopped = true);
-        _totpEngine.stop();
-        _progressController.stop();
-      }
-    });
+    // NOTE: _qrRotationTimer removed — the countdown timer below handles session
+    // expiry at _secondsRemaining == 0. Having two 300s timers was a race condition
+    // (BUG-2: both could call _handleEndAttendance() simultaneously).
     _startCountdown();
     _listenForSessionEnd();
-  }
+  } // end initState
 
   void _startCountdown() {
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -90,6 +94,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
         if (mounted) setState(() => _secondsRemaining--);
       } else {
         timer.cancel();
+        // v6.4: On timer zero, we automatically end the locked session
+        if (!_isSessionEnding) {
+          Log.i('⏰ [Attendance] Countdown hit zero. Terminating session.');
+          _handleEndAttendance();
+        }
       }
     });
   }
@@ -119,8 +128,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     if (_isSessionEnding) return;
     _isSessionEnding = true;
     _qrRotationTimer?.cancel();
+    _countdownTimer?.cancel();
     _totpEngine.stop();
     _progressController.stop();
+    // LOGIC-3 FIX: Server-pushed session end must also restore kiosk to soft mode.
+    KioskService.setMode(KioskMode.soft);
     if (mounted) {
       SessionManager.clearSession(widget.sessionId);
       globalDeviceRepository.getRegistration().then((registration) {
@@ -223,10 +235,19 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     _sessionStatusSubscription?.cancel();
     _totpEngine.stop();
     _progressController.dispose();
+    // BUG-3 FIX: Do NOT call async KioskService.setMode() here — the Future would
+    // be abandoned and the call is unreliable during dispose. Kiosk is already
+    // restored to soft mode inside _handleEndAttendance() and _handleSessionEnd().
     super.dispose();
   }
 
   Future<void> _handleEndAttendance() async {
+    if (_isSessionEnding) return;
+    _isSessionEnding = true;
+
+    // v6.4: Revert to Soft Mode (restores brightness, allows minimize)
+    KioskService.setMode(KioskMode.soft);
+
     // Navigate immediately to the idle screen for a responsive feel
     final registration = await globalDeviceRepository.getRegistration();
     if (mounted && registration != null) {
@@ -280,8 +301,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                 final attendeeDocs = snapshot.data?.docs ?? [];
                 _presentCount = attendeeDocs.length;
                 
-                // For demo/sim, we'll map student names to indices if they look like numbers
-                // In production, this would be based on assigned seat IDs
+                // v6.4: AUTO-EXIT on Full Attendance
+                if (_presentCount >= widget.capacity && !_isSessionEnding) {
+                  Log.i('✅ [Attendance] Full capacity reached ($_presentCount/${widget.capacity}). Auto-completing session.');
+                  WidgetsBinding.instance.addPostFrameCallback((_) => _handleEndAttendance());
+                }
+
                 _presentSeatIndices = attendeeDocs.map((doc) {
                   final data = doc.data() as Map<String, dynamic>;
                   final id = data['student_id']?.toString() ?? '';

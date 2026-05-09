@@ -11,6 +11,10 @@ class AppConfig {
 
   static bool get enableVideoBreaks => dotenv.env['ENABLE_VIDEO_BREAKS']?.toLowerCase() == 'true' || false;
 
+  /// QR Attendance countdown window in seconds. Set OTP_ROTATION_WINDOW_SECONDS in .env.
+  static int get otpRotationWindowSeconds =>
+      int.tryParse(dotenv.env['OTP_ROTATION_WINDOW_SECONDS'] ?? '') ?? 300;
+
   static void validate() {
     if (dotenv.env['API_BASE_URL'] == null) {
       print('⚠️ [AppConfig] API_BASE_URL not set in .env. Falling back to default.');

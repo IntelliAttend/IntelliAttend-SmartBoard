@@ -41,7 +41,7 @@ class PreFlightService {
 
   Future<void> _checkCountdown() async {
     try {
-      final now = DateTime.now();
+      final now = TimeSyncService.timeNow;
       final currentSlot = await globalDeviceRepository.getCurrentSlot();
       
       // If we are already in a class, no need for ignition checks
@@ -107,9 +107,21 @@ class PreFlightService {
 
     while (!success && attempts < fibonacci.length) {
       try {
+        // v6.3: Force a network time handshake on boot.
+        // This ensures the board has a corrected clock before any session can start.
+        await ApiService.syncTime();
+
         final isar = SessionManager.isar;
+        
+        // v6.3: Only clear STALE sessions (older than 2 hours)
+        // This protects current session data during mid-class power-cycle recovery.
+        final cutoff = DateTime.now().subtract(const Duration(hours: 2));
         await isar.writeTxn(() async {
-          await isar.activeSessions.clear();
+          final staleSessions = await isar.activeSessions
+              .filter()
+              .scheduledEndTimeLessThan(cutoff)
+              .findAll();
+          await isar.activeSessions.deleteAll(staleSessions.map((s) => s.id).toList());
         });
 
         await globalDeviceRepository.syncTimetable(fullSync: true);
@@ -146,14 +158,16 @@ class PreFlightService {
     Log.i('🔥 [PreFlight] Attempt $_warmUpRetryCount: Warm-Up for slot: $slotId');
 
     try {
-      // 1. API Handshake (Context-only)
+      // 1. API Handshake (Context-only) with RTT tracking
+      final requestSentAt = DateTime.now();
       final result = await ApiService.getPreFlight(slotId, retryCount: _warmUpRetryCount);
+      final responseReceivedAt = DateTime.now();
       
       final serverTs = result['server_timestamp'] as int;
       final sessionId = result['pre_allocated_session_id'] as String;
 
-      // 2. Clock Synchronization
-      TimeSyncService.setSkew(serverTs - DateTime.now().millisecondsSinceEpoch);
+      // 2. Cryptographic Clock Synchronization (RTT-compensated)
+      TimeSyncService.synchronizeWithServer(requestSentAt, responseReceivedAt, serverTs);
 
       Log.i('✅ [PreFlight] Warm-Up Successful. Context loaded for $sessionId');
       _isWarmUpInProgress = false;
@@ -182,7 +196,7 @@ class PreFlightService {
         'wifi_signal_dbm': -45, 
         'available_storage_gb': 12.5, 
         'app_version': packageInfo.version,
-        'timestamp_ms': DateTime.now().millisecondsSinceEpoch,
+        'timestamp_ms': TimeSyncService.timeNow.millisecondsSinceEpoch,
       };
       await ApiService.sendHardwareTelemetry(data);
       Log.i('📡 [PreFlight] Hardware Telemetry pushed.');

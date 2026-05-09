@@ -16,7 +16,13 @@ import 'presentation/screens/init_failure_screen.dart';
 import 'services/heartbeat_service.dart';
 import 'services/integrity_verifier.dart';
 import 'services/kiosk_service.dart';
+import 'services/notification_service.dart';
+import 'services/window_orchestrator_service.dart';
+import 'services/startup_service.dart';
+import 'services/pre_flight_service.dart';
+import 'services/sync_manager.dart';
 import 'firebase_options.dart';
+import 'services/time_sync_service.dart';
 import 'package:provider/provider.dart';
 import 'data/repositories/auth_repository.dart';
 import 'data/repositories/device_repository.dart';
@@ -77,6 +83,9 @@ void main() async {
 
   // 2. Kiosk Hardening (Windows only)
   KioskService.enable();
+
+  // v6.4: Initialize Notification Service (no repo dependency)
+  await NotificationService.init();
 
   // 3. Runtime Integrity Verification
   final tampered = await _verifyIntegrity();
@@ -141,10 +150,13 @@ void _initializeBackgroundProtocols() async {
       // 1. Start Real-Time Firestore Mirroring for Timetable
       SyncManager().init(registration.smartBoardId);
       
-      // 2. Start T-10 / T-3 Countdown Watcher
+      // 2. Start T-10 / T-3 Countdown Watcher (data side)
       PreFlightService().startCountdownWatcher();
+
+      // 3. Start Window Orchestrator (UI/window side) — must be after repos ready
+      WindowOrchestratorService().start();
       
-      Log.i('🚀 [Protocols] Background Synchronization and Countdown Watchers active.');
+      Log.i('🚀 [Protocols] Background Synchronization, Countdown Watchers, and Window Orchestrator active.');
     }
   } catch (e) {
     Log.e('❌ [Protocols] Background initialization failed: $e');
@@ -182,6 +194,9 @@ Future<InitStatus> _initAll() async {
 
   final secureOk = await _tryInit('Secure Storage', _initSecureStorage);
   if (!secureOk) errors.add('SecureStorage');
+
+  // Load cached clock skew immediately after SecureStorage is ready
+  await _tryInit('Time Sync', TimeSyncService.init);
 
   _configureOrientation();
 
