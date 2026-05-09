@@ -118,6 +118,9 @@ void main() async {
     // Start Heartbeat Monitor
     HeartbeatService.start(globalDeviceRepository);
 
+    // Initialize Real-Time Timetable Mirror and Countdown Orchestrator
+    _initializeBackgroundProtocols();
+
     runApp(
       MultiProvider(
         providers: [
@@ -128,6 +131,23 @@ void main() async {
         child: IntelliAttendApp(isDegraded: !status.firebase),
       ),
     );
+  }
+}
+
+void _initializeBackgroundProtocols() async {
+  try {
+    final registration = await globalDeviceRepository.getRegistration();
+    if (registration != null) {
+      // 1. Start Real-Time Firestore Mirroring for Timetable
+      SyncManager().init(registration.smartBoardId);
+      
+      // 2. Start T-10 / T-3 Countdown Watcher
+      PreFlightService().startCountdownWatcher();
+      
+      Log.i('🚀 [Protocols] Background Synchronization and Countdown Watchers active.');
+    }
+  } catch (e) {
+    Log.e('❌ [Protocols] Background initialization failed: $e');
   }
 }
 

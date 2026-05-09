@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:isar/isar.dart';
 import 'session_manager.dart';
@@ -10,26 +11,71 @@ class SyncManager {
   factory SyncManager() => _instance;
   SyncManager._internal();
 
-  StreamSubscription<ConnectivityResult>? _connectivitySubscription;
-  Timer? _syncTimer;
+  StreamSubscription? _timetableSubscription;
   bool _isSyncing = false;
   late Isar _isar;
 
   /// Initializes the SyncManager to watch for connectivity changes
-  /// and periodically flush queued scans during an active session.
-  void init() {
+  /// and mirrors the Firestore timetable to the local vault.
+  void init(String smartBoardId) {
     _isar = SessionManager.isar;
+    
+    // 1. Connectivity Listener (Outgoing Sync)
     _connectivitySubscription = Connectivity().onConnectivityChanged.listen((result) {
       if (result != ConnectivityResult.none) {
         _attemptSync();
       }
     });
     
-    // Periodic retry timer
+    // 2. Real-Time Timetable Mirror (Incoming Sync)
+    _setupTimetableMirror(smartBoardId);
+    
+    // Periodic retry timer for outgoing scans
     _syncTimer = Timer.periodic(const Duration(seconds: 30), (_) => _attemptSync());
     
-    // Also try initial sync
     _attemptSync();
+  }
+
+  void _setupTimetableMirror(String smartBoardId) {
+    _timetableSubscription?.cancel();
+    
+    print('📡 [SyncManager] Establishing Real-Time Timetable Mirror for $smartBoardId...');
+    
+    _timetableSubscription = FirebaseFirestore.instance
+        .collection('timetable_slots')
+        .where('classroom_id', isEqualTo: smartBoardId)
+        .snapshots()
+        .listen((snapshot) async {
+          print('📅 [SyncManager] Timetable update received from Firestore. Mirroring to Isar...');
+          
+          final entries = snapshot.docs.map((doc) {
+            final data = doc.data();
+            return TimetableEntry()
+              ..slotId = doc.id
+              ..dayOfWeek = _getDayNumber(data['day_of_week'] ?? '')
+              ..startTime = data['start_time'] ?? ''
+              ..endTime = data['end_time'] ?? ''
+              ..courseName = data['subject_name'] ?? 'Class'
+              ..facultyName = data['faculty_name'] ?? 'Professor'
+              ..sectionId = data['section_id']?.toString() ?? 'N/A';
+          }).toList();
+
+          await _isar.writeTxn(() async {
+            // Clear existing timetable to ensure perfect mirror
+            await _isar.timetableEntrys.clear();
+            await _isar.timetableEntrys.putAll(entries);
+          });
+          
+          print('✅ [SyncManager] Local timetable vault synchronized (${entries.length} slots).');
+        }, onError: (e) {
+          print('❌ [SyncManager] Timetable Mirror Error: $e');
+        });
+  }
+
+  int _getDayNumber(String dayName) {
+    final days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    final idx = days.indexWhere((d) => d.toLowerCase() == dayName.toLowerCase());
+    return idx != -1 ? idx + 1 : DateTime.now().weekday;
   }
 
   /// Attempts to flush any queued attendance data to the server.

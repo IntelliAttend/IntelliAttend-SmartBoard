@@ -274,6 +274,7 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     final sessionId = data['session_id']?.toString();
     if (sessionId == null) return;
 
+    // We only ignite if we already have the secret (meaning the PIN was verified on this board)
     final sessionSecret = await SecureStorageService.getSessionSecret(sessionId);
 
     if (sessionSecret != null && sessionSecret.isNotEmpty) {
@@ -296,6 +297,21 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     }
   }
 
+  /// Helper to derive the final secret using the hardware fingerprint (Atomic Logic)
+  Future<String?> _deriveSecret(Map<String, dynamic> data) async {
+    final half1 = data['session_secret_half1']?.toString();
+    if (half1 != null) {
+      final deviceId = await HardwareFingerprintService.getDeviceId();
+      final half2 = Hmac(sha256, utf8.encode(deviceId))
+          .convert(utf8.encode(half1))
+          .toString()
+          .substring(0, 16);
+      return '$half1$half2';
+    } else {
+      return data['session_secret']?.toString();
+    }
+  }
+
   TimetableEntry? _findCurrentSlot(List<TimetableEntry> entries) {
     if (entries.isEmpty) return null;
     final now = TimeSyncService.timeNow;
@@ -309,15 +325,17 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       int startMins = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
       int endMins = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
 
+      // Requirement: Ignition window closes 3 minutes before end of session
+      final int ignitionDeadline = endMins - 3;
+
       // Handle wraparound (e.g., 23:20 to 00:20)
       if (endMins < startMins) {
-        // If current time is after start (e.g. 23:30) OR before end (e.g. 00:10)
-        if (currentMinutes >= startMins || currentMinutes < endMins) {
+        if (currentMinutes >= startMins || currentMinutes < ignitionDeadline) {
           return entry;
         }
       } else {
         // Standard session
-        if (currentMinutes >= startMins && currentMinutes < endMins) {
+        if (currentMinutes >= startMins && currentMinutes < ignitionDeadline) {
           return entry;
         }
       }
@@ -494,19 +512,9 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       RateLimiter.reset(rateKey);
       final data = result['data'] ?? result;
       final sessionId = data['session_id']?.toString();
-      final half1 = data['session_secret_half1']?.toString();
-      late String sessionSecret;
-      if (half1 != null) {
-        final deviceId = await HardwareFingerprintService.getDeviceId();
-        final half2 = Hmac(sha256, utf8.encode(deviceId))
-            .convert(utf8.encode(half1))
-            .toString()
-            .substring(0, 16);
-        sessionSecret = '$half1$half2';
-      } else {
-        sessionSecret = data['session_secret']?.toString() ?? '';
-        data.remove('session_secret');
-      }
+      
+      final sessionSecret = await _deriveSecret(data);
+
       final rosterCount = data['roster_count'] is int ? data['roster_count'] : int.tryParse(data['roster_count']?.toString() ?? '0') ?? 0;
       final facultyName = data['faculty_name']?.toString() ?? 'Professor';
       final courseName = data['course_name']?.toString() ?? 'Active Class';

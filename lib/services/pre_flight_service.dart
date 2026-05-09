@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'package:collection/collection.dart';
 import 'package:flutter/services.dart';
 import 'package:isar/isar.dart';
 import 'api_service.dart';
@@ -28,6 +29,65 @@ class PreFlightService {
   bool _isWarmUpInProgress = false;
   int _warmUpRetryCount = 0;
   Timer? _retryTimer;
+  Timer? _countdownTimer;
+
+  /// Phase 0: The "Countdown Watcher"
+  /// Periodically checks the Isar timetable for the next class.
+  void startCountdownWatcher() {
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(minutes: 1), (_) => _checkCountdown());
+    _checkCountdown(); // Initial check
+  }
+
+  Future<void> _checkCountdown() async {
+    try {
+      final now = DateTime.now();
+      final currentSlot = await globalDeviceRepository.getCurrentSlot();
+      
+      // If we are already in a class, no need for ignition checks
+      if (currentSlot != null) return;
+
+      // Find the next upcoming slot today
+      final todaySlots = await globalDeviceRepository.getTodayTimeline();
+      final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+      
+      final nextSlot = todaySlots.where((s) => s.startTime.compareTo(timeStr) > 0).firstOrNull;
+      if (nextSlot == null) return;
+
+      // Calculate minutes until start
+      final startTimeParts = nextSlot.startTime.split(':');
+      final startDateTime = DateTime(now.year, now.month, now.day, int.parse(startTimeParts[0]), int.parse(startTimeParts[1]));
+      final diffMin = startDateTime.difference(now).inMinutes;
+
+      Log.i('⏳ [PreFlight] Next class: ${nextSlot.courseName} in $diffMin minutes.');
+
+      // Requirement: T-10 Handshake (Status 1)
+      if (diffMin <= 10 && diffMin > 3) {
+        _triggerStatusCheck(nextSlot.slotId);
+      }
+
+      // Requirement: T-3 Pre-Flight Ignition
+      if (diffMin <= 3 && diffMin >= 0) {
+        runPerSessionWarmUp(nextSlot.slotId);
+      }
+
+    } catch (e) {
+      Log.w('⚠️ [PreFlight] Countdown check failed: $e');
+    }
+  }
+
+  Future<void> _triggerStatusCheck(String slotId) async {
+    Log.i('🏗️ [PreFlight] T-10 Window Detected. Triggering Status 1 Handshake for $slotId...');
+    try {
+      // In Status 1, we just sync the timetable and push telemetry
+      // This ensures we are "Ready" and have the latest context
+      await globalDeviceRepository.syncTimetable(fullSync: false);
+      await _pushHardwareTelemetry();
+      Log.i('✅ [PreFlight] Status 1 Handshake Successful.');
+    } catch (e) {
+      Log.e('❌ [PreFlight] Status 1 Handshake Failed (will retry in 1 minute): $e');
+    }
+  }
 
   /// Phase 1: The "Daily Boot" Sequence (T-10:00 Window)
   /// v6.1: Implements Random Jitter ±30s and Fibonacci Backoff.
