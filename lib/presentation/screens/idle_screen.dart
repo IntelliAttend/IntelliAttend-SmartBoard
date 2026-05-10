@@ -3,7 +3,6 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ui';
 import 'package:crypto/crypto.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
@@ -16,9 +15,9 @@ import 'package:provider/provider.dart';
 import '../../services/session_manager.dart';
 import '../../main.dart';
 import '../../services/api_service.dart';
-import '../../services/hardware_fingerprint_service.dart';
-import '../../services/secure_storage_service.dart';
-import '../../services/rate_limiter.dart';
+import '../../core/platform/hardware_fingerprint_service.dart';
+import '../../core/security/secure_storage_service.dart';
+import '../../core/rate_limiter.dart';
 import '../../models/isar_schemas.dart';
 import '../widgets/glass_container.dart';
 import '../widgets/pin_input.dart';
@@ -30,10 +29,9 @@ import 'timetable_screen.dart';
 import 'analytics_screen.dart';
 import 'notifications_screen.dart';
 import '../../services/time_sync_service.dart';
-import '../../core/config/app_config.dart';
 import 'package:video_player/video_player.dart';
 import '../../services/pre_flight_service.dart';
-import '../../services/kiosk_service.dart';
+import '../../core/platform/kiosk_service.dart';
 
 enum PreFlightStatus { none, connecting, ready }
 
@@ -51,7 +49,6 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   List<TimetableEntry> _todayTimeline = [];
   bool _isLoading = false;
   String? _errorMessage;
-  String? _streamError;
   StreamSubscription<List<TimetableEntry>>? _timetableSubscription;
   StreamSubscription<Map<String, dynamic>?>? _sessionSubscription;
   Timer? _preClassTimer;
@@ -243,7 +240,7 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
 
   void _startRealTimeListener() {
     if (Firebase.apps.isEmpty) {
-      setState(() => _streamError = 'Firebase not initialized');
+      setState(() => _errorMessage = 'Firebase not initialized');
       return;
     }
     
@@ -291,7 +288,7 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
           MaterialPageRoute(
             builder: (context) => AttendanceScreen(
               sessionId: sessionId,
-              sessionSecret: sessionSecret!,
+              sessionSecret: sessionSecret,
               capacity: widget.registration.capacity,
               courseName: course,
               facultyName: faculty,

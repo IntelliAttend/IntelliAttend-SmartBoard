@@ -47,10 +47,9 @@ class AuthService:
         return {"status": "success", "admin_email": admin_email}
 
     @staticmethod
-    async def complete_registration(board_id: str, otp: str, hardware_id: str, db: firestore.client, firebase_uid: str = None):
+    async def verify_otp(board_id: str, otp: str, db: firestore.client):
         """
-        Phase 3: Hardware Binding.
-        Verifies OTP and creates the permanent 1-to-1 link.
+        Verifies if the OTP is valid and return a verification token.
         """
         ignition_ref = db.collection("pending_ignitions").document(board_id)
         ignition_doc = ignition_ref.get()
@@ -62,6 +61,35 @@ class AuthService:
         ignition_data = ignition_doc.to_dict()
         if ignition_data["otp"] != otp:
             logger.warning(f"❌ [Ignition] OTP Mismatch for board {board_id}")
+            return None
+
+        # Generate a temporary verification token
+        verification_token = f"vtok_{secrets.token_hex(16)}"
+        
+        # Store verification token back to ignition for later binding
+        ignition_ref.update({
+            "verification_token": verification_token,
+            "otp_verified": True
+        })
+
+        return {"status": "success", "verification_token": verification_token}
+
+    @staticmethod
+    async def complete_registration(board_id: str, verification_token: str, hardware_id: str, db: firestore.client, firebase_uid: str = None):
+        """
+        Phase 3: Hardware Binding.
+        Verifies verification_token and creates the permanent 1-to-1 link.
+        """
+        ignition_ref = db.collection("pending_ignitions").document(board_id)
+        ignition_doc = ignition_ref.get()
+        
+        if not ignition_doc.exists:
+            logger.warning(f"❌ [Ignition] No pending ignition for board {board_id}")
+            return None
+        
+        ignition_data = ignition_doc.to_dict()
+        if not ignition_data.get("otp_verified") or ignition_data.get("verification_token") != verification_token:
+            logger.warning(f"❌ [Ignition] Verification Token Mismatch for board {board_id}")
             return None
 
         # 1. Atomic Bind: Update the SmartBoard document

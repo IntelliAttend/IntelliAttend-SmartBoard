@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
-import 'api_service.dart';
 import '../../data/repositories/device_repository.dart';
 import 'package:dio/dio.dart';
 import '../core/utils/logger.dart';
@@ -27,6 +26,18 @@ class HeartbeatService {
 
   static Future<void> start(IDeviceRepository deviceRepository) async {
     _deviceRepository = deviceRepository;
+
+    // Guard against double-start (called once from _initTier3() at app launch
+    // and again from startBackgroundProtocols() after registration completes).
+    // The second call must only refresh the repository reference — it must NOT
+    // fire an immediate heartbeat (which risks a 401 that triggers a forced
+    // logout → RegistrationScreen loop) and must NOT create a second concurrent
+    // timer running alongside the first.
+    if (_timer != null) {
+      Log.d('[Heartbeat] Already running — repository reference updated. Next heartbeat on schedule.');
+      return;
+    }
+
     _startedAt ??= DateTime.now();
     try {
       final info = await PackageInfo.fromPlatform();
@@ -48,29 +59,42 @@ class HeartbeatService {
   }
 
   static Future<void> _send() async {
+    // Skip silently if the board has no registration yet — there is no auth
+    // token to send, and a 401 on an unregistered device is meaningless noise.
+    final registration = await _deviceRepository?.getRegistration();
+    if (registration == null) {
+      Log.d('[Heartbeat] No registration — skipping heartbeat.');
+      return;
+    }
+
     final uptime = _startedAt != null
         ? DateTime.now().difference(_startedAt!).inSeconds
         : 0;
 
     try {
+      final smartBoardId = registration.smartBoardId;
+      final hardwareId = registration.hardwareId;
       await _deviceRepository?.sendHeartbeat(
+        smartBoardId: smartBoardId,
+        hardwareId: hardwareId,
         screenState: screenState,
         uptimeSeconds: uptime,
         appVersion: _cachedVersion ?? 'unknown',
       );
     } catch (e) {
-      if (e is DioException && (e.response?.statusCode == 401 || e.response?.statusCode == 404)) {
+      if (e is DioException &&
+          (e.response?.statusCode == 401 || e.response?.statusCode == 404)) {
         Log.e('🚨 [Heartbeat] Authentication lost or device revoked. Forcing logout...');
         await stop();
         await _deviceRepository?.clearRegistration();
-        
+
         navigatorKey.currentState?.pushAndRemoveUntil(
           MaterialPageRoute(builder: (context) => const RegistrationScreen()),
           (route) => false,
         );
         return;
       }
-      
+
       Log.w('[Heartbeat] Send failed (will retry in 5m): $e');
     }
   }

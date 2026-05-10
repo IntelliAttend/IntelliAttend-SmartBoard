@@ -13,7 +13,8 @@ from fastapi import FastAPI, Depends, HTTPException, status, Request, Response, 
 from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
 
-from services.board_service import BoardService
+from middleware.rate_limit_middleware import RateLimitMiddleware
+from services.board_service import BoardService, HeartbeatService
 from services.session_service import SessionService
 from services.active_sessions_service import ActiveSessionsService
 from services.auth_service import AuthService
@@ -21,8 +22,9 @@ from models.board_auth_schema import (
     TelemetryPayload, 
     SessionInitiateRequest, 
     SessionCreateRequest,
-    DeviceVerifyRequest,
-    DeviceCompleteRequest
+    DeviceRegisterInitiateRequest,
+    DeviceRegisterVerifyRequest,
+    DeviceRegisterCompleteRequest
 )
 
 # Configure Logging (v6.0 Measurement Requirement)
@@ -44,6 +46,9 @@ app = FastAPI(title="IntelliAttend SmartBoard Engine")
 
 # v6.1: Bandwidth Saving - Enable Gzip Compression
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# O10: Server-side rate limiting (60 requests/min per IP+device)
+app.add_middleware(RateLimitMiddleware, max_requests=60, window_seconds=60)
 
 @app.middleware("http")
 async def correlation_id_middleware(request: Request, call_next):
@@ -115,7 +120,7 @@ async def _initiate_session_logic(request: SessionInitiateRequest, board_data: d
     }
 
 # --- Legacy & Heartbeat Routes ---
-@app.post("/v1/board/heartbeat")
+@app.post("/api/v1/device/heartbeat")
 async def board_heartbeat(
     request: HeartbeatRequest,
     board_data: dict = Depends(BoardService.get_board_data(db)),
@@ -128,6 +133,7 @@ async def board_heartbeat(
             "uptime_seconds": request.uptime_seconds,
             "app_version": request.app_version,
             "board_id": device_id,
+            "timestamp_ms": request.timestamp_ms
         })
     return {"status": "ok", "device_id": device_id}
 
@@ -259,9 +265,21 @@ async def initiate_device_registration(request: DeviceRegisterInitiateRequest):
     if not db:
         return {"status": "error", "message": "Database not initialized"}
     
-    result = await AuthService.initiate_registration(request.board_id, db)
+    result = await AuthService.initiate_registration(request.smart_board_id, db)
     if not result:
         raise HTTPException(status_code=400, detail="Board ID not provisioned")
+        
+    return result
+
+@auth_router.post("/verify")
+async def verify_device_registration(request: DeviceRegisterVerifyRequest):
+    """Phase 2.5: OTP Verification"""
+    if not db:
+        return {"status": "error", "message": "Database not initialized"}
+    
+    result = await AuthService.verify_otp(request.smart_board_id, request.otp, db)
+    if not result:
+        raise HTTPException(status_code=400, detail="Invalid OTP or Session Expired")
         
     return result
 
@@ -280,20 +298,50 @@ async def complete_device_registration(http_request: Request, request: DeviceReg
             firebase_uid = decoded.get("uid")
 
     result = await AuthService.complete_registration(
-        board_id=request.board_id,
-        otp=request.otp,
+        board_id=request.smart_board_id,
+        verification_token=request.verification_token,
         hardware_id=request.hardware_id,
         db=db,
         firebase_uid=firebase_uid
     )
     
     if not result:
-        raise HTTPException(status_code=400, detail="Registration Failed: Invalid OTP or Board ID")
+        raise HTTPException(status_code=400, detail="Registration Failed: Invalid Token or Board ID")
         
     return result
 
 app.include_router(auth_router)
 app.include_router(api_router)
+
+# ─── Admin / IT Dashboard Routes (O1/O2) ──────────────────────────────────────
+
+admin_router = APIRouter(prefix="/api/v1/admin")
+
+@admin_router.get("/heartbeats")
+async def get_heartbeat_status():
+    """Return heartbeat status for all boards (O1: IT Dashboard data source)."""
+    statuses = HeartbeatService.get_all_status(db)
+    stale_count = sum(1 for s in statuses if s["stale"])
+    return {
+        "status": "ok",
+        "total_boards": len(statuses),
+        "stale_boards": stale_count,
+        "healthy_boards": len(statuses) - stale_count,
+        "boards": statuses,
+    }
+
+@admin_router.get("/heartbeats/stale")
+async def get_stale_boards():
+    """Return only boards with missing heartbeats (O2: Alerting trigger)."""
+    statuses = HeartbeatService.get_all_status(db)
+    stale = [s for s in statuses if s["stale"]]
+    return {
+        "status": "ok",
+        "stale_count": len(stale),
+        "boards": stale,
+    }
+
+app.include_router(admin_router)
 
 # --- Faculty Control ---
 @app.post("/v1/board/session/create")

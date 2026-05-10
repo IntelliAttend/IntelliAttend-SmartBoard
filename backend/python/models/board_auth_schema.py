@@ -25,10 +25,15 @@ class SessionCreateRequest(BaseModel):
     slot_id: Optional[str] = None
 
 class DeviceRegisterInitiateRequest(BaseModel):
-    board_id: str
+    smart_board_id: str
+    password: str
+
+class DeviceRegisterVerifyRequest(BaseModel):
+    smart_board_id: str
+    otp: str
 
 class DeviceRegisterCompleteRequest(BaseModel):
-    board_id: str
-    otp: str
+    smart_board_id: str
+    verification_token: str
     hardware_id: str
 

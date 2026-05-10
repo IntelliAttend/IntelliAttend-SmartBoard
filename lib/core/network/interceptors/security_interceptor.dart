@@ -1,5 +1,5 @@
 import 'package:dio/dio.dart';
-import '../../../services/hardware_fingerprint_service.dart';
+import '../../../core/platform/hardware_fingerprint_service.dart';
 import '../../../core/utils/logger.dart';
 
 class SecurityInterceptor extends Interceptor {

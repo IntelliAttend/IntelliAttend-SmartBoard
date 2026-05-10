@@ -1,14 +1,18 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:uuid/uuid.dart';
 
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import '../core/utils/logger.dart';
-import 'hardware_fingerprint_service.dart';
-import 'ssl_pinning_service.dart';
+import '../core/platform/hardware_fingerprint_service.dart';
+import '../core/security/ssl_pinning_service.dart';
+import '../core/circuit_breaker.dart';
 import 'time_sync_service.dart';
-import 'secure_storage_service.dart';
+import '../core/security/secure_storage_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class ApiException implements Exception {
   final String userMessage;
@@ -30,6 +34,22 @@ class UnauthorizedException extends ApiException {
 class ApiService {
   static const String _defaultBaseUrl =
       'https://api-dev.balaseetharamanjaneyulu.com';
+
+  // ─── Circuit Breakers (AUDIT-2.4) ─────────────────────────────────────────
+  //
+  // Per-endpoint circuit breakers to prevent cascading failures. Keyed by the
+  // URL path — shared across code paths that call the same endpoint.
+  static final Map<String, CircuitBreaker> _breakers = {};
+  static const int _cbFailureThreshold = 5;
+  static const Duration _cbCooldown = Duration(seconds: 60);
+
+  static CircuitBreaker _breakerFor(String path) {
+    return _breakers.putIfAbsent(path, () => CircuitBreaker(
+      name: path,
+      failureThreshold: _cbFailureThreshold,
+      cooldown: _cbCooldown,
+    ));
+  }
 
   // ─── URL Resolution ───────────────────────────────────────────────────────
 
@@ -61,47 +81,108 @@ class ApiService {
   static final _uuid = const Uuid();
   static String _generateRequestId() => _uuid.v4();
 
-  /// Centralized request handler to enforce timeouts (AUDIT-2.3) and
-  /// inject correlation IDs (AUDIT-2.8) consistently.
+  /// Centralized request handler to enforce timeouts (AUDIT-2.3), inject
+  /// correlation IDs (AUDIT-2.8), retry transient failures with exponential
+  /// backoff (AUDIT-2.2), and guard with circuit breaker (AUDIT-2.4).
   static Future<http.Response> _request(
     String method,
     String path, {
     Map<String, String>? headers,
     Object? body,
     Duration timeout = const Duration(seconds: 30),
+    int maxRetries = 3,
   }) async {
+    final cb = _breakerFor(path);
+    return cb.call(() => _executeWithRetry(
+        method, path, headers, body, timeout, maxRetries));
+  }
+
+  /// The inner retry loop — separated so [CircuitBreaker] can wrap it.
+  static Future<http.Response> _executeWithRetry(
+    String method,
+    String path,
+    Map<String, String>? headers,
+    Object? body,
+    Duration timeout,
+    int maxRetries,
+  ) async {
     final uri = await _buildUri(path);
-    final reqId = _generateRequestId();
-    final mergedHeaders = headers ?? {};
-    mergedHeaders['X-Request-ID'] = reqId;
+    const baseDelay = Duration(seconds: 1);
 
-    Log.d('[API] $method $path → req=$reqId');
+    http.Response? lastResponse;
+    Object? lastError;
 
-    try {
-      late http.Response response;
-      if (method == 'GET') {
-        response =
-            await _client.get(uri, headers: mergedHeaders).timeout(timeout);
-      } else if (method == 'POST') {
-        response = await _client
-            .post(uri, headers: mergedHeaders, body: body)
-            .timeout(timeout);
-      } else {
-        throw Exception('Unsupported HTTP method: $method');
+    for (int attempt = 0; attempt <= maxRetries; attempt++) {
+      final reqId = _generateRequestId();
+      final mergedHeaders = Map<String, String>.from(headers ?? {});
+      mergedHeaders['X-Request-ID'] = reqId;
+      if (attempt > 0) {
+        mergedHeaders['X-Retry-Attempt'] = attempt.toString();
       }
 
-      // Check for backend correlation ID echo
-      final serverReqId = response.headers['x-request-id'];
-      if (serverReqId != null && serverReqId != reqId) {
-        Log.w(
-            '[API] Correlation ID mismatch: client=$reqId, server=$serverReqId');
-      }
+      Log.d('[API] $method $path attempt=${attempt + 1}/$maxRetries req=$reqId');
 
-      return response;
-    } catch (e) {
-      Log.e('[API] $method $path failed: $e');
-      rethrow;
+      try {
+        late http.Response response;
+        if (method == 'GET') {
+          response =
+              await _client.get(uri, headers: mergedHeaders).timeout(timeout);
+        } else if (method == 'POST') {
+          response = await _client
+              .post(uri, headers: mergedHeaders, body: body)
+              .timeout(timeout);
+        } else {
+          throw Exception('Unsupported HTTP method: $method');
+        }
+
+        // Check for backend correlation ID echo
+        final serverReqId = response.headers['x-request-id'];
+        if (serverReqId != null && serverReqId != reqId) {
+          Log.w(
+              '[API] Correlation ID mismatch: client=$reqId, server=$serverReqId');
+        }
+
+        // 5xx server errors are retryable
+        if (response.statusCode >= 500 && attempt < maxRetries) {
+          Log.w('[API] $method $path got ${response.statusCode}, retrying...');
+          lastResponse = response;
+          await Future.delayed(baseDelay * (1 << attempt));
+          continue;
+        }
+
+        return response;
+      } on TimeoutException catch (e) {
+        lastError = e;
+        if (attempt < maxRetries) {
+          Log.w('[API] $method $path timed out, retrying...');
+          await Future.delayed(baseDelay * (1 << attempt));
+          continue;
+        }
+      } catch (e) {
+        lastError = e;
+        if (attempt < maxRetries && _isTransient(e)) {
+          Log.w('[API] $method $path failed ($e), retrying...');
+          await Future.delayed(baseDelay * (1 << attempt));
+          continue;
+        }
+        Log.e('[API] $method $path non-retryable error: $e');
+        rethrow;
+      }
     }
+
+    if (lastResponse != null) {
+      throw ApiException(
+          'Server error (${lastResponse!.statusCode})', lastResponse!.statusCode);
+    }
+    Log.e('[API] $method $path exhausted retries: $lastError');
+    throw lastError ?? Exception('Request failed after $maxRetries retries');
+  }
+
+  /// Whether [error] is transient and worth retrying.
+  static bool _isTransient(Object error) {
+    return error is SocketException ||
+        error is http.ClientException ||
+        (error is Exception && error.toString().contains('Connection refused'));
   }
 
   // ─── Authentication ───────────────────────────────────────────────────────
@@ -114,6 +195,19 @@ class ApiService {
       headers['X-Device-ID'] = deviceId;
     }
 
+    // Try Firebase current user first — valid after signInWithCustomToken()
+    try {
+      final firebaseUser = FirebaseAuth.instance.currentUser;
+      if (firebaseUser != null) {
+        final idToken = await firebaseUser.getIdToken();
+        if (idToken != null && idToken.isNotEmpty) {
+          headers['Authorization'] = 'Bearer $idToken';
+          return headers;
+        }
+      }
+    } catch (_) {}
+
+    // Fall through to stored access token
     String? token = await SecureStorageService.getValidAccessToken();
     token ??= await _refreshToken();
     if (token != null) {
@@ -306,20 +400,30 @@ class ApiService {
   // in Firestore so IT can monitor board health.
 
   static Future<void> sendHeartbeat({
+    required String smartBoardId,
+    required String hardwareId,
     required String screenState,
     required int uptimeSeconds,
     required String appVersion,
   }) async {
     final headers = await _authHeaders();
+    final timestamp = DateTime.now().toUtc().toIso8601String();
     final response = await _request(
       'POST',
       'api/v1/device/heartbeat',
       headers: headers,
       body: jsonEncode({
+        'smart_board_id': smartBoardId,
+        'hardware_id': hardwareId,
         'screen_state': screenState,
         'uptime_seconds': uptimeSeconds,
         'app_version': appVersion,
-        'timestamp_ms': DateTime.now().millisecondsSinceEpoch,
+        'system_metrics': {
+          'memory_usage_mb': 0,
+          'cpu_load_percent': 0.0,
+          'network_latency_ms': 0,
+        },
+        'timestamp': timestamp,
       }),
     );
 

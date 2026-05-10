@@ -1,5 +1,5 @@
 import 'package:flutter/foundation.dart';
-import 'secure_storage_service.dart';
+import '../core/security/secure_storage_service.dart';
 import '../core/utils/logger.dart';
 
 class TimeSyncService {

@@ -6,9 +6,9 @@ import 'idle_screen.dart';
 import 'settings_screen.dart';
 import '../../data/repositories/device_repository.dart';
 import '../../services/api_service.dart';
+import '../../core/security/secure_storage_service.dart';
 import '../../core/utils/logger.dart';
 import '../../models/isar_schemas.dart';
-import '../widgets/glass_container.dart';
 
 class BootScreen extends StatefulWidget {
   final bool isDegraded;
@@ -31,9 +31,11 @@ class _BootScreenState extends State<BootScreen> {
   Future<void> _performHandshake() async {
     final deviceRepository = context.read<IDeviceRepository>();
     try {
-      // Step 1: Rapid Local Check (OS-style persistence)
+      // Step 1: Rapid Local Check — Isar registration record
       final registration = await deviceRepository.getRegistration();
-      final isRegistered = registration != null && registration.smartBoardId.isNotEmpty;
+      final isRegistered = registration != null &&
+          registration.smartBoardId.isNotEmpty &&
+          registration.smartBoardId != 'UNKNOWN';
 
       if (!isRegistered) {
         Log.i('[Boot] No local registration found. Redirecting to Registration.');
@@ -45,8 +47,24 @@ class _BootScreenState extends State<BootScreen> {
         return;
       }
 
-      // Step 2: Instant UI Transition
-      // We trust the local Isar cache to provide immediate dashboard access
+      // Step 2: Token validity check — if the device was logged-out or the
+      // access/refresh tokens are missing, treat it as unregistered and send
+      // the admin back to the Registration screen. This prevents landing on
+      // the Idle screen with no valid server identity.
+      final hasToken = await SecureStorageService.getRefreshToken() != null;
+      if (!hasToken) {
+        Log.w('[Boot] Registration record found but no auth token. Forcing re-registration.');
+        // Clear the stale Isar entry so next boot starts clean.
+        await deviceRepository.clearRegistration();
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (context) => const RegistrationScreen()),
+          );
+        }
+        return;
+      }
+
+      // Step 3: Instant UI Transition — local identity is valid.
       Log.i('[Boot] Local identity confirmed for ${registration.smartBoardId}. Entering Idle state.');
       if (mounted) {
         Navigator.of(context).pushReplacement(

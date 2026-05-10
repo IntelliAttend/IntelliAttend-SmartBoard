@@ -1,4 +1,4 @@
-# IntelliAttend SmartBoard - v5.4
+# IntelliAttend SmartBoard
 
 > **Enterprise-grade offline-resilient attendance system for university classrooms**
 
@@ -161,8 +161,8 @@ const decoded = jwt.verify(token, process.env.JWT_SECRET);
 ```
 
 ### Full Backend Documentation
-📖 **[Backend API Security v5.4](./BACKEND_API_SECURITY_v5.4.md)** - Complete specification  
-🚀 **[Backend Quick Start](./BACKEND_QUICKSTART_v5.4.md)** - 2.5 hour implementation guide
+📖 **[Backend API Security v5.4](./docs/technical/BACKEND_API_SECURITY_v5.4.md)** - Complete specification  
+🚀 **[Backend Quick Start](./docs/operations/BACKEND_QUICKSTART_v5.4.md)** - 2.5 hour implementation guide
 
 ---
 
@@ -173,14 +173,14 @@ const decoded = jwt.verify(token, process.env.JWT_SECRET);
 #### v5.7 Security Services
 | File | Purpose |
 |------|---------|
-| `lib/services/secure_storage_service.dart` | OS keychain-backed encrypted storage (no Isar) |
+| `lib/core/security/secure_storage_service.dart` | OS keychain-backed encrypted storage (no Isar) |
 | `lib/services/api_service.dart` | JWT auth + auto-refresh + pinned HTTP client |
 | `lib/services/device_service.dart` | Token extraction on registration, strips session_secret from Firestore |
-| `lib/services/ssl_pinning_service.dart` | **NEW** - SHA-256 certificate pinning |
-| `lib/services/integrity_verifier.dart` | **NEW** - Runtime integrity + code signature verification |
-| `lib/services/rate_limiter.dart` | **NEW** - Exponential backoff rate limiter |
-| `lib/services/kiosk_service.dart` | **NEW** - Windows kiosk hotkey blocking |
-| `lib/core/utils/logger.dart` | **UPDATED** - Release-mode filter + secret redaction |
+| `lib/core/security/ssl_pinning_service.dart` | SHA-256 certificate pinning |
+| `lib/core/security/integrity_verifier.dart` | Runtime integrity + code signature verification |
+| `lib/core/rate_limiter.dart` | Exponential backoff rate limiter |
+| `lib/core/platform/kiosk_service.dart` | Windows kiosk hotkey blocking |
+| `lib/core/utils/logger.dart` | Release-mode filter + secret redaction |
 
 #### Screens
 | Screen | Purpose |
@@ -224,7 +224,7 @@ For real-time roster updates and alerts:
 5. Place in `macos/Runner/` directory
 6. Enable Firestore Database
 
-📖 **[Firebase Setup Guide](./FIREBASE_QUICKSTART.md)**
+📖 **[Firebase Setup Guide](./docs/database/FIREBASE_QUICKSTART.md)**
 
 ### 4. Build & Run
 ```bash
@@ -252,7 +252,7 @@ Firebase is optional but enables:
 5. Enable Firestore
 6. Restart app
 
-📖 **Detailed guide:** `FIREBASE_QUICKSTART.md`
+📖 **Detailed guide:** `docs/database/FIREBASE_QUICKSTART.md`
 
 **Current Status:** App runs in **OFFLINE MODE** without Firebase. Real-time features activate once configured.
 
@@ -278,7 +278,7 @@ Firebase is optional but enables:
 - [ ] Test full flow
 
 **⏱️ Estimated Time:** 2.5 hours  
-**📖 Documentation:** `BACKEND_QUICKSTART_v5.4.md`
+**📖 Documentation:** `docs/operations/BACKEND_QUICKSTART_v5.4.md`
 
 ### DevOps/IT Team
 - [ ] Firebase project setup (if using real-time features)
@@ -293,28 +293,28 @@ Firebase is optional but enables:
 ### Core Documentation
 | Document | Audience | Purpose |
 |----------|-----------|---------|
-| **[BACKEND_API_SECURITY_v5.4.md](./BACKEND_API_SECURITY_v5.4.md)** | Backend Team | Complete API specification |
-| **[BACKEND_QUICKSTART_v5.4.md](./BACKEND_QUICKSTART_v5.4.md)** | Backend Team | 2.5hr implementation guide |
-| **[SECURITY_IMPLEMENTATION_SUMMARY.md](./SECURITY_IMPLEMENTATION_SUMMARY.md)** | All Teams | What was done + why |
-| **[FIREBASE_QUICKSTART.md](./FIREBASE_QUICKSTART.md)** | DevOps/IT | Firebase setup guide |
+| **[BACKEND_API_SECURITY_v5.4.md](./docs/technical/BACKEND_API_SECURITY_v5.4.md)** | Backend Team | Complete API specification |
+| **[BACKEND_QUICKSTART_v5.4.md](./docs/operations/BACKEND_QUICKSTART_v5.4.md)** | Backend Team | 2.5hr implementation guide |
+| **[SECURITY_IMPLEMENTATION_SUMMARY.md](./docs/technical/SECURITY_IMPLEMENTATION_SUMMARY.md)** | All Teams | What was done + why |
+| **[FIREBASE_QUICKSTART.md](./docs/database/FIREBASE_QUICKSTART.md)** | DevOps/IT | Firebase setup guide |
 
 ### Security Documents
 | Document | Purpose |
 |----------|---------|
-| `v5.4_SECURITY_MIGRATION.md` | Backend migration steps |
-| `SECURITY_IMPLEMENTATION_SUMMARY.md` | Frontend changes summary |
-| `BACKEND_API_SECURITY_v5.4.md` | Full API spec (60+ pages) |
+| `docs/technical/v5.4_SECURITY_MIGRATION.md` | Backend migration steps |
+| `docs/technical/SECURITY_IMPLEMENTATION_SUMMARY.md` | Frontend changes summary |
+| `docs/technical/BACKEND_API_SECURITY_v5.4.md` | Full API spec (60+ pages) |
 
 ### Quick References
 ```bash
 # Backend: What do I need to do?
-→ Read: BACKEND_QUICKSTART_v5.4.md (15 min read)
+→ Read: docs/operations/BACKEND_QUICKSTART_v5.4.md (15 min read)
 
 # Security: What was fixed and why?
-→ Read: SECURITY_IMPLEMENTATION_SUMMARY.md (10 min read)
+→ Read: docs/technical/SECURITY_IMPLEMENTATION_SUMMARY.md (10 min read)
 
 # Firebase: How to set it up?
-→ Read: FIREBASE_QUICKSTART.md (5 min read)
+→ Read: docs/database/FIREBASE_QUICKSTART.md (5 min read)
 ```
 
 ---
@@ -324,41 +324,82 @@ Firebase is optional but enables:
 ```
 intelliattend_smartboard/
 ├── lib/
+│   ├── core/
+│   │   ├── config/
+│   │   │   └── app_config.dart
+│   │   ├── network/
+│   │   │   ├── api_client.dart
+│   │   │   └── interceptors/
+│   │   ├── platform/
+│   │   │   ├── hardware_fingerprint_service.dart
+│   │   │   ├── kiosk_service.dart          # Windows kiosk hotkey blocking
+│   │   │   ├── notification_service.dart
+│   │   │   └── window_orchestrator_service.dart
+│   │   ├── security/
+│   │   │   ├── integrity_verifier.dart      # Runtime tamper detection
+│   │   │   ├── secure_storage_service.dart  # OS keychain (flutter_secure_storage)
+│   │   │   └── ssl_pinning_service.dart     # SHA-256 certificate pinning
+│   │   ├── theme/
+│   │   │   └── app_theme.dart
+│   │   ├── utils/
+│   │   │   └── logger.dart                 # Release filter + secret redaction
+│   │   ├── rate_limiter.dart               # Exponential backoff
+│   │   └── startup_service.dart
+│   ├── data/
+│   │   └── repositories/
+│   │       ├── auth_repository.dart
+│   │       └── device_repository.dart
 │   ├── models/
-│   │   └── isar_schemas.dart          # No token fields (keychain only)
-│   ├── services/
-│   │   ├── api_service.dart           # JWT auth + pinned client
-│   │   ├── device_service.dart        # Token extraction, session secret stripping
-│   │   ├── secure_storage_service.dart # OS keychain (flutter_secure_storage)
-│   │   ├── ssl_pinning_service.dart   # SHA-256 certificate pinning
-│   │   ├── integrity_verifier.dart    # Runtime tamper detection
-│   │   ├── rate_limiter.dart          # Exponential backoff
-│   │   ├── kiosk_service.dart         # Windows hotkey blocking
-│   │   ├── session_manager.dart
-│   │   ├── sync_manager.dart          # Periodic queued scan flush
-│   │   └── hardware_fingerprint_service.dart
+│   │   └── isar_schemas.dart               # No token fields (keychain only)
 │   ├── presentation/
+│   │   ├── providers/
+│   │   │   └── registration_provider.dart
 │   │   └── screens/
 │   │       ├── boot_screen.dart
-│   │       ├── idle_screen.dart       # HMAC split-knowledge, rate-limited PIN
-│   │       ├── attendance_screen.dart # Queued scan on network failure
+│   │       ├── idle_screen.dart             # HMAC split-knowledge, rate-limited PIN
+│   │       ├── attendance_screen.dart       # Queued scan on network failure
 │   │       ├── registration_screen.dart
-│   │       └── init_failure_screen.dart # NEW: init error screen
-│   ├── core/
-│   │   └── utils/
-│   │       └── logger.dart            # Release filter + secret redaction
-│   └── main.dart                      # Integrity check blocks startup
-├── macos/
-│   └── Runner/
-│       └── (add GoogleService-Info.plist here for Firebase)
-├── windows/
-│   └── ...                            # Windows kiosk deployment config
-├── .env                                # Environment configuration
+│   │       ├── init_failure_screen.dart
+│   │       ├── settings_screen.dart
+│   │       ├── timetable_screen.dart
+│   │       ├── analytics_screen.dart
+│   │       └── notifications_screen.dart
+│   ├── services/
+│   │   ├── api_service.dart                # JWT auth + pinned client
+│   │   ├── device_service.dart             # Token extraction, session secret stripping
+│   │   ├── heartbeat_service.dart
+│   │   ├── pre_flight_service.dart
+│   │   ├── session_manager.dart
+│   │   ├── sync_manager.dart               # Periodic queued scan flush
+│   │   ├── telemetry_service.dart
+│   │   ├── time_sync_service.dart
+│   │   └── totp_engine.dart
+│   ├── firebase_options.dart
+│   └── main.dart                           # Integrity check blocks startup
+├── scripts/                                # Automation & testing tooling
+│   ├── run_tests.ps1
+│   ├── run_coverage.ps1
+│   ├── mock_server.py
+│   ├── seed_firestore.ps1
+│   ├── check_deps.ps1
+│   ├── test_watch.ps1
+│   ├── golden_test.ps1
+│   ├── TESTING_ARCHITECTURE.md
+│   └── SCRIPTS_REFERENCE.md
+├── backend/
+│   └── python/                             # FastAPI backend reference
+├── test/                                    # Unit, widget, and integration tests
+├── docs/                                    # Project documentation
+│   ├── technical/
+│   ├── product/
+│   ├── operations/
+│   ├── database/
+│   ├── reports/
+│   ├── guides/
+│   └── admin/
+├── .env                                     # Environment configuration
 ├── pubspec.yaml
-├── docs/
-│   ├── DEPLOYMENT_WINDOWS.md          # Assigned Access kiosk setup
-│   └── ...
-└── README.md                          # This file
+└── README.md                                # This file
 ```
 
 ---
@@ -432,6 +473,6 @@ intelliattend_smartboard/
 
 ---
 
-**Last Updated:** May 1, 2026  
-**Current Version:** 5.4  
+**Last Updated:** May 9, 2026  
+**Current Version:** `5.4.0+1` (source of truth: `pubspec.yaml`)  
 **Security Status:** ✅ Enterprise-Grade (Cryptographic Trust Model)

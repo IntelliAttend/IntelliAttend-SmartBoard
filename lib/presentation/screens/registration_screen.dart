@@ -1,10 +1,17 @@
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:window_manager/window_manager.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/platform/kiosk_service.dart';
+import '../../core/utils/logger.dart';
+import '../../data/repositories/device_repository.dart';
 import '../providers/registration_provider.dart';
 import 'boot_screen.dart';
+import 'idle_screen.dart';
 
 class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({super.key});
@@ -19,12 +26,43 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   final _smartBoardIdController = TextEditingController();
   final _otpController = TextEditingController();
 
+  // One-shot guard: prevents the Consumer builder from scheduling multiple
+  // navigation callbacks when notifyListeners() fires repeatedly while
+  // step == completed (e.g. during HeartbeatService start, Isar writes, etc.)
+  bool _navigationScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Registration happens before the board has any identity — there is nothing
+    // to protect yet. Drop all kiosk restrictions so the admin can minimise,
+    // switch apps, and most importantly EXIT if they need to abort setup.
+    KioskService.setMode(KioskMode.open);
+  }
+
   @override
   void dispose() {
     _passwordController.dispose();
     _smartBoardIdController.dispose();
     _otpController.dispose();
     super.dispose();
+  }
+
+  /// Cleanly exits the application on all platforms.
+  /// SystemNavigator.pop() is mobile-only and silently does nothing on Windows
+  /// desktop. windowManager.destroy() is the correct desktop equivalent.
+  Future<void> _exitApp() async {
+    try {
+      if (!kIsWeb &&
+          (Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
+        await windowManager.destroy();
+      } else {
+        SystemNavigator.pop();
+      }
+    } catch (_) {
+      // Last-resort fallback — should never be reached on a normal desktop OS.
+      exit(0);
+    }
   }
 
   void _showExitDialog(BuildContext context) {
@@ -49,7 +87,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
             child: const Text('STAY'),
           ),
           ElevatedButton(
-            onPressed: () => SystemNavigator.pop(),
+            onPressed: () => _exitApp(),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,
               foregroundColor: Colors.white,
@@ -65,11 +103,41 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   Widget build(BuildContext context) {
     return Consumer<RegistrationProvider>(
       builder: (context, provider, child) {
-        if (provider.step == RegistrationStep.completed) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            Navigator.of(context).pushReplacement(
-              MaterialPageRoute(builder: (context) => const BootScreen()),
-            );
+        // Navigate to IdleScreen exactly once — the _navigationScheduled flag
+        // ensures this block fires a single addPostFrameCallback regardless of
+        // how many times the Consumer builder re-runs with step == completed.
+        //
+        // We read the DeviceRegistration from Isar directly so we can land on
+        // IdleScreen immediately, skipping the BootScreen's async re-check
+        // entirely. BootScreen is only used as a fallback if the Isar record
+        // is somehow absent (should never happen after saveRegistration()).
+        //
+        // pushAndRemoveUntil clears the entire navigation stack so there is no
+        // route to pop back to — pressing Back on IdleScreen does nothing.
+        if (provider.step == RegistrationStep.completed && !_navigationScheduled) {
+          _navigationScheduled = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
+            if (!mounted) return;
+            final deviceRepo = context.read<IDeviceRepository>();
+            final registration = await deviceRepo.getRegistration();
+            if (!mounted) return;
+            if (registration != null) {
+              Log.i('[RegistrationScreen] Registration confirmed in Isar — navigating directly to IdleScreen.');
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(
+                  builder: (context) => IdleScreen(registration: registration),
+                ),
+                (route) => false,
+              );
+            } else {
+              // Fallback: Isar read returned null (unexpected). Let BootScreen
+              // re-verify state and decide where to go.
+              Log.w('[RegistrationScreen] Registration not found in Isar after completion — falling back to BootScreen.');
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(builder: (context) => const BootScreen()),
+                (route) => false,
+              );
+            }
           });
         }
 

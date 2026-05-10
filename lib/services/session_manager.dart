@@ -7,6 +7,8 @@ import '../core/utils/logger.dart';
 class SessionManager {
   static Isar? _isar;
 
+  /// TODO(O9): Upgrade Isar to 3.2+ and pass `encryptKey` here using
+  /// `SecureStorageService.getIsarEncryptKey()` for encrypted local vault.
   static Future<void> init() async {
     if (_isar != null) return;
 
@@ -29,8 +31,6 @@ class SessionManager {
     } catch (e) {
       Log.e('❌ [SessionManager] Isar Initialization Failed (Attempt 1): $e');
 
-      // v5.4 Fallback: If schema mismatch or corruption occurs, wipe and recreate.
-      // This ensures the SmartBoard remains operational even if cache is stale.
       try {
         Log.w(
             '📦 [SessionManager] Attempting to wipe corrupted/stale local vault...');
@@ -39,12 +39,10 @@ class SessionManager {
           await isar.close();
         }
 
-        // Use a different name or clear the directory
         _isar = await Isar.open(
           schemas,
           directory: dir.path,
-          name:
-              'intelliattend_vault_v2', // Increment name to force new file if needed
+          name: 'intelliattend_vault_v2',
         );
         Log.i('📦 [SessionManager] New Isar Vault Created successfully.');
       } catch (retryError) {

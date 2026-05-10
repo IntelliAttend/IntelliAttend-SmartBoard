@@ -1,12 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:window_manager/window_manager.dart';
 import '../../core/theme/app_theme.dart';
-import '../../data/repositories/device_repository.dart';
 import '../../models/isar_schemas.dart';
 import '../../main.dart';
-import '../widgets/glass_container.dart';
-import 'registration_screen.dart';
-import '../../services/secure_storage_service.dart';
+import '../../core/security/secure_storage_service.dart';
 import '../../core/config/app_config.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -19,24 +15,17 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _isSyncing = false;
-  bool _isFullScreen = true;
   String _idleTheme = 'auto';
 
   @override
   void initState() {
     super.initState();
-    _checkFullScreen();
     _loadIdleTheme();
   }
 
   Future<void> _loadIdleTheme() async {
     final theme = await SecureStorageService.getIdleTheme();
     if (mounted) setState(() => _idleTheme = theme ?? 'auto');
-  }
-
-  Future<void> _checkFullScreen() async {
-    final isFull = await windowManager.isFullScreen();
-    if (mounted) setState(() => _isFullScreen = isFull);
   }
 
   Future<void> _handleForceSync() async {
@@ -59,46 +48,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _toggleFullScreen() async {
-    final willBeFull = !_isFullScreen;
-    await windowManager.setFullScreen(willBeFull);
-    setState(() => _isFullScreen = willBeFull);
-  }
-
-  void _showWipeConfirmation() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: const Text('Wipe Registration?', style: TextStyle(color: Colors.white)),
-        content: const Text(
-          'This will clear local display data. Action cannot be undone.',
-          style: TextStyle(color: AppColors.textMuted),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('CANCEL')),
-          ElevatedButton(
-            onPressed: () async {
-              await globalDeviceRepository.clearRegistration();
-              if (mounted) {
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (context) => const RegistrationScreen()),
-                  (route) => false,
-                );
-              }
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
-            child: const Text('WIPE DEVICE'),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     // Force Light Theme aesthetics as requested
-    const isDark = false; 
 
     return Scaffold(
       backgroundColor: AppColors.bgLight,

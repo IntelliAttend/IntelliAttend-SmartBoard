@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:intelliattend_smartboard/services/secure_storage_service.dart';
+import 'package:intelliattend_smartboard/core/security/secure_storage_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 void main() {

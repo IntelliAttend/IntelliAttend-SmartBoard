@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
 import 'models/isar_schemas.dart';
-import 'services/secure_storage_service.dart';
+import 'core/security/secure_storage_service.dart';
 import 'dart:io';
 
 void main() async {

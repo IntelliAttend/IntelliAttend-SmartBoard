@@ -1,8 +1,10 @@
+import 'dart:io';
+
 import 'package:isar/isar.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../models/isar_schemas.dart';
 import '../../services/api_service.dart';
-import '../../services/secure_storage_service.dart';
+import '../../core/security/secure_storage_service.dart';
 import '../../core/utils/logger.dart';
 import 'auth_repository.dart';
 
@@ -12,6 +14,8 @@ abstract class IDeviceRepository {
   Future<void> clearRegistration();
   Future<void> performMigrationBridge();
   Future<void> sendHeartbeat({
+    required String smartBoardId,
+    required String hardwareId,
     required String screenState,
     required int uptimeSeconds,
     required String appVersion,
@@ -73,12 +77,16 @@ class DeviceRepository implements IDeviceRepository {
 
   @override
   Future<void> sendHeartbeat({
+    required String smartBoardId,
+    required String hardwareId,
     required String screenState,
     required int uptimeSeconds,
     required String appVersion,
   }) async {
     try {
       await ApiService.sendHeartbeat(
+        smartBoardId: smartBoardId,
+        hardwareId: hardwareId,
         screenState: screenState,
         uptimeSeconds: uptimeSeconds,
         appVersion: appVersion,
@@ -92,6 +100,12 @@ class DeviceRepository implements IDeviceRepository {
   Future<void> syncTimetable({bool fullSync = false}) async {
     final registration = await getRegistration();
     if (registration == null) return;
+
+    if (Platform.isWindows) {
+      Log.w(
+          '[DeviceRepository] Firestore timetable sync skipped on Windows; using local cache.');
+      return;
+    }
 
     try {
       final classroomId = registration.classroomId ?? registration.smartBoardId;
@@ -132,6 +146,10 @@ class DeviceRepository implements IDeviceRepository {
     final dayName = _getDayNameString(now);
     final classroomId = registration.classroomId ?? registration.smartBoardId;
 
+    if (Platform.isWindows) {
+      return Stream.fromFuture(getTodayTimeline());
+    }
+
     return FirebaseFirestore.instance
         .collection('timetable_slots')
         .where('classroom_id', isEqualTo: classroomId)
@@ -156,6 +174,9 @@ class DeviceRepository implements IDeviceRepository {
   Stream<Map<String, dynamic>?> watchActiveSession(
       DeviceRegistration registration) {
     final queryId = registration.classroomId ?? registration.smartBoardId;
+    if (Platform.isWindows) {
+      return Stream<Map<String, dynamic>?>.value(null);
+    }
     return FirebaseFirestore.instance
         .collection('ActiveSessions')
         .where('room_id', isEqualTo: queryId)
@@ -173,6 +194,9 @@ class DeviceRepository implements IDeviceRepository {
 
   @override
   Stream<Map<String, dynamic>?> watchSpecificSession(String sessionId) {
+    if (Platform.isWindows) {
+      return Stream<Map<String, dynamic>?>.value(null);
+    }
     return FirebaseFirestore.instance
         .collection('ActiveSessions')
         .doc(sessionId)

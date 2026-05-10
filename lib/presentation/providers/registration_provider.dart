@@ -1,14 +1,16 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:dio/dio.dart';
 import '../../data/repositories/auth_repository.dart';
 import '../../data/repositories/device_repository.dart';
 import '../../core/utils/logger.dart';
 import '../../services/session_manager.dart';
-import '../../services/hardware_fingerprint_service.dart';
-import '../../services/rate_limiter.dart';
-import '../../services/secure_storage_service.dart';
-import '../../services/startup_service.dart';
+import '../../core/platform/hardware_fingerprint_service.dart';
+import '../../core/rate_limiter.dart';
+import '../../core/security/secure_storage_service.dart';
+import '../../core/startup_service.dart';
+import '../../main.dart' show startBackgroundProtocols;
 
 enum RegistrationStep { idle, otpSent, verifying, completed, error }
 
@@ -96,22 +98,56 @@ class RegistrationProvider extends ChangeNotifier {
                 data['profile'], SessionManager.isar);
           }
           _step = RegistrationStep.completed;
-          await StartupService.register();
-          await _deviceRepository.syncTimetable(fullSync: true);
+          unawaited(StartupService.register());
+          unawaited(startBackgroundProtocols());
           Log.i(
               '[RegistrationProvider] Login successful. Device is already registered.');
         } else {
-          // Trigger OTP Initiation for the newly logged-in board
-          final initResult =
-              await _authRepository.initiateRegistration(boardId, password);
-          if (initResult != null) {
-            _step = RegistrationStep.otpSent;
-            _startOtpTimer();
-            Log.i(
-                '[RegistrationProvider] Login successful. OTP sent to $_adminEmail');
-          } else {
-            _errorMessage =
-                'Failed to initiate registration OTP. Please contact IT.';
+          // Trigger OTP Initiation for the newly logged-in board.
+          // We handle three outcomes:
+          //   • 200 OK      — OTP confirmed sent; show OTP screen
+          //   • 5xx / 502  — infrastructure glitch; OTP was likely still sent
+          //                   by the origin before Cloudflare dropped the response;
+          //                   show OTP screen with a soft advisory
+          //   • 4xx / null  — real failure; OTP not sent; show error
+          try {
+            final initResult =
+                await _authRepository.initiateRegistration(boardId, password);
+
+            if (initResult != null) {
+              _step = RegistrationStep.otpSent;
+              _startOtpTimer();
+              Log.i('[RegistrationProvider] Login successful. OTP sent to $_adminEmail');
+            } else {
+              _errorMessage =
+                  'Failed to initiate registration OTP. Please contact IT.';
+            }
+          } on DioException catch (e) {
+            final status = e.response?.statusCode ?? 0;
+            if (status >= 500) {
+              // Server-side infrastructure error (e.g. Cloudflare 502).
+              // The origin server processed the request and emailed the OTP
+              // before the response was lost in transit. Show the OTP entry
+              // screen so the admin can type the code they received.
+              _step = RegistrationStep.otpSent;
+              _startOtpTimer();
+              Log.w('[RegistrationProvider] Step 1 returned $status but OTP may have been sent — showing OTP screen.');
+            } else {
+              _errorMessage =
+                  'Failed to initiate registration OTP. Please contact IT.';
+            }
+          }
+
+          // Pre-warm hardware metadata in parallel with OTP entry regardless
+          // of which path above was taken. The 18 PowerShell queries take ~3–5 s;
+          // by the time the admin reads and types the OTP, the data is cached
+          // and completeRegistration() will return it instantly.
+          if (_step == RegistrationStep.otpSent) {
+            unawaited(HardwareFingerprintService.getHardwareMetadata().then((_) {
+              Log.i('[RegistrationProvider] Hardware metadata pre-warmed and cached.');
+            }).catchError((Object e) {
+              Log.w('[RegistrationProvider] Metadata pre-warm failed (will retry at bond step): $e');
+            }));
           }
         }
       } else {
@@ -145,49 +181,98 @@ class RegistrationProvider extends ChangeNotifier {
     _errorMessage = null;
     notifyListeners();
 
+    // ── Bulletproof post-OTP registration sequence ────────────────────────────
+    //
+    // This is the most critical path in the application. A partial failure here
+    // leaves the server believing the board is registered while the client has
+    // no valid session — causing permanent broken state. Every step is guarded:
+    //
+    //   A. Verify OTP → receive verification_token
+    //   B. Persist token immediately (crash-safe recovery via _loadPersistedToken)
+    //   C. Collect hardware fingerprint (cached — no repeated PowerShell calls)
+    //   D. Complete registration → receive {custom_token, classroom_id, ...}
+    //   E. signInWithCustomToken → proper Firebase session with role: smartboard
+    //   F. Persist refresh_token (required by boot-screen validation)
+    //   G. Write DeviceRegistration to Isar (local ground truth)
+    //   H. Clear registration_token (one-shot token, no longer needed)
+    //   I. Transition to completed — only after ALL of the above succeed
+    //
+    // If D or later fails, the persisted verification_token (step B) lets the
+    // user re-enter the OTP screen on next launch and retry from step D without
+    // re-requesting a new OTP.
+
     try {
-      // Step 3 (A): Verify OTP to get Verification Token
+      // ── Step A: OTP verification ──────────────────────────────────────────
       final verifyResult = await _authRepository.verifyOtp(boardId, otp);
 
-      if (verifyResult != null && verifyResult['verification_token'] != null) {
-        RateLimiter.reset(rateKey);
-        _verificationToken = verifyResult['verification_token'];
-
-        // Persist token for L-1 recovery
-        await SecureStorageService.storeRegistrationToken(_verificationToken!);
-
-        final hardwareId = await HardwareFingerprintService.getDeviceId();
-
-        // Step 3 (B): Use token to bind hardware
-        final registrationResult = await _authRepository.completeRegistration(
-            boardId, hardwareId, _verificationToken!);
-
-        if (registrationResult != null) {
-          _otpTimer?.cancel();
-          final profile = Map<String, dynamic>.from(registrationResult);
-          profile['room_id'] = registrationResult['classroom_id'];
-
-          await _authRepository.saveRegistration(profile, SessionManager.isar);
-          await SecureStorageService.clearRegistrationToken();
-
-          _step = RegistrationStep.completed;
-
-          // v6.4: Automatically register for Windows Startup on first success
-          await StartupService.register();
-          await _deviceRepository.syncTimetable(fullSync: true);
-
-          Log.i(
-              '[RegistrationProvider] Hardware bound successfully to $boardId');
-        } else {
-          _errorMessage = 'Hardware binding failed. Please contact IT.';
-        }
-      } else {
+      if (verifyResult == null || verifyResult['verification_token'] == null) {
         RateLimiter.recordAttempt(rateKey);
         _errorMessage =
             'Invalid OTP. Please check the code sent to your IT admin.';
+        return;
       }
+
+      RateLimiter.reset(rateKey);
+      _verificationToken = verifyResult['verification_token'] as String;
+
+      // ── Step B: Persist token before any further network calls ────────────
+      // If the app crashes between here and step H, _loadPersistedToken()
+      // restores the token on next launch so the user can retry without a
+      // new OTP.
+      await SecureStorageService.storeRegistrationToken(_verificationToken!);
+      Log.i('[RegistrationProvider] Verification token persisted for crash-recovery.');
+
+      // ── Step C: Hardware fingerprint (cached after first call) ────────────
+      final hardwareId = await HardwareFingerprintService.getDeviceId();
+
+      // ── Step D: Hardware binding ──────────────────────────────────────────
+      final registrationResult = await _authRepository.completeRegistration(
+          boardId, hardwareId, _verificationToken!);
+
+      if (registrationResult == null) {
+        // Server rejected binding. The verification_token is still persisted so
+        // IT can investigate and the admin can retry without a new OTP cycle.
+        _errorMessage =
+            'Hardware binding failed. Please contact IT.\n'
+            'The server may need to unlock this board first.';
+        Log.e('[RegistrationProvider] completeRegistration returned null for $boardId');
+        return;
+      }
+
+      // ── Steps E & F: Firebase custom-token sign-in (handled inside completeRegistration)
+      // completeRegistration() calls signInWithCustomToken() and storeRefreshToken()
+      // internally. At this point the Firebase session is established.
+
+      // ── Step G: Write local registration record ───────────────────────────
+      _otpTimer?.cancel();
+      final profile = Map<String, dynamic>.from(registrationResult);
+      // Server returns 'classroom_id'; downstream code also reads 'room_id'.
+      profile['room_id'] = registrationResult['classroom_id'];
+
+      await _authRepository.saveRegistration(
+        profile,
+        SessionManager.isar,
+        hardwareId: hardwareId,
+      );
+      Log.i('[RegistrationProvider] Registration written to local vault.');
+
+      // ── Step H: Clear one-shot token — only now, after everything succeeded ─
+      await SecureStorageService.clearRegistrationToken();
+
+      // ── Step I: Transition ─────────────────────────────────────────────────
+      _step = RegistrationStep.completed;
+
+      // Register for Windows auto-start and kick off background protocols
+      // (SyncManager, PreFlightService, WindowOrchestrator). Fire-and-forget —
+      // do NOT await so the UI transition to IdleScreen is instant.
+      unawaited(StartupService.register());
+      unawaited(startBackgroundProtocols());
+
+      Log.i('[RegistrationProvider] ✅ Hardware bound successfully to $boardId. Entering Idle state.');
     } catch (e) {
-      _errorMessage = 'Verification failed. Please check your connection.';
+      // Surface actionable message; keep verification_token persisted so
+      // the admin can retry step D without re-requesting an OTP.
+      _errorMessage = 'Verification failed. Please check your connection and try again.';
       Log.e('[RegistrationProvider] Verify Error: $e');
     } finally {
       _isLoading = false;

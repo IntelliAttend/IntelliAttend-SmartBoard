@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:isar/isar.dart';
@@ -22,6 +23,15 @@ class SyncManager {
   /// and mirrors the Firestore timetable to the local vault.
   void init(String smartBoardId) {
     _isar = SessionManager.isar;
+
+    if (Platform.isWindows) {
+      Log.w(
+          '[SyncManager] Firestore realtime mirror disabled on Windows; using local Isar cache.');
+      _syncTimer =
+          Timer.periodic(const Duration(seconds: 30), (_) => _attemptSync());
+      _attemptSync();
+      return;
+    }
 
     // 1. Connectivity Listener (Outgoing Sync)
     _connectivitySubscription =

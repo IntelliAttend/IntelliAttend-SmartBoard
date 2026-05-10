@@ -43,9 +43,6 @@ class TimetableScreen extends StatelessWidget {
 
   Widget _buildDayView(BuildContext context, List<TimetableEntry> entries, bool isDark) {
     if (entries.isEmpty) {
-      final isSunday = weeklyTimeline.any((e) => e.dayOfWeek == 7) ? false : true; // This is a bit naive, let's just check the index if possible
-      // Actually, we can check the tab index or the day of week.
-      // But entries are already filtered by day.
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
