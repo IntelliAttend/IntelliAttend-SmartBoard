@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:isar/isar.dart';
@@ -21,17 +20,8 @@ class SyncManager {
 
   /// Initializes the SyncManager to watch for connectivity changes
   /// and mirrors the Firestore timetable to the local vault.
-  void init(String smartBoardId) {
+  void init(String classroomId) {
     _isar = SessionManager.isar;
-
-    if (Platform.isWindows) {
-      Log.w(
-          '[SyncManager] Firestore realtime mirror disabled on Windows; using local Isar cache.');
-      _syncTimer =
-          Timer.periodic(const Duration(seconds: 30), (_) => _attemptSync());
-      _attemptSync();
-      return;
-    }
 
     // 1. Connectivity Listener (Outgoing Sync)
     _connectivitySubscription =
@@ -42,7 +32,7 @@ class SyncManager {
     });
 
     // 2. Real-Time Timetable Mirror (Incoming Sync)
-    _setupTimetableMirror(smartBoardId);
+    _setupTimetableMirror(classroomId);
 
     // Periodic retry timer for outgoing scans
     _syncTimer =
@@ -51,15 +41,15 @@ class SyncManager {
     _attemptSync();
   }
 
-  void _setupTimetableMirror(String smartBoardId) {
+  void _setupTimetableMirror(String classroomId) {
     _timetableSubscription?.cancel();
 
     Log.i(
-        '📡 [SyncManager] Establishing Real-Time Timetable Mirror for $smartBoardId...');
+        '📡 [SyncManager] Establishing Real-Time Timetable Mirror for $classroomId...');
 
     _timetableSubscription = FirebaseFirestore.instance
         .collection('timetable_slots')
-        .where('classroom_id', isEqualTo: smartBoardId)
+        .where('classroom_id', isEqualTo: classroomId)
         .snapshots()
         .listen((snapshot) async {
       Log.i(

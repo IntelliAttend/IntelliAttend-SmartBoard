@@ -17,6 +17,7 @@ import '../../main.dart';
 import '../../services/api_service.dart';
 import '../../core/platform/hardware_fingerprint_service.dart';
 import '../../core/security/secure_storage_service.dart';
+import '../../core/security/session_secret_vault.dart';
 import '../../core/rate_limiter.dart';
 import '../../models/isar_schemas.dart';
 import '../widgets/glass_container.dart';
@@ -260,43 +261,17 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
 
     _sessionSubscription = deviceRepository.watchActiveSession(widget.registration).listen(
       (sessionData) {
-        if (mounted) {
-          if (sessionData != null) {
-            _resumeFromCachedSession(sessionData);
-          }
+        if (mounted && sessionData != null) {
+          // Live session detected for this room. We intentionally do NOT
+          // auto-resume into QR generation: the session secret lives only
+          // in this process's RAM (SessionSecretVault) and was wiped on
+          // restart. The faculty must re-enter the PIN to regenerate it.
+          // This is the IntelliAttend "RAM-only secret" contract.
+          Log.i('Active session detected; awaiting faculty PIN re-entry.');
         }
       },
       onError: (e) => Log.e('❌ [Idle] Session stream error: $e'),
     );
-  }
-
-  /// Recovery-only path: Resumes a session if the board was already ignited with a PIN
-  /// and the secret is already stored in secure storage (e.g. after a crash).
-  void _resumeFromCachedSession(Map<String, dynamic> data) async {
-    final sessionId = data['session_id']?.toString();
-    if (sessionId == null) return;
-
-    // Only ignite if we already have the secret (meaning the PIN was verified on this board previously)
-    final sessionSecret = await SecureStorageService.getSessionSecret(sessionId);
-
-    if (sessionSecret != null && sessionSecret.isNotEmpty) {
-      final course = data['course_name']?.toString() ?? _bedrockEntry?.courseName ?? 'Active Class';
-      final faculty = data['faculty_name']?.toString() ?? _bedrockEntry?.facultyName ?? 'Professor';
-      
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => AttendanceScreen(
-              sessionId: sessionId,
-              sessionSecret: sessionSecret,
-              capacity: widget.registration.capacity,
-              courseName: course,
-              facultyName: faculty,
-            ),
-          ),
-        );
-      }
-    }
   }
 
   /// Helper to derive the final secret using the hardware fingerprint (Atomic Logic)
@@ -509,7 +484,7 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
         sessionId: sessionId, rosterCount: rosterCount, facultyName: facultyName,
         courseName: courseName, sectionId: sectionId, endTime: TimeSyncService.timeNow.add(const Duration(hours: 1)),
       );
-      await SecureStorageService.storeSessionSecret(sessionId, sessionSecret);
+      SessionSecretVault.put(sessionId, sessionSecret);
 
       if (mounted) {
         Navigator.of(context).pushReplacement(

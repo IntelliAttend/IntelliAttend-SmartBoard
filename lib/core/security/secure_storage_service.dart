@@ -84,16 +84,6 @@ class SecureStorageService {
       _write(_keyRefreshToken, token);
   static Future<String?> getRefreshToken() => _read(_keyRefreshToken);
 
-  static String _sessionSecretKey(String sessionId) =>
-      'session_secret_$sessionId';
-
-  static Future<void> storeSessionSecret(String sessionId, String secret) =>
-      _write(_sessionSecretKey(sessionId), secret);
-  static Future<String?> getSessionSecret(String sessionId) =>
-      _read(_sessionSecretKey(sessionId));
-  static Future<void> clearSessionSecret(String sessionId) =>
-      _delete(_sessionSecretKey(sessionId));
-
   static Future<void> storeIdleTheme(String theme) => _write(_keyIdleTheme, theme);
   static Future<String?> getIdleTheme() => _read(_keyIdleTheme);
 

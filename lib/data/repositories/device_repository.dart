@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:isar/isar.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../models/isar_schemas.dart';
@@ -101,12 +99,6 @@ class DeviceRepository implements IDeviceRepository {
     final registration = await getRegistration();
     if (registration == null) return;
 
-    if (Platform.isWindows) {
-      Log.w(
-          '[DeviceRepository] Firestore timetable sync skipped on Windows; using local cache.');
-      return;
-    }
-
     try {
       final classroomId = registration.classroomId ?? registration.smartBoardId;
       final now = DateTime.now();
@@ -146,10 +138,6 @@ class DeviceRepository implements IDeviceRepository {
     final dayName = _getDayNameString(now);
     final classroomId = registration.classroomId ?? registration.smartBoardId;
 
-    if (Platform.isWindows) {
-      return Stream.fromFuture(getTodayTimeline());
-    }
-
     return FirebaseFirestore.instance
         .collection('timetable_slots')
         .where('classroom_id', isEqualTo: classroomId)
@@ -174,12 +162,9 @@ class DeviceRepository implements IDeviceRepository {
   Stream<Map<String, dynamic>?> watchActiveSession(
       DeviceRegistration registration) {
     final queryId = registration.classroomId ?? registration.smartBoardId;
-    if (Platform.isWindows) {
-      return Stream<Map<String, dynamic>?>.value(null);
-    }
     return FirebaseFirestore.instance
         .collection('ActiveSessions')
-        .where('room_id', isEqualTo: queryId)
+        .where('classroom_id', isEqualTo: queryId)
         .where('status', isEqualTo: 'active')
         .limit(1)
         .snapshots()
@@ -194,9 +179,6 @@ class DeviceRepository implements IDeviceRepository {
 
   @override
   Stream<Map<String, dynamic>?> watchSpecificSession(String sessionId) {
-    if (Platform.isWindows) {
-      return Stream<Map<String, dynamic>?>.value(null);
-    }
     return FirebaseFirestore.instance
         .collection('ActiveSessions')
         .doc(sessionId)
