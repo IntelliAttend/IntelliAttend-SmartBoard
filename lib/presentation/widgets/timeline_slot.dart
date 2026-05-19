@@ -50,14 +50,9 @@ class TimelineSlot extends StatelessWidget {
             ),
             const SizedBox(height: 4),
           ],
-          Icon(
-            _getIconForCourse(entry.courseName),
-            color: color,
-            size: 20,
-          ),
           const SizedBox(height: 4),
           Text(
-            isLive ? "${entry.startTime} (LIVE)" : entry.startTime,
+            "${entry.startTime} – ${entry.endTime}",
             style: TextStyle(
               color: isLive ? color : const Color(0xFF0F172A), // slate-900
               fontSize: 12,
@@ -82,14 +77,5 @@ class TimelineSlot extends StatelessWidget {
     );
   }
 
-  IconData _getIconForCourse(String name) {
-    name = name.toLowerCase();
-    if (name.contains('data structures')) return Icons.sensors;
-    if (name.contains('algorithm')) return Icons.code;
-    if (name.contains('math')) return Icons.functions;
-    if (name.contains('science')) return Icons.science;
-    if (name.contains('history')) return Icons.history_edu;
-    return Icons.schedule;
-  }
 }
 

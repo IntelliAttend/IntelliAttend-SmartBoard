@@ -1,18 +1,24 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/isar_schemas.dart';
+import '../core/security/secure_storage_service.dart';
 import '../core/utils/logger.dart';
 
 class SessionManager {
   static Isar? _isar;
 
-  /// TODO(O9): Upgrade Isar to 3.2+ and pass `encryptKey` here using
-  /// `SecureStorageService.getIsarEncryptKey()` for encrypted local vault.
   static Future<void> init() async {
     if (_isar != null) return;
 
     await _migrateFromOldPath();
+
+    // Pre-generate and persist AES-256 key in OS keychain for future Isar 3.2+
+    // encryption support. Not yet passed to Isar.open() (3.1.0 limitation).
+    // ignore: unused_local_variable
+    final encryptKey = await _loadEncryptionKey();
 
     final dir = await getApplicationSupportDirectory();
     final schemas = [
@@ -49,6 +55,62 @@ class SessionManager {
         Log.e('🚨 [SessionManager] CRITICAL: Fatal Isar Failure: $retryError');
         rethrow;
       }
+    }
+
+    await _backupDeviceRegistration();
+  }
+
+  /// Generates or retrieves the AES-256 Isar encryption key.
+  /// The key is 32 bytes stored as base64 in the OS keychain.
+  static Future<List<int>?> _loadEncryptionKey() async {
+    try {
+      String? storedKey = await SecureStorageService.getIsarEncryptKey();
+      if (storedKey == null) {
+        final key = List<int>.generate(32, (_) => Random.secure().nextInt(256));
+        storedKey = base64Encode(key);
+        await SecureStorageService.storeIsarEncryptKey(storedKey);
+      }
+      final decoded = base64Decode(storedKey);
+      if (decoded.length != 32) {
+        Log.w('⚠️ [SessionManager] Invalid encryption key length, recreating...');
+        final key = List<int>.generate(32, (_) => Random.secure().nextInt(256));
+        final newKey = base64Encode(key);
+        await SecureStorageService.storeIsarEncryptKey(newKey);
+        return key;
+      }
+      return decoded;
+    } catch (e) {
+      Log.w('⚠️ [SessionManager] Encryption key setup failed, proceeding without encryption: $e');
+      return null;
+    }
+  }
+
+  /// Exports [DeviceRegistration] from Isar as JSON to a backup directory.
+  static Future<void> _backupDeviceRegistration() async {
+    try {
+      final registration = await _isar!.deviceRegistrations.where().findFirst();
+      if (registration == null) return;
+
+      final backupDir = Directory(
+        '${Platform.environment['APPDATA'] ?? Platform.environment['HOME'] ?? '.'}/IntelliAttend/backups',
+      );
+      await backupDir.create(recursive: true);
+
+      final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
+      final backupFile = File('${backupDir.path}/device_registration_$timestamp.json');
+      await backupFile.writeAsString(jsonEncode({
+        'smartBoardId': registration.smartBoardId,
+        'classroomId': registration.classroomId,
+        'hardwareId': registration.hardwareId,
+        'roomName': registration.roomName,
+        'building': registration.building,
+        'department': registration.department,
+        'capacity': registration.capacity,
+        'registrationDate': registration.registrationDate.toIso8601String(),
+      }));
+      Log.i('📦 [SessionManager] DeviceRegistration backup saved to ${backupFile.path}');
+    } catch (e) {
+      Log.w('⚠️ [SessionManager] DeviceRegistration backup failed: $e');
     }
   }
 
@@ -136,6 +198,14 @@ class SessionManager {
         await _isar!.activeSessions.put(session);
       });
     }
+  }
+
+  /// Verify-before-navigate: read back a session by ID to confirm teardown.
+  static Future<ActiveSession?> getSession(String sessionId) async {
+    return await _isar!.activeSessions
+        .filter()
+        .sessionIdEqualTo(sessionId)
+        .findFirst();
   }
 
   static Future<void> clearSession(String sessionId) async {

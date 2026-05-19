@@ -1,8 +1,10 @@
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:window_manager/window_manager.dart';
 
 class HardwareFingerprintService {
   // Cached on first call — avoids re-running 3 PowerShell processes on every
@@ -249,11 +251,63 @@ class HardwareFingerprintService {
 
   static Future<void> maximizeBrightness() async {
     if (kIsWeb || !Platform.isWindows) return;
-    await _runSafeCommand('powershell', [
+    final result = await Process.run('powershell', [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      '(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods).WmiSetBrightness(0, 100)',
+      r'$m = Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods -ErrorAction SilentlyContinue; if ($null -ne $m) { $m | ForEach-Object { $_.WmiSetBrightness(0, 100) }; exit 0 } else { Write-Error "No WmiMonitorBrightnessMethods instances found"; exit 1 }',
     ]);
+    if (result.exitCode != 0) {
+      throw Exception(
+        'maximizeBrightness failed (exit ${result.exitCode}): ${result.stderr.toString().trim()}',
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Screen capture prevention (Windows only)
+  //
+  // Uses SetWindowDisplayAffinity via Win32 FFI to block screenshots, screen
+  // recording, and screen sharing of the HWND. WDA_MONITOR makes captured
+  // content appear black/blank.
+  // ---------------------------------------------------------------------------
+
+  static const int _wdaNone = 0x00000000;
+  static const int _wdaMonitor = 0x00000001;
+
+  static DynamicLibrary? _user32;
+  static int Function(int, int)? _setWindowDisplayAffinity;
+
+  static void _ensureScreenCaptureApi() {
+    if (_user32 != null) return;
+    if (kIsWeb || !Platform.isWindows) return;
+    _user32 = DynamicLibrary.open('user32.dll');
+    _setWindowDisplayAffinity = _user32!
+        .lookupFunction<Int32 Function(IntPtr, Uint32), int Function(int, int)>(
+      'SetWindowDisplayAffinity',
+    );
+  }
+
+  /// Prevents the window from being captured in screenshots, recordings, and
+  /// screen sharing. Captured content will appear black/blank.
+  static Future<void> preventScreenCapture() async {
+    if (kIsWeb || !Platform.isWindows) return;
+    _ensureScreenCaptureApi();
+    final hwnd = await windowManager.getId();
+    final result = _setWindowDisplayAffinity!(hwnd, _wdaMonitor);
+    if (result == 0) {
+      throw Exception('SetWindowDisplayAffinity(WDA_MONITOR) failed');
+    }
+  }
+
+  /// Restores normal screen capture behavior for the window.
+  static Future<void> allowScreenCapture() async {
+    if (kIsWeb || !Platform.isWindows) return;
+    _ensureScreenCaptureApi();
+    final hwnd = await windowManager.getId();
+    final result = _setWindowDisplayAffinity!(hwnd, _wdaNone);
+    if (result == 0) {
+      throw Exception('SetWindowDisplayAffinity(WDA_NONE) failed');
+    }
   }
 }

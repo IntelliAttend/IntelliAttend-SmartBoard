@@ -8,12 +8,14 @@ import '../../core/theme/app_theme.dart';
 import '../../services/totp_engine.dart';
 import '../../services/session_manager.dart';
 import '../../services/api_service.dart';
+import '../../services/student_service.dart';
+import '../../core/utils/roll_number_utils.dart';
 import '../../core/platform/kiosk_service.dart';
-import 'idle_screen.dart';
-import '../widgets/glass_container.dart';
 import '../../core/utils/logger.dart';
 import '../../core/config/app_config.dart';
 import '../../main.dart';
+import 'idle_screen.dart';
+import '../widgets/glass_container.dart';
 
 class AttendanceScreen extends StatefulWidget {
   final String sessionId;
@@ -21,16 +23,22 @@ class AttendanceScreen extends StatefulWidget {
   final int capacity;
   final String courseName;
   final String facultyName;
+  final String roomName;
+  final String? sectionId; // Optional: Used to fetch specific student roster
+  final TotpEngine totpEngine; // QR Engine
   final bool isOffline;
   final List<String>? initialVerifiedIds;
 
   const AttendanceScreen({
     super.key,
     required this.sessionId,
-    required this.sessionSecret,
+    this.sessionSecret = '', // Optional: Only needed if creating engine internally
     required this.capacity,
     required this.courseName,
     required this.facultyName,
+    required this.roomName,
+    required this.totpEngine,
+    this.sectionId,
     this.isOffline = false,
     this.initialVerifiedIds,
   });
@@ -44,13 +52,18 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   String _currentQrData = '';
   late AnimationController _progressController;
   Timer? _qrRotationTimer;
+  StreamSubscription<QuerySnapshot>? _attendeesSubscription;
   StreamSubscription<DocumentSnapshot>? _sessionStatusSubscription;
   bool _isSessionEnding = false;
-  bool _qrRotationStopped = false;
+  final bool _qrRotationStopped = false;
   int _presentCount = 0;
-  List<int> _presentSeatIndices = [];
+  Set<int> _presentSeatIndices = {}; // Tracks which seats are green
   int _secondsRemaining = 0; // Loaded from AppConfig on initState
   Timer? _countdownTimer;
+
+  // Student Roster Data (Used for display mapping)
+  List<StudentInfo> _students = [];
+  final Map<String, int> _emailToSeatIndex = {}; // Maps Email -> Seat Index
 
   @override
   void initState() {
@@ -66,11 +79,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
       duration: const Duration(milliseconds: 3500),
     )..repeat();
 
-    _totpEngine = TotpEngine(
-      sessionId: widget.sessionId,
-      sessionSecret: widget.sessionSecret,
-      isOffline: widget.isOffline,
-    );
+    _totpEngine = widget.totpEngine;
     
     _totpEngine.qrStream.listen((token) {
       if (mounted && !_qrRotationStopped) {
@@ -84,7 +93,90 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     // (BUG-2: both could call _handleEndAttendance() simultaneously).
     _startCountdown();
     _listenForSessionEnd();
+    _listenForAttendees();
+    _loadClassRoster(); // Securely load students and map emails to seats
   } // end initState
+
+  /// Loads students and builds a mapping of Email -> Seat Index.
+  /// This allows the board to know which grid box to highlight when the database updates.
+  Future<void> _loadClassRoster() async {
+    if (!mounted) return;
+
+    if (widget.sectionId != null && widget.sectionId!.isNotEmpty) {
+      try {
+        final students = await StudentService().getStudentsBySection(widget.sectionId!);
+        if (mounted && students.isNotEmpty) {
+          setState(() {
+            _students = students;
+            _emailToSeatIndex.clear();
+            // Map emails to indices 0..N
+            for (int i = 0; i < students.length; i++) {
+              final email = students[i].email.trim().toLowerCase();
+              if (email.isNotEmpty) {
+                _emailToSeatIndex[email] = i;
+              }
+            }
+          });
+          Log.i('[Attendance] Loaded ${_students.length} students for display.');
+          return;
+        }
+      } catch (e) {
+        Log.w('[Attendance] Failed to load students, using fallback: $e');
+      }
+    }
+    // Fallback if no sectionId or fetch failed
+    _generateFallbackRoster();
+  }
+
+  void _generateFallbackRoster() {
+    if (mounted) {
+      setState(() {
+        // Fallback to generic seat codes if no student data is available
+        _students = List.generate(widget.capacity, (index) {
+          final code = RollNumberUtils.generateSeatCode(index);
+          return StudentInfo(
+            rollNumber: code,
+            name: 'Seat $code',
+            email: '', // No email in fallback mode
+            sectionId: '',
+            classId: '',
+          );
+        });
+      });
+    }
+  }
+
+  /// Updates the attendance state based *strictly* on database records.
+  /// The Smart Board acts as a display: it trusts the server's verification.
+  void _updateAttendanceFromDatabase(List<QueryDocumentSnapshot> attendeeDocs) {
+    final newIndices = <int>{};
+    
+    for (final doc in attendeeDocs) {
+      final data = doc.data() as Map<String, dynamic>;
+      // The database provides the student's identifier (email)
+      final email = (data['student_id'] ?? '').toString().trim().toLowerCase();
+      if (email.isEmpty) continue;
+
+      // Map the database email to the local UI seat index
+      // This allows us to highlight the correct box in the grid
+      if (_emailToSeatIndex.containsKey(email)) {
+        newIndices.add(_emailToSeatIndex[email]!);
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _presentSeatIndices = newIndices;
+        _presentCount = newIndices.length;
+      });
+
+      // v6.4: AUTO-EXIT on Full Attendance
+      if (_presentCount >= widget.capacity && !_isSessionEnding) {
+        Log.i('✅ [Attendance] Full capacity reached ($_presentCount/${widget.capacity}). Auto-completing session.');
+        WidgetsBinding.instance.addPostFrameCallback((_) => _handleEndAttendance());
+      }
+    }
+  }
 
   void _startCountdown() {
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -107,8 +199,37 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     return "$mins:$secs";
   }
 
+  /// Listens to the attendees subcollection via Firebase .snapshots().
+  /// This is the CORE real-time attendance driver — when a student scans
+  /// the QR, the server verifies and writes to this collection, which
+  /// pushes the update here immediately. Billed only on document changes.
+  void _listenForAttendees() {
+    if (Firebase.apps.isEmpty) {
+      Log.w('[Attendance] Firebase not initialized — attendance tracking unavailable.');
+      return;
+    }
+
+    _attendeesSubscription = FirebaseFirestore.instance
+        .collection('ActiveSessions')
+        .doc(widget.sessionId)
+        .collection('attendees')
+        .orderBy('timestamp', descending: true)
+        .snapshots()
+        .listen((snapshot) {
+      if (!mounted) return;
+
+      final attendeeDocs = snapshot.docs;
+      _updateAttendanceFromDatabase(attendeeDocs);
+    }, onError: (e) {
+      Log.e('❌ [Attendance] Attendees stream error: $e');
+    });
+  }
+
   void _listenForSessionEnd() {
-    if (Firebase.apps.isEmpty) return;
+    if (Firebase.apps.isEmpty) {
+      Log.w('[Attendance] Firebase not initialized — session end monitoring unavailable.');
+      return;
+    }
     _sessionStatusSubscription = FirebaseFirestore.instance
         .collection('ActiveSessions')
         .doc(widget.sessionId)
@@ -119,6 +240,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
       if (data?['status'] == 'ended' && !_isSessionEnding) {
         _handleSessionEnd();
       }
+    }, onError: (e) {
+      Log.e('❌ [Attendance] Session status stream error: $e');
     });
   }
 
@@ -129,8 +252,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     _countdownTimer?.cancel();
     _totpEngine.stop();
     _progressController.stop();
-    // LOGIC-3 FIX: Server-pushed session end must also restore kiosk to soft mode.
-    KioskService.setMode(KioskMode.soft);
+    // LOGIC-3 FIX: Server-pushed session end must also restore kiosk to fullscreen.
+    KioskService.setMode(KioskMode.fullscreen);
     if (mounted) {
       SessionManager.clearSession(widget.sessionId);
       globalDeviceRepository.getRegistration().then((registration) {
@@ -230,6 +353,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   void dispose() {
     _qrRotationTimer?.cancel();
     _countdownTimer?.cancel();
+    _attendeesSubscription?.cancel();
     _sessionStatusSubscription?.cancel();
     _totpEngine.stop();
     _progressController.dispose();
@@ -243,8 +367,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     if (_isSessionEnding) return;
     _isSessionEnding = true;
 
-    // v6.4: Revert to Soft Mode (restores brightness, allows minimize)
-    KioskService.setMode(KioskMode.soft);
+    // v6.4: Revert to Fullscreen Mode (restores brightness, allows minimize)
+    KioskService.setMode(KioskMode.fullscreen);
 
     // Navigate immediately to the idle screen for a responsive feel
     final registration = await globalDeviceRepository.getRegistration();
@@ -286,48 +410,20 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
             children: [
           _buildHeader(isDark),
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: (Firebase.apps.isNotEmpty)
-                  ? FirebaseFirestore.instance
-                      .collection('ActiveSessions')
-                      .doc(widget.sessionId)
-                      .collection('attendees')
-                      .orderBy('timestamp', descending: true)
-                      .snapshots()
-                  : const Stream.empty(),
-              builder: (context, snapshot) {
-                final attendeeDocs = snapshot.data?.docs ?? [];
-                _presentCount = attendeeDocs.length;
-                
-                // v6.4: AUTO-EXIT on Full Attendance
-                if (_presentCount >= widget.capacity && !_isSessionEnding) {
-                  Log.i('✅ [Attendance] Full capacity reached ($_presentCount/${widget.capacity}). Auto-completing session.');
-                  WidgetsBinding.instance.addPostFrameCallback((_) => _handleEndAttendance());
-                }
+            child: Row(
+              children: [
+                // LEFT: Seating Grid (40%)
+                Expanded(
+                  flex: 4,
+                  child: _buildSeatingSection(isDark),
+                ),
 
-                _presentSeatIndices = attendeeDocs.map((doc) {
-                  final data = doc.data() as Map<String, dynamic>;
-                  final id = data['student_id']?.toString() ?? '';
-                  final match = RegExp(r'\d+').firstMatch(id);
-                  return int.tryParse(match?.group(0) ?? '') ?? 0;
-                }).where((i) => i > 0 && i <= widget.capacity).toList();
-
-                return Row(
-                  children: [
-                    // LEFT: Seating Grid (40%)
-                    Expanded(
-                      flex: 4,
-                      child: _buildSeatingSection(isDark),
-                    ),
-                    
-                    // RIGHT: QR & Timer (60%)
-                    Expanded(
-                      flex: 6,
-                      child: _buildQrArena(isDark, size),
-                    ),
-                  ],
-                );
-              },
+                // RIGHT: QR & Timer (60%)
+                Expanded(
+                  flex: 6,
+                  child: _buildQrArena(isDark, size),
+                ),
+              ],
             ),
           ),
           _buildFooter(isDark),
@@ -436,8 +532,15 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
               ),
               itemCount: widget.capacity,
               itemBuilder: (context, index) {
-                final seatNum = index + 1;
-                final isPresent = _presentSeatIndices.contains(seatNum);
+                // Determine if this seat is present
+                final isPresent = _presentSeatIndices.contains(index);
+                
+                // Get display info for this seat
+                final isLoaded = index < _students.length;
+                final displayLabel = isLoaded 
+                    ? _students[index].rollNumber 
+                    : RollNumberUtils.generateSeatCode(index);
+                
                 return Container(
                   decoration: BoxDecoration(
                     color: isPresent 
@@ -452,14 +555,17 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                     ),
                   ),
                   child: Center(
-                    child: Text(
-                      seatNum.toString().padLeft(2, '0'),
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: isPresent 
-                            ? (isDark ? AppColors.successLime : const Color(0xFF1A2E05))
-                            : (isDark ? Colors.white24 : const Color(0xFF94A3B8)),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        displayLabel,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: isPresent 
+                              ? (isDark ? AppColors.successLime : const Color(0xFF1A2E05))
+                              : (isDark ? Colors.white24 : const Color(0xFF94A3B8)),
+                        ),
                       ),
                     ),
                   ),

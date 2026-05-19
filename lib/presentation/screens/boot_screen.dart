@@ -1,18 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../core/config/app_config.dart';
 import '../../core/theme/app_theme.dart';
 import 'registration_screen.dart';
 import 'idle_screen.dart';
 import 'settings_screen.dart';
 import '../../data/repositories/device_repository.dart';
 import '../../services/api_service.dart';
-import '../../core/security/secure_storage_service.dart';
 import '../../core/utils/logger.dart';
 import '../../models/isar_schemas.dart';
+import '../../core/security/firebase_rest_auth.dart';
 
 class BootScreen extends StatefulWidget {
-  final bool isDegraded;
-  const BootScreen({super.key, this.isDegraded = false});
+  const BootScreen({super.key});
 
   @override
   State<BootScreen> createState() => _BootScreenState();
@@ -22,10 +22,22 @@ class _BootScreenState extends State<BootScreen> {
   final String _statusMessage = 'INITIALIZING SYSTEM...';
   String? _errorMessage;
 
+  DeviceRegistration? _registration;
+  bool _needsReauth = false;
+  bool _isReauthenticating = false;
+  String? _reauthError;
+  final TextEditingController _passwordController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
     _performHandshake();
+  }
+
+  @override
+  void dispose() {
+    _passwordController.dispose();
+    super.dispose();
   }
 
   Future<void> _performHandshake() async {
@@ -47,32 +59,46 @@ class _BootScreenState extends State<BootScreen> {
         return;
       }
 
-      // Step 2: Token validity check — if the device was logged-out or the
-      // access/refresh tokens are missing, treat it as unregistered and send
-      // the admin back to the Registration screen. This prevents landing on
-      // the Idle screen with no valid server identity.
-      final hasToken = await SecureStorageService.getRefreshToken() != null;
+      _registration = registration;
+
+      // Step 2: Check Firebase auth tokens
+      final hasToken = await FirebaseRestAuth.hasValidToken();
       if (!hasToken) {
-        Log.w('[Boot] Registration record found but no auth token. Forcing re-registration.');
-        // Clear the stale Isar entry so next boot starts clean.
-        await deviceRepository.clearRegistration();
+        Log.w('[Boot] No Firebase auth tokens found. Showing login prompt.');
         if (mounted) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (context) => const RegistrationScreen()),
-          );
+          setState(() => _needsReauth = true);
         }
         return;
+      }
+
+      // Step 2.5: Server-side registration canary
+      // Validates the board's Firestore document exists via GET /api/v1/board/ready
+      // (which has a `Depends(BoardService.get_board_data)` auth guard).
+      try {
+        await ApiService.syncReadyCheck();
+        Log.i('[Boot] Server-side registration confirmed for ${registration.smartBoardId}.');
+      } on ApiException catch (e) {
+        if (e.statusCode == 403) {
+          Log.e('[Boot] Board not registered on server (403). Blocking transition.');
+          if (mounted) {
+            setState(() => _errorMessage = 'BOARD NOT REGISTERED\nThis device is not registered in the system.\nPlease contact IT Department.');
+          }
+          return;
+        }
+        Log.w('[Boot] Canary failed with ${e.statusCode}: ${e.userMessage}. Proceeding degraded.');
+      } catch (e) {
+        Log.w('[Boot] Canary network error: $e. Proceeding degraded.');
       }
 
       // Step 3: Instant UI Transition — local identity is valid.
       Log.i('[Boot] Local identity confirmed for ${registration.smartBoardId}. Entering Idle state.');
       if (mounted) {
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => IdleScreen(registration: registration, isDegraded: widget.isDegraded)),
+          MaterialPageRoute(builder: (context) => IdleScreen(registration: registration)),
         );
       }
 
-      // Step 3: Background Resynchronization
+      // Step 4: Background Resynchronization
       // We perform network tasks asynchronously to ensure zero-lag startup
       _backgroundSync(deviceRepository);
 
@@ -81,6 +107,46 @@ class _BootScreenState extends State<BootScreen> {
       if (mounted) {
         setState(() => _errorMessage = 'SYSTEM INITIALIZATION FAILED\n$e');
       }
+    }
+  }
+
+  Future<void> _reauthenticate() async {
+    final password = _passwordController.text.trim();
+    if (password.isEmpty) return;
+
+    setState(() {
+      _isReauthenticating = true;
+      _reauthError = null;
+    });
+
+    try {
+      final boardId = _registration!.smartBoardId;
+      final email = AppConfig.boardIdToEmail(boardId);
+
+      await FirebaseRestAuth.signInWithPassword(email, password);
+      Log.i('[Boot] Re-authentication successful. Proceeding to IdleScreen.');
+
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => IdleScreen(
+              registration: _registration!,
+            ),
+          ),
+        );
+      }
+    } on FirebaseRestAuthException catch (e) {
+      setState(() {
+        _isReauthenticating = false;
+        _reauthError = e.code == 'INVALID_PASSWORD'
+            ? 'Incorrect password'
+            : 'Authentication failed: ${e.code}';
+      });
+    } catch (e) {
+      setState(() {
+        _isReauthenticating = false;
+        _reauthError = 'Connection error. Check network.';
+      });
     }
   }
 
@@ -188,23 +254,30 @@ class _BootScreenState extends State<BootScreen> {
                         ),
                   ),
                   const SizedBox(height: 16),
-                  Text(
-                    _statusMessage,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          color: AppColors.textSecondaryLight,
-                          letterSpacing: 2,
-                          fontWeight: FontWeight.w500,
-                        ),
-                  ),
-                  const SizedBox(height: 64),
-                  const SizedBox(
-                    width: 200,
-                    child: LinearProgressIndicator(
-                      backgroundColor: Colors.black12,
-                      valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
-                      minHeight: 2,
+                  if (!_needsReauth) ...[
+                    Text(
+                      _statusMessage,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            color: AppColors.textSecondaryLight,
+                            letterSpacing: 2,
+                            fontWeight: FontWeight.w500,
+                          ),
                     ),
-                  ),
+                    const SizedBox(height: 64),
+                    const SizedBox(
+                      width: 200,
+                      child: LinearProgressIndicator(
+                        backgroundColor: Colors.black12,
+                        valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                        minHeight: 2,
+                      ),
+                    ),
+                  ],
+                  if (_needsReauth)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 48),
+                      child: _buildReauthForm(),
+                    ),
                   if (_errorMessage != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 48),
@@ -230,6 +303,71 @@ class _BootScreenState extends State<BootScreen> {
     );
   }
 
+  Widget _buildReauthForm() {
+    final boardId = _registration?.smartBoardId ?? 'UNKNOWN';
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 400),
+      padding: const EdgeInsets.all(32),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 30, offset: const Offset(0, 10)),
+        ],
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.lock_outline_rounded, color: AppColors.primary, size: 48),
+          const SizedBox(height: 16),
+          const Text(
+            'SESSION EXPIRED',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, letterSpacing: 2, color: Color(0xFF1E293B)),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Enter your credentials to re-authenticate\nBoard: $boardId',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Color(0xFF64748B), fontSize: 13, height: 1.5),
+          ),
+          const SizedBox(height: 24),
+          TextField(
+            controller: _passwordController,
+            obscureText: true,
+            decoration: InputDecoration(
+              labelText: 'Password',
+              errorText: _reauthError,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              prefixIcon: const Icon(Icons.key),
+            ),
+            onChanged: (_) {
+              if (_reauthError != null) setState(() => _reauthError = null);
+            },
+            onSubmitted: (_) => _reauthenticate(),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton(
+              onPressed: _isReauthenticating ? null : _reauthenticate,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                textStyle: const TextStyle(fontWeight: FontWeight.w700, letterSpacing: 1),
+              ),
+              child: _isReauthenticating
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('LOGIN'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildErrorDisplay() {
     return Container(
       constraints: const BoxConstraints(maxWidth: 600),
@@ -238,9 +376,9 @@ class _BootScreenState extends State<BootScreen> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 30, offset: const Offset(0, 10)),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 30, offset: const Offset(0, 10)),
         ],
-        border: Border.all(color: AppColors.error.withOpacity(0.2)),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.2)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -347,10 +485,12 @@ class _BootScreenState extends State<BootScreen> {
                   // We continue with local wipe anyway to ensure device is cleared
                 }
 
-                await context.read<IDeviceRepository>().clearRegistration();
+                final repo = context.read<IDeviceRepository>();
+                final nav = Navigator.of(context);
+                await repo.clearRegistration();
                 
                 if (mounted) {
-                  Navigator.of(context).pushReplacement(
+                  nav.pushReplacement(
                     MaterialPageRoute(builder: (context) => const RegistrationScreen()),
                   );
                 }

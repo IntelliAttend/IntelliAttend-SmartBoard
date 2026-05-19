@@ -18,13 +18,15 @@ from services.board_service import BoardService, HeartbeatService
 from services.session_service import SessionService
 from services.active_sessions_service import ActiveSessionsService
 from services.auth_service import AuthService
+from services.cache_service import CacheService
 from models.board_auth_schema import (
     TelemetryPayload, 
     SessionInitiateRequest, 
     SessionCreateRequest,
     DeviceRegisterInitiateRequest,
     DeviceRegisterVerifyRequest,
-    DeviceRegisterCompleteRequest
+    DeviceRegisterCompleteRequest,
+    VaultSyncRequest,
 )
 
 # Configure Logging (v6.0 Measurement Requirement)
@@ -88,43 +90,40 @@ async def _initiate_session_logic(request: SessionInitiateRequest, board_data: d
         logger.warning(f"⚠️ [TrustEngine] Offline Fallback detected for device {device_id}. Loosening timestamp validation.")
         otp = otp.replace("_offline_generated", "")
 
-    # v6.2: Atomic Ignition - Generate and return the secret key
-    session_secret = secrets.token_hex(16)
-    
     session = await SessionService.find_session_by_otp(otp, db)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found or OTP invalid")
     if "error" in session:
         raise HTTPException(status_code=400, detail=session["error"])
 
-    # Atomic Actions: Mark Faculty Attendance + Store Secret
+    # Atomic Ignition: Activate session — no full secret stored on server.
+    # Full secret derived on-device via split-knowledge (half1 + hardware fingerprint).
     try:
         await SessionService.ignite_session_atomic(
             session_id=session["session_id"],
-            secret=session_secret,
             db=db
         )
     except Exception as e:
         logger.error(f"❌ [Atomic] Ignition failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to ignite session")
 
+    # Strict OTP Protocol: delete OTP from cache immediately after use (single-use)
+    await CacheService.delete(SessionService._otp_cache_key(otp))
+
     return {
         "status": "success",
         "data": {
             "session_id": session["session_id"],
-            "session_secret": session_secret,
+            "session_secret_half1": session.get("session_secret_half1"),
             "faculty_name": session.get("faculty_name", "Professor"),
             "course_name": session.get("course_name", "Active Class"),
             "roster_count": session.get("roster_count", 0)
         }
     }
 
-# --- Legacy & Heartbeat Routes ---
-@app.post("/api/v1/device/heartbeat")
-async def board_heartbeat(
-    request: HeartbeatRequest,
-    board_data: dict = Depends(BoardService.get_board_data(db)),
-):
+# --- Heartbeat (shared between two path aliases) ---
+
+async def _handle_heartbeat(request: HeartbeatRequest, board_data: dict) -> dict:
     device_id = board_data.get("device_id")
     if db:
         db.collection("board_heartbeats").document(device_id).set({
@@ -136,6 +135,13 @@ async def board_heartbeat(
             "timestamp_ms": request.timestamp_ms
         })
     return {"status": "ok", "device_id": device_id}
+
+@app.post("/api/v1/device/heartbeat")
+async def board_heartbeat_device(
+    request: HeartbeatRequest,
+    board_data: dict = Depends(BoardService.get_board_data(db)),
+):
+    return await _handle_heartbeat(request, board_data)
 
 @app.post("/v1/board/session/initiate")
 async def initiate_session_legacy(
@@ -156,8 +162,17 @@ async def get_server_time():
 
 @api_router.get("/ready")
 async def board_ready(board_data: dict = Depends(BoardService.get_board_data(db))):
-    """v6.1 Phase 3: Silent Health Check to warm up TCP connection."""
-    return {"status": "ready", "timestamp": datetime.now(timezone.utc).isoformat()}
+    """Boot canary — confirms board is registered in smart_boards collection."""
+    board_id = board_data.get("smart_board_id") or board_data.get("board_id") or board_data.get("device_id", "unknown")
+    return {"status": "registered", "board_id": board_id}
+
+@api_router.post("/heartbeat")
+async def board_heartbeat(
+    request: HeartbeatRequest,
+    board_data: dict = Depends(BoardService.get_board_data(db)),
+):
+    """Alias at /api/v1/board/heartbeat (canonical: /api/v1/device/heartbeat)."""
+    return await _handle_heartbeat(request, board_data)
 
 @api_router.get("/preflight")
 async def get_preflight(
@@ -242,13 +257,36 @@ async def sync_context(board_data: dict = Depends(BoardService.get_board_data(db
 async def initiate_session_api(request: SessionInitiateRequest, board_data: dict = Depends(BoardService.get_board_data(db))):
     return await _initiate_session_logic(request, board_data)
 
+@api_router.post("/session/terminate")
+async def terminate_session():
+    return {"status": "success"}
+
 @api_router.post("/session/attendance/record-live")
 async def record_attendance():
     return {"status": "success"}
 
-@api_router.post("/session/terminate")
-async def terminate_session():
-    return {"status": "success"}
+@api_router.post("/sync/vault")
+async def sync_vault(
+    request: VaultSyncRequest,
+    board_data: dict = Depends(BoardService.get_board_data(db)),
+):
+    """Flush offline attendance scans from the board's local Isar vault."""
+    if db:
+        batch = db.batch()
+        vault_ref = db.collection("attendance_vault")
+        for scan in request.queued_scans:
+            doc_ref = vault_ref.document()
+            batch.set(doc_ref, {
+                "session_id": request.session_id,
+                "student_id": scan.student_id,
+                "qr_payload": scan.qr_payload,
+                "timestamp": scan.timestamp,
+                "synced_at": firestore.SERVER_TIMESTAMP,
+                "board_id": board_data.get("device_id", "unknown"),
+            })
+        batch.commit()
+        logger.info(f"📤 [VaultSync] Synced {len(request.queued_scans)} scans for session {request.session_id}")
+    return {"status": "success", "synced_count": len(request.queued_scans)}
 
 # --- Registration API Router (api/v1/device/register) ---
 auth_router = APIRouter(prefix="/api/v1/device/register")

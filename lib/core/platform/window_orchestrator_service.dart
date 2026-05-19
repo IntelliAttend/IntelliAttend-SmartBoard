@@ -3,6 +3,7 @@ import 'package:window_manager/window_manager.dart';
 import 'kiosk_service.dart';
 import 'notification_service.dart';
 import '../../services/time_sync_service.dart';
+import '../../services/firestore_rest_client.dart';
 import '../utils/logger.dart';
 import '../../main.dart';
 
@@ -13,12 +14,19 @@ class WindowOrchestratorService {
 
   Timer? _monitorTimer;
 
+  /// Guards against timer stacking: if a tick is still running when the next
+  /// 60s interval fires (e.g. due to slow DB queries over poor Wi-Fi), the
+  /// overlapping tick is silently dropped. Two concurrent setMode calls would
+  /// crash the Flutter engine on Windows.
+  bool _isTickRunning = false;
+
   DateTime _lastTickDate = DateTime(0);
   bool _isFirstClassPreBootDone = false;
 
   final Set<String> _t3FiredSlots = {};
   final Set<String> _t0FiredSlots = {};
   final Set<String> _backPressureFiredSlots = {};
+  final Set<String> _endOfClassFiredSlots = {};
 
   void start() {
     _monitorTimer?.cancel();
@@ -32,6 +40,8 @@ class WindowOrchestratorService {
   }
 
   Future<void> _tick() async {
+    if (_isTickRunning) return;
+    _isTickRunning = true;
     try {
       final now = TimeSyncService.timeNow;
 
@@ -43,6 +53,7 @@ class WindowOrchestratorService {
         _t3FiredSlots.clear();
         _t0FiredSlots.clear();
         _backPressureFiredSlots.clear();
+        _endOfClassFiredSlots.clear();
         _lastTickDate = now;
       }
 
@@ -108,8 +119,54 @@ class WindowOrchestratorService {
         }
       }
 
+      if (currentSlot != null) {
+        final slotEnd = _parseTime(currentSlot.endTime, now);
+        final minToEnd = slotEnd.difference(now).inMinutes;
+        final endKey = '${currentSlot.slotId}_end';
+
+        if (minToEnd <= 5 && minToEnd > 0 && !_endOfClassFiredSlots.contains(endKey)) {
+          _endOfClassFiredSlots.add(endKey);
+          try {
+            final registration = await globalDeviceRepository.getRegistration();
+            if (registration != null) {
+              final boardId = registration.smartBoardId;
+              final activeSessions = await FirestoreRestClient.runQuery(
+                collection: 'ActiveSessions',
+                where: {'smart_board_id': boardId, 'status': 'active'},
+                limit: 1,
+              );
+
+              bool attendeeFound = false;
+              if (activeSessions.isNotEmpty) {
+                final sessionId = activeSessions.first['__id']?.toString();
+                if (sessionId != null) {
+                  final attendees = await FirestoreRestClient.runQuery(
+                    collection: 'attendees',
+                    where: {'session_id': sessionId},
+                    limit: 1,
+                  );
+                  attendeeFound = attendees.isNotEmpty;
+                }
+              }
+
+              if (!attendeeFound) {
+                Log.w('🚨 [Orchestrator] Class ending in $minToEnd min — No attendance taken. Forcing full-screen.');
+                await KioskService.setMode(KioskMode.locked);
+                await NotificationService.showWarning(
+                  'Attendance Required',
+                  '"${currentSlot.courseName}" ends in ~$minToEnd minutes. Please take attendance now.',
+                );
+              }
+            }
+          } catch (e) {
+            Log.w('[Orchestrator] End-of-class check failed: $e');
+          }
+        }
+      }
     } catch (e) {
       Log.e('❌ [Orchestrator] Tick failed: $e');
+    } finally {
+      _isTickRunning = false;
     }
   }
 

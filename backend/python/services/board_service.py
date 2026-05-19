@@ -15,7 +15,7 @@ class BoardService:
             if not x_device_id:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Hardware Identity Breach: X-Device-ID missing"
+                    detail="AUTH_FAILED: Hardware Identity Breach - X-Device-ID missing"
                 )
             if db:
                 boards = db.collection(cls.COLLECTION).where("device_id", "==", x_device_id).limit(1).get()
@@ -25,7 +25,7 @@ class BoardService:
                     if not doc.exists:
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
-                            detail="Unregistered Hardware Signature"
+                            detail="BOARD_NOT_FOUND: Board not registered in smart_boards collection"
                         )
                     board_data = doc.to_dict()
                     if "board_id" in board_data:

@@ -8,12 +8,15 @@ class SecureStorageService {
   static const String _keyAccessToken = 'access_token';
   static const String _keyTokenExpiry = 'token_expiry';
   static const String _keyClockSkew = 'clock_skew_ms';
+  static const String _keyClockSkewTimestamp = 'clock_skew_synced_at';
   static const String _keyIdleTheme = 'idle_break_theme';
   static const String _keyRegToken = 'registration_token';
   static const String _keyIsarEncrypt = 'isar_encrypt_key';
+  static const String _keyBoardEmail = 'board_email';
+  static const String _keyBoardPassword = 'board_password';
 
   static const _secure = FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+    aOptions: AndroidOptions(),
     iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
     mOptions: MacOsOptions(accessibility: KeychainAccessibility.first_unlock),
   );
@@ -94,6 +97,13 @@ class SecureStorageService {
     return val != null ? int.tryParse(val) : null;
   }
 
+  static Future<void> storeClockSkewTimestamp(int timestampMs) =>
+      _write(_keyClockSkewTimestamp, timestampMs.toString());
+  static Future<int?> getClockSkewTimestamp() async {
+    final val = await _read(_keyClockSkewTimestamp);
+    return val != null ? int.tryParse(val) : null;
+  }
+
   static Future<void> storeRegistrationToken(String token) => _write(_keyRegToken, token);
   static Future<String?> getRegistrationToken() => _read(_keyRegToken);
   static Future<void> clearRegistrationToken() => _delete(_keyRegToken);
@@ -101,13 +111,33 @@ class SecureStorageService {
   static Future<void> storeIsarEncryptKey(String key) => _write(_keyIsarEncrypt, key);
   static Future<String?> getIsarEncryptKey() => _read(_keyIsarEncrypt);
 
+  // Board Firebase credentials — stored after successful registration so the
+  // Firebase plugin can sign in on subsequent boots and use .snapshots() streams.
+  static Future<void> storeBoardCredentials(String email, String password) async {
+    await _write(_keyBoardEmail, email);
+    await _write(_keyBoardPassword, password);
+    Log.i('[SecureStorage] Board credentials stored for plugin auth.');
+  }
+
+  static Future<String?> getBoardEmail() => _read(_keyBoardEmail);
+  static Future<String?> getBoardPassword() => _read(_keyBoardPassword);
+
+  static Future<void> clearBoardCredentials() async {
+    await _delete(_keyBoardEmail);
+    await _delete(_keyBoardPassword);
+  }
+
   static Future<void> clearAll() async {
     await _delete(_keyApiKey);
     await _delete(_keyAccessToken);
     await _delete(_keyRefreshToken);
     await _delete(_keyTokenExpiry);
     await _delete(_keyClockSkew);
+    await _delete(_keyClockSkewTimestamp);
     await _delete(_keyRegToken);
     await _delete(_keyIdleTheme);
+    await _delete(_keyIsarEncrypt);
+    await _delete(_keyBoardEmail);
+    await _delete(_keyBoardPassword);
   }
 }

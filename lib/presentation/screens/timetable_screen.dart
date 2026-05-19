@@ -10,7 +10,6 @@ class TimetableScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     final currentDayIdx = DateTime.now().weekday - 1;
 
     return DefaultTabController(
@@ -28,7 +27,7 @@ class TimetableScreen extends StatelessWidget {
             indicatorColor: AppColors.primaryTeal,
             labelColor: AppColors.primaryTeal,
             unselectedLabelColor: Colors.grey,
-            tabs: days.map((day) => Tab(text: day.toUpperCase())).toList(),
+            tabs: dayNames.map((day) => Tab(text: day.toUpperCase())).toList(),
           ),
         ),
         body: TabBarView(

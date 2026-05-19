@@ -53,6 +53,11 @@ class QueuedScan {
   late DateTime scanTimestamp;
 }
 
+/// Maps Isar dayOfWeek (1-7) to human-readable names.
+const List<String> dayNames = [
+  'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
+];
+
 @collection
 class TimetableEntry {
   Id id = Isar.autoIncrement;
@@ -67,5 +72,5 @@ class TimetableEntry {
   late String courseName;
   late String facultyName;
   late String sectionId;
-  late String slotId;      // Document ID from Firestore
+  String slotId = '';      // Document ID from Firestore
 }

@@ -13,6 +13,7 @@ dependencies:
   provider: ^6.1.1
   google_fonts: ^8.1.0
   qr_flutter: ^4.1.0
+  qr: ^3.0.2
   video_player: ^2.9.1
   
   # Networking
@@ -29,9 +30,16 @@ dependencies:
   flutter_secure_storage: ^10.1.0
   shared_preferences: ^2.2.2
   
-  # Firebase
-  firebase_core: ^4.7.0
-  cloud_firestore: ^6.3.0
+  # Firebase plugins removed.
+  # - firebase_core / firebase_auth / cloud_firestore native Windows
+  #   integrations have a threading bug that calls abort() in the VC++
+  #   runtime when AuthStateListener / IdTokenListener callbacks fire on
+  #   a worker thread. Replaced by:
+  #     - lib/core/security/firebase_rest_auth.dart  (Identity Toolkit +
+  #         Secure Token API over HTTPS)
+  #     - lib/services/firestore_rest_client.dart    (Firestore REST API)
+  #     - lib/services/realtime_stream_service.dart  (REST polling + SSE-
+  #         ready broadcast streams)
 
   # Environment Variables
   flutter_dotenv: ^6.0.1
@@ -39,7 +47,11 @@ dependencies:
   # Window Management
   window_manager: ^0.5.1
   screen_retriever: ^0.2.0
-  screen_brightness: ^2.1.7
+  # screen_brightness removed: unsupported on Windows desktop monitors
+  # (the plugin probes WMI on every app launch and floods logs with
+  # "Problem getting monitor brightness"). Brightness control is not a
+  # requirement for the kiosk; QR codes are rendered at full intensity
+  # by their widget regardless of OS brightness.
   
   # Notifications
   flutter_local_notifications: ^21.0.0
@@ -58,7 +70,13 @@ dependencies:
   device_info_plus: ^12.4.0
   package_info_plus: ^9.0.1
   web_socket_channel: ^3.0.3
-  firebase_auth: ^6.4.0
+  firebase_core: ^4.9.0
+  firebase_auth: ^6.5.1
+  cloud_firestore: ^6.4.1
+  # firebase_auth removed — Windows C++ plugin calls abort() when its
+  # AuthStateListener / IdTokenListener callbacks fire on a worker thread.
+  # Replaced by lib/core/security/firebase_rest_auth.dart which talks to
+  # Identity Toolkit + Secure Token API directly over HTTPS.
 
 dev_dependencies:
   flutter_test:

@@ -4310,8 +4310,13 @@ const TimetableEntrySchema = CollectionSchema(
       name: r'sectionId',
       type: IsarType.string,
     ),
-    r'startTime': PropertySchema(
+    r'slotId': PropertySchema(
       id: 5,
+      name: r'slotId',
+      type: IsarType.string,
+    ),
+    r'startTime': PropertySchema(
+      id: 6,
       name: r'startTime',
       type: IsarType.string,
     )
@@ -4367,6 +4372,7 @@ int _timetableEntryEstimateSize(
   bytesCount += 3 + object.endTime.length * 3;
   bytesCount += 3 + object.facultyName.length * 3;
   bytesCount += 3 + object.sectionId.length * 3;
+  bytesCount += 3 + object.slotId.length * 3;
   bytesCount += 3 + object.startTime.length * 3;
   return bytesCount;
 }
@@ -4382,7 +4388,8 @@ void _timetableEntrySerialize(
   writer.writeString(offsets[2], object.endTime);
   writer.writeString(offsets[3], object.facultyName);
   writer.writeString(offsets[4], object.sectionId);
-  writer.writeString(offsets[5], object.startTime);
+  writer.writeString(offsets[5], object.slotId);
+  writer.writeString(offsets[6], object.startTime);
 }
 
 TimetableEntry _timetableEntryDeserialize(
@@ -4398,7 +4405,8 @@ TimetableEntry _timetableEntryDeserialize(
   object.facultyName = reader.readString(offsets[3]);
   object.id = id;
   object.sectionId = reader.readString(offsets[4]);
-  object.startTime = reader.readString(offsets[5]);
+  object.slotId = reader.readString(offsets[5]);
+  object.startTime = reader.readString(offsets[6]);
   return object;
 }
 
@@ -4420,6 +4428,8 @@ P _timetableEntryDeserializeProp<P>(
     case 4:
       return (reader.readString(offset)) as P;
     case 5:
+      return (reader.readString(offset)) as P;
+    case 6:
       return (reader.readString(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -5324,6 +5334,142 @@ extension TimetableEntryQueryFilter
   }
 
   QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      slotIdEqualTo(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      slotIdGreaterThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      slotIdLessThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      slotIdBetween(
+    String lower,
+    String upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'slotId',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      slotIdStartsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.startsWith(
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      slotIdEndsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.endsWith(
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      slotIdContains(String value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.contains(
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      slotIdMatches(String pattern, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.matches(
+        property: r'slotId',
+        wildcard: pattern,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      slotIdIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'slotId',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
+      slotIdIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        property: r'slotId',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterFilterCondition>
       startTimeEqualTo(
     String value, {
     bool caseSensitive = true,
@@ -5535,6 +5681,19 @@ extension TimetableEntryQuerySortBy
     });
   }
 
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterSortBy> sortBySlotId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'slotId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterSortBy>
+      sortBySlotIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'slotId', Sort.desc);
+    });
+  }
+
   QueryBuilder<TimetableEntry, TimetableEntry, QAfterSortBy> sortByStartTime() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'startTime', Sort.asc);
@@ -5630,6 +5789,19 @@ extension TimetableEntryQuerySortThenBy
     });
   }
 
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterSortBy> thenBySlotId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'slotId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<TimetableEntry, TimetableEntry, QAfterSortBy>
+      thenBySlotIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'slotId', Sort.desc);
+    });
+  }
+
   QueryBuilder<TimetableEntry, TimetableEntry, QAfterSortBy> thenByStartTime() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'startTime', Sort.asc);
@@ -5681,6 +5853,13 @@ extension TimetableEntryQueryWhereDistinct
     });
   }
 
+  QueryBuilder<TimetableEntry, TimetableEntry, QDistinct> distinctBySlotId(
+      {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'slotId', caseSensitive: caseSensitive);
+    });
+  }
+
   QueryBuilder<TimetableEntry, TimetableEntry, QDistinct> distinctByStartTime(
       {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
@@ -5724,6 +5903,12 @@ extension TimetableEntryQueryProperty
   QueryBuilder<TimetableEntry, String, QQueryOperations> sectionIdProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'sectionId');
+    });
+  }
+
+  QueryBuilder<TimetableEntry, String, QQueryOperations> slotIdProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'slotId');
     });
   }
 

@@ -4,15 +4,17 @@ import 'dart:io';
 import 'package:uuid/uuid.dart';
 
 import 'package:http/http.dart' as http;
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import '../core/utils/logger.dart';
+import '../core/config/app_config.dart';
+import '../core/telemetry/metrics_collector.dart';
 import '../core/platform/hardware_fingerprint_service.dart';
+import '../core/platform/system_metrics_service.dart';
 import '../core/security/ssl_pinning_service.dart';
 import '../core/circuit_breaker.dart';
 import 'time_sync_service.dart';
 import '../core/security/secure_storage_service.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import '../core/security/firebase_rest_auth.dart';
 
 class ApiException implements Exception {
   final String userMessage;
@@ -32,9 +34,6 @@ class UnauthorizedException extends ApiException {
 }
 
 class ApiService {
-  static const String _defaultBaseUrl =
-      'https://api-dev.balaseetharamanjaneyulu.com';
-
   // ─── Circuit Breakers (AUDIT-2.4) ─────────────────────────────────────────
   //
   // Per-endpoint circuit breakers to prevent cascading failures. Keyed by the
@@ -53,20 +52,16 @@ class ApiService {
 
   // ─── URL Resolution ───────────────────────────────────────────────────────
 
-  static Future<String> _resolveBaseUrl() async {
-    final envUrl = dotenv.env['API_BASE_URL'];
-    if (envUrl != null && envUrl.isNotEmpty) return envUrl;
-
-    return _defaultBaseUrl;
-  }
+  static String get _baseUrl => AppConfig.baseUrl;
 
   /// Build a URI from a path segment, normalizing double slashes.
-  static Future<Uri> _buildUri(String path) async {
-    final base = await _resolveBaseUrl();
-    final baseUri = Uri.parse(base);
+  /// Query parameters are passed as a typed map — never embed `?key=val` in [path].
+  static Future<Uri> _buildUri(String path,
+      {Map<String, String>? queryParameters}) async {
+    final baseUri = Uri.parse(_baseUrl);
     final cleanPath = '/${path.replaceAll(RegExp(r'/+'), '/')}'
         .replaceFirst(RegExp(r'^//+'), '/');
-    return baseUri.replace(path: cleanPath);
+    return baseUri.replace(path: cleanPath, queryParameters: queryParameters);
   }
 
   static http.Client get _client => SslPinningService.client;
@@ -91,10 +86,12 @@ class ApiService {
     Object? body,
     Duration timeout = const Duration(seconds: 30),
     int maxRetries = 3,
+    Map<String, String>? queryParameters,
   }) async {
     final cb = _breakerFor(path);
     return cb.call(() => _executeWithRetry(
-        method, path, headers, body, timeout, maxRetries));
+        method, path, headers, body, timeout, maxRetries,
+        queryParameters: queryParameters));
   }
 
   /// The inner retry loop — separated so [CircuitBreaker] can wrap it.
@@ -104,9 +101,11 @@ class ApiService {
     Map<String, String>? headers,
     Object? body,
     Duration timeout,
-    int maxRetries,
-  ) async {
-    final uri = await _buildUri(path);
+    int maxRetries, {
+    Map<String, String>? queryParameters,
+  }) async {
+    final uri =
+        await _buildUri(path, queryParameters: queryParameters);
     const baseDelay = Duration(seconds: 1);
 
     http.Response? lastResponse;
@@ -146,6 +145,7 @@ class ApiService {
         if (response.statusCode >= 500 && attempt < maxRetries) {
           Log.w('[API] $method $path got ${response.statusCode}, retrying...');
           lastResponse = response;
+          MetricsCollector().recordApiError();
           await Future.delayed(baseDelay * (1 << attempt));
           continue;
         }
@@ -153,6 +153,7 @@ class ApiService {
         return response;
       } on TimeoutException catch (e) {
         lastError = e;
+        MetricsCollector().recordApiError();
         if (attempt < maxRetries) {
           Log.w('[API] $method $path timed out, retrying...');
           await Future.delayed(baseDelay * (1 << attempt));
@@ -160,6 +161,7 @@ class ApiService {
         }
       } catch (e) {
         lastError = e;
+        MetricsCollector().recordApiError();
         if (attempt < maxRetries && _isTransient(e)) {
           Log.w('[API] $method $path failed ($e), retrying...');
           await Future.delayed(baseDelay * (1 << attempt));
@@ -170,9 +172,10 @@ class ApiService {
       }
     }
 
+    MetricsCollector().recordApiError();
     if (lastResponse != null) {
       throw ApiException(
-          'Server error (${lastResponse!.statusCode})', lastResponse!.statusCode);
+          'Server error (${lastResponse.statusCode})', lastResponse.statusCode);
     }
     Log.e('[API] $method $path exhausted retries: $lastError');
     throw lastError ?? Exception('Request failed after $maxRetries retries');
@@ -195,23 +198,11 @@ class ApiService {
       headers['X-Device-ID'] = deviceId;
     }
 
-    // Try Firebase current user first — valid after signInWithCustomToken()
-    try {
-      final firebaseUser = FirebaseAuth.instance.currentUser;
-      if (firebaseUser != null) {
-        final idToken = await firebaseUser.getIdToken();
-        if (idToken != null && idToken.isNotEmpty) {
-          headers['Authorization'] = 'Bearer $idToken';
-          return headers;
-        }
-      }
-    } catch (_) {}
-
-    // Fall through to stored access token
-    String? token = await SecureStorageService.getValidAccessToken();
-    token ??= await _refreshToken();
-    if (token != null) {
-      headers['Authorization'] = 'Bearer $token';
+    // REST-based ID token (replaces firebase_auth plugin) — pulls a fresh
+    // token from Identity Toolkit if the cached one is missing or expiring.
+    final idToken = await FirebaseRestAuth.getIdToken();
+    if (idToken != null && idToken.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $idToken';
       return headers;
     }
 
@@ -221,37 +212,6 @@ class ApiService {
     }
 
     return headers;
-  }
-
-  static Future<String?> _refreshToken() async {
-    final refreshToken = await SecureStorageService.getRefreshToken();
-    if (refreshToken == null) return null;
-
-    try {
-      final response = await _request(
-        'POST',
-        'api/v1/board/auth/refresh',
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'refresh_token': refreshToken}),
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final newToken = data['access_token']?.toString();
-        if (newToken != null) {
-          final expiresAt = data['expires_in'] is int
-              ? DateTime.now().millisecondsSinceEpoch +
-                  (data['expires_in'] as int) * 1000
-              : DateTime.now().millisecondsSinceEpoch + 900000;
-          await SecureStorageService.storeAccessToken(newToken, expiresAt);
-          Log.i('Access token refreshed');
-          return newToken;
-        }
-      }
-    } catch (e) {
-      Log.e('Token refresh failed: $e');
-    }
-    return null;
   }
 
   // ─── Registration Flow ────────────────────────────────────────────────────
@@ -408,6 +368,9 @@ class ApiService {
   }) async {
     final headers = await _authHeaders();
     final timestamp = DateTime.now().toUtc().toIso8601String();
+
+    final sysMetrics = await SystemMetricsService.collect();
+
     final response = await _request(
       'POST',
       'api/v1/device/heartbeat',
@@ -419,10 +382,11 @@ class ApiService {
         'uptime_seconds': uptimeSeconds,
         'app_version': appVersion,
         'system_metrics': {
-          'memory_usage_mb': 0,
-          'cpu_load_percent': 0.0,
-          'network_latency_ms': 0,
+          'memory_usage_mb': sysMetrics.memoryUsageMb,
+          'cpu_load_percent': sysMetrics.cpuLoadPercent,
+          'network_latency_ms': sysMetrics.networkLatencyMs,
         },
+        'business_metrics': MetricsCollector().toJson(),
         'timestamp': timestamp,
       }),
     );
@@ -437,7 +401,8 @@ class ApiService {
       {int retryCount = 1}) async {
     final response = await _request(
       'GET',
-      'api/v1/board/preflight?slot_id=$slotId',
+      'api/v1/board/preflight',
+      queryParameters: {'slot_id': slotId},
       headers: {
         ...await _authHeaders(),
         'X-Retry-Attempt': retryCount.toString(),

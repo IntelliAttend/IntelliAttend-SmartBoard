@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:dio/dio.dart';
 import '../../data/repositories/auth_repository.dart';
 import '../../data/repositories/device_repository.dart';
+import '../../core/security/firebase_rest_auth.dart';
 import '../../core/utils/logger.dart';
 import '../../services/session_manager.dart';
 import '../../core/platform/hardware_fingerprint_service.dart';
@@ -16,9 +16,8 @@ enum RegistrationStep { idle, otpSent, verifying, completed, error }
 
 class RegistrationProvider extends ChangeNotifier {
   final IAuthRepository _authRepository;
-  final IDeviceRepository _deviceRepository;
 
-  RegistrationProvider(this._authRepository, this._deviceRepository) {
+  RegistrationProvider(this._authRepository, IDeviceRepository deviceRepository) {
     _loadPersistedToken();
   }
 
@@ -153,9 +152,8 @@ class RegistrationProvider extends ChangeNotifier {
       } else {
         _errorMessage = 'Invalid Board ID or Password.';
       }
-    } on FirebaseAuthException catch (e) {
-      // ... same error handling ...
-      _errorMessage = _getFirebaseAuthErrorMessage(e);
+    } on FirebaseRestAuthException catch (e) {
+      _errorMessage = _restAuthErrorMessage(e);
       Log.e('[RegistrationProvider] Auth Error: ${e.code}');
     } catch (e) {
       _errorMessage =
@@ -280,17 +278,26 @@ class RegistrationProvider extends ChangeNotifier {
     }
   }
 
-  String _getFirebaseAuthErrorMessage(FirebaseAuthException e) {
-    if (e.code == 'user-not-found' || e.code == 'invalid-credential') {
+  /// Map Identity Toolkit REST error codes onto user-friendly messages.
+  /// See https://firebase.google.com/docs/reference/rest/auth — the
+  /// `error.message` field uses these stable string identifiers.
+  String _restAuthErrorMessage(FirebaseRestAuthException e) {
+    final code = e.code;
+    if (code == 'EMAIL_NOT_FOUND' ||
+        code == 'INVALID_LOGIN_CREDENTIALS' ||
+        code == 'INVALID_EMAIL') {
       return 'DEVICE NOT PROVISIONED\nThis SmartBoard ID is not recognized. Please contact IT Support.';
-    } else if (e.code == 'wrong-password') {
+    }
+    if (code == 'INVALID_PASSWORD' || code == 'MISSING_PASSWORD') {
       return 'Invalid System Password. Please try again.';
-    } else if (e.code == 'user-disabled') {
+    }
+    if (code == 'USER_DISABLED') {
       return 'SUSPENDED: This SmartBoard has been disabled by an administrator.';
-    } else if (e.code == 'too-many-requests') {
+    }
+    if (code.startsWith('TOO_MANY_ATTEMPTS_TRY_LATER')) {
       return 'SECURITY LOCK: Too many failed attempts. Please try again later.';
     }
-    return 'AUTHENTICATION ERROR: ${e.message}';
+    return 'AUTHENTICATION ERROR: $code';
   }
 
   void reset() {

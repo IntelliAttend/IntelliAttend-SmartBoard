@@ -1,78 +1,76 @@
 import 'package:dio/dio.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:isar/isar.dart';
+
+import '../../core/config/app_config.dart';
 import '../../core/network/api_client.dart';
-import '../../models/isar_schemas.dart';
 import '../../core/platform/hardware_fingerprint_service.dart';
+import '../../core/security/firebase_rest_auth.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../core/utils/logger.dart';
+import '../../models/isar_schemas.dart';
 
 abstract class IAuthRepository {
   Future<Map<String, dynamic>?> login(String boardId, String password);
-  Future<Map<String, dynamic>?> initiateRegistration(String boardId, String password);
+  Future<Map<String, dynamic>?> initiateRegistration(
+      String boardId, String password);
   Future<Map<String, dynamic>?> verifyOtp(String boardId, String otp);
-  Future<Map<String, dynamic>?> completeRegistration(String boardId, String hardwareId, String verificationToken);
-  Future<void> saveRegistration(Map<String, dynamic> profile, Isar isar, {String? hardwareId});
+  Future<Map<String, dynamic>?> completeRegistration(
+      String boardId, String hardwareId, String verificationToken);
+  Future<void> saveRegistration(Map<String, dynamic> profile, Isar isar,
+      {String? hardwareId});
   Future<void> logout();
 }
 
+/// Auth repository — PURE-REST. No `firebase_auth` plugin, no
+/// `cloud_firestore` plugin. All Firebase touchpoints go through
+/// [FirebaseRestAuth] (Identity Toolkit + Secure Token API only); all
+/// registration/profile data goes through the server's REST contract.
+///
+/// This avoids the Firebase C++ Auth SDK threading bug on Windows that calls
+/// `abort()` when its native listeners deliver callbacks on non-platform
+/// threads.
 class AuthRepository implements IAuthRepository {
   final ApiClient apiClient;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   AuthRepository(this.apiClient);
+
+  // ─── Admin login ─────────────────────────────────────────────────────────
 
   @override
   Future<Map<String, dynamic>?> login(String boardId, String password) async {
     try {
-      Log.i('[AuthRepository] Attempting Firebase Login for Board: $boardId');
-      
-      // SmartBoard ID is mapped to a lowercase email format as per Accountable Device spec.
-      final email = boardId.contains('@') ? boardId.toLowerCase() : '${boardId.toLowerCase()}@smartboard.intelliattend.com';
-      
-      UserCredential userCredential = await _auth.signInWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
+      Log.i('[AuthRepository] Attempting REST login for Board: $boardId');
 
-      final user = userCredential.user;
-      if (user == null) return null;
+      // SmartBoard ID is mapped to a lowercase email format per the
+      // Accountable Device spec.
+      final email = AppConfig.boardIdToEmail(boardId);
 
-      final doc = await _firestore.collection('smart_boards').doc(boardId).get();
-      
-      bool isRegistered = false;
-      String? adminEmail;
-      Map<String, dynamic>? profile;
+      final authData =
+          await FirebaseRestAuth.signInWithPassword(email, password);
+      final uid = authData['localId']?.toString();
+      final returnedEmail = authData['email']?.toString();
 
-      if (doc.exists) {
-        final data = doc.data()!;
-        isRegistered = data['is_registered'] ?? false;
-        // Contract field is 'it_admin_email'; fall back to 'admin_email' for legacy docs
-        adminEmail = data['it_admin_email'] ?? data['admin_email'];
-        if (isRegistered) {
-          profile = {
-            'smart_board_id': boardId,
-            // Contract field is 'classroom_id'; fall back to 'room_id' for legacy docs
-            'room_id': data['classroom_id'] ?? data['room_id'],
-            'room_name': data['room_name'],
-            'building': data['building'],
-            'department': data['department'],
-            'capacity': data['capacity'],
-          };
-        }
-      }
+      if (uid == null) return null;
 
+      // Persist board credentials for Firebase plugin authentication on boot.
+      // This enables .snapshots() streams (billed only on data changes).
+      await SecureStorageService.storeBoardCredentials(email, password);
+
+      // We no longer read the `smart_boards` Firestore doc directly. Whether
+      // the device is already registered is now resolved server-side during
+      // `/api/v1/device/register/login` — that response contains the same
+      // profile fields the Firestore doc used to carry. RegistrationProvider
+      // calls initiateRegistration() right after login() and handles the
+      // "already registered" branch from the server response.
       return {
-        'uid': user.uid,
-        'email': user.email,
-        'is_registered': isRegistered,
-        'admin_email': adminEmail ?? 'IT Administrator',
-        'profile': profile,
+        'uid': uid,
+        'email': returnedEmail,
+        'is_registered': false, // server is the source of truth from here on
+        'admin_email': returnedEmail ?? 'IT Administrator',
+        'profile': null,
       };
-    } on FirebaseAuthException catch (e) {
-      Log.e('[AuthRepository] Firebase Login failed: ${e.code}');
+    } on FirebaseRestAuthException catch (e) {
+      Log.e('[AuthRepository] REST login failed: ${e.code}');
       rethrow;
     } catch (e) {
       Log.e('[AuthRepository] Unexpected login error: $e');
@@ -80,25 +78,23 @@ class AuthRepository implements IAuthRepository {
     }
   }
 
+  // ─── Registration step 1: initiate (send OTP) ───────────────────────────
+
   @override
-  Future<Map<String, dynamic>?> initiateRegistration(String boardId, String password) async {
+  Future<Map<String, dynamic>?> initiateRegistration(
+      String boardId, String password) async {
     try {
-      // Phase 2 — Contract v1.1: POST /register/login with NO request body.
-      // Identity is conveyed entirely via the Firebase ID Token in the
-      // Authorization header (obtained from the signInWithEmailAndPassword
-      // call that preceded this step in RegistrationProvider.login()).
-      final idToken = await _auth.currentUser?.getIdToken();
+      final idToken = await FirebaseRestAuth.getIdToken();
       if (idToken == null) {
-        Log.e('[AuthRepository] Initiate Registration: no Firebase ID token — user not signed in');
+        Log.e(
+            '[AuthRepository] initiateRegistration: no ID token — login() did not complete.');
         return null;
       }
 
       final response = await apiClient.dio.post(
         '/api/v1/device/register/login',
-        options: Options(
-          headers: {'Authorization': 'Bearer $idToken'},
-        ),
-        // No body — contract v1.1 Step 1 is identity-from-token only.
+        options: Options(headers: {'Authorization': 'Bearer $idToken'}),
+        // No body — server identifies the board from the ID token.
       );
 
       if (response.statusCode == 200) {
@@ -108,20 +104,23 @@ class AuthRepository implements IAuthRepository {
     } on DioException catch (e) {
       final status = e.response?.statusCode ?? 0;
       if (status >= 500) {
-        // 5xx: infrastructure error (e.g. Cloudflare 502).
-        // The origin server likely processed the request and sent the OTP before
-        // the response was lost. Re-throw so the provider can decide to show the
-        // OTP entry screen rather than a hard failure.
-        Log.w('[AuthRepository] Initiate Registration got $status — OTP may have been sent. Re-throwing for caller.');
+        // 5xx: infrastructure error (e.g. Cloudflare 502). The origin server
+        // most likely processed the request and sent the OTP before the
+        // response was lost. Re-throw so the provider can show the OTP
+        // entry screen.
+        Log.w(
+            '[AuthRepository] initiateRegistration got $status — OTP may have been sent. Re-throwing.');
         rethrow;
       }
-      Log.e('[AuthRepository] Initiate Registration failed ($status): $e');
+      Log.e('[AuthRepository] initiateRegistration failed ($status): $e');
       return null;
     } catch (e) {
-      Log.e('[AuthRepository] Initiate Registration failed: $e');
+      Log.e('[AuthRepository] initiateRegistration failed: $e');
       return null;
     }
   }
+
+  // ─── Registration step 2: verify OTP ─────────────────────────────────────
 
   @override
   Future<Map<String, dynamic>?> verifyOtp(String boardId, String otp) async {
@@ -133,28 +132,30 @@ class AuthRepository implements IAuthRepository {
           'otp': otp,
         },
       );
-      
+
       if (response.statusCode == 200) {
         return response.data as Map<String, dynamic>;
       }
       return null;
     } catch (e) {
-      Log.e('[AuthRepository] OTP Verification failed: $e');
+      Log.e('[AuthRepository] OTP verification failed: $e');
       return null;
     }
   }
+
+  // ─── Registration step 3: hardware bind + custom-token sign-in ─────────
 
   @override
   Future<Map<String, dynamic>?> completeRegistration(
     String boardId,
     String hardwareId,
-    String verificationToken
+    String verificationToken,
   ) async {
     try {
-      // Phase 3: Hardware Binding — collect metadata in parallel with token fetch
+      // Collect hardware metadata while we fetch the ID token in parallel.
       final results = await Future.wait([
         HardwareFingerprintService.getHardwareMetadata(),
-        _auth.currentUser?.getIdToken() ?? Future.value(null),
+        FirebaseRestAuth.getIdToken(),
       ]);
 
       final metadata = results[0] as Map<String, dynamic>;
@@ -163,7 +164,9 @@ class AuthRepository implements IAuthRepository {
       final response = await apiClient.dio.post(
         '/api/v1/device/register/complete',
         options: Options(
-          headers: idToken != null ? {'Authorization': 'Bearer $idToken'} : null,
+          headers: idToken != null
+              ? {'Authorization': 'Bearer $idToken'}
+              : null,
         ),
         data: {
           'smart_board_id': boardId,
@@ -176,65 +179,56 @@ class AuthRepository implements IAuthRepository {
       if (response.statusCode == 200) {
         final data = response.data as Map<String, dynamic>;
 
-        // Sign in with custom token from server to get a proper Firebase session
-        // with role: smartboard claims.
+        // Exchange the server-issued custom token (carries the role:smartboard
+        // claim) for a normal ID + refresh token pair via REST. This replaces
+        // the original `_auth.signInWithCustomToken()` plugin call.
         //
-        // IMPORTANT: signInWithCustomToken() is NOT allowed to block registration.
-        // The server has already:
-        //   1. Bound the hardware_id
-        //   2. Set the board status to ACTIVE
-        //   3. Returned the full registration profile
-        //
-        // If the custom token is stale/expired (server-side caching bug where the
-        // server returns a pre-generated token from a previous 502'd attempt),
-        // Firebase SDK throws [firebase_auth/invalid-custom-token]. We catch this,
-        // fall back to storing the refresh token from the existing email/password
-        // session (which is still valid), and continue registration normally.
-        // The missing "role: smartboard" claims will be resolved when the server
-        // fixes its token generation; the device will work in the interim.
+        // The custom token may occasionally come back stale from server-side
+        // caching of a prior 502'd attempt. In that case we keep the existing
+        // email/password session (already persisted by the login() step) so
+        // the device can still operate; the missing role claim is surfaced
+        // to the server on the next call and IT can re-issue manually.
         final customToken = data['custom_token']?.toString();
-        if (customToken != null) {
+        if (customToken != null && customToken.isNotEmpty) {
           try {
-            await _auth.signInWithCustomToken(customToken);
-            Log.i('[AuthRepository] signInWithCustomToken succeeded — role:smartboard claims active.');
+            await FirebaseRestAuth.signInWithCustomToken(customToken);
+            Log.i(
+                '[AuthRepository] signInWithCustomToken (REST) succeeded — role:smartboard claims active.');
           } catch (tokenError) {
-            // Custom token rejected (expired, malformed, or stale from server cache).
-            // Fall back: keep the existing signInWithEmailAndPassword session.
-            Log.w('[AuthRepository] signInWithCustomToken failed ($tokenError). '
-                'Using email/password session as fallback. '
-                'Notify server team: custom_token may be stale/pre-cached.');
+            Log.w(
+                '[AuthRepository] signInWithCustomToken (REST) failed ($tokenError). '
+                'Email/password session retained as fallback.');
           }
-        }
-
-        // Store whatever refresh token the current session has — whether that
-        // came from signInWithCustomToken or the original email/password sign-in.
-        final firebaseRefreshToken = _auth.currentUser?.refreshToken;
-        if (firebaseRefreshToken != null && firebaseRefreshToken.isNotEmpty) {
-          await SecureStorageService.storeRefreshToken(firebaseRefreshToken);
-          Log.i('[AuthRepository] Firebase refresh token stored.');
         } else {
-          Log.w('[AuthRepository] No refresh token available — boot screen token check will force re-registration.');
+          Log.w(
+              '[AuthRepository] Server did not return a custom_token — using email/password session.');
         }
 
-        // Store hardwareId as ApiKey for heartbeat tracking
+        // Store hardwareId as the long-lived API key for heartbeat / telemetry
+        // identification. SecureStorage is DPAPI-encrypted on Windows.
         await SecureStorageService.storeApiKey(hardwareId);
 
         return data;
       }
       return null;
     } catch (e) {
-      Log.e('[AuthRepository] Complete Registration failed: $e');
+      Log.e('[AuthRepository] completeRegistration failed: $e');
       return null;
     }
   }
 
+  // ─── Local persistence ──────────────────────────────────────────────────
+
   @override
-  Future<void> saveRegistration(Map<String, dynamic> profile, Isar isar, {String? hardwareId}) async {
-    final resolvedHardwareId = hardwareId ?? await HardwareFingerprintService.getDeviceId();
+  Future<void> saveRegistration(Map<String, dynamic> profile, Isar isar,
+      {String? hardwareId}) async {
+    final resolvedHardwareId =
+        hardwareId ?? await HardwareFingerprintService.getDeviceId();
     final reg = DeviceRegistration()
-      ..smartBoardId = profile['smart_board_id'] ?? profile['board_id'] ?? 'UNKNOWN'
-      // Contract uses 'classroom_id'; RegistrationProvider maps it to 'room_id'
-      ..classroomId = profile['room_id'] ?? profile['classroom_id'] ?? 'UNKNOWN'
+      ..smartBoardId =
+          profile['smart_board_id'] ?? profile['board_id'] ?? 'UNKNOWN'
+      ..classroomId =
+          profile['room_id'] ?? profile['classroom_id'] ?? 'UNKNOWN'
       ..roomName = profile['room_name'] ?? 'Unknown'
       ..building = profile['building'] ?? 'Unknown'
       ..department = profile['department'] ?? 'Unknown'
@@ -245,13 +239,15 @@ class AuthRepository implements IAuthRepository {
     await isar.writeTxn(() async {
       await isar.deviceRegistrations.put(reg);
     });
-    Log.i('[AuthRepository] Device Registration cached to Isar.');
+    Log.i('[AuthRepository] Device registration cached to Isar.');
   }
+
+  // ─── Logout ─────────────────────────────────────────────────────────────
 
   @override
   Future<void> logout() async {
-    await _auth.signOut();
+    await FirebaseRestAuth.signOut();
     await SecureStorageService.clearAll();
-    Log.i('[AuthRepository] User logged out.');
+    Log.i('[AuthRepository] Logged out (REST tokens cleared).');
   }
 }

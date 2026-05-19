@@ -2,8 +2,9 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict
 
 class TelemetryPayload(BaseModel):
-    wifi_signal_dbm: int = Field(..., description="Wi-Fi signal strength in dBm")
-    storage_gb: float = Field(..., description="Available storage in GB")
+    boardId: str = Field(..., description="SmartBoard ID (e.g. IASB-4208)")
+    wifi_signal_dbm: Optional[int] = Field(None, description="Wi-Fi signal strength in dBm")
+    available_storage_gb: Optional[float] = Field(None, description="Available storage in GB")
     app_version: str = Field(..., description="Current SmartBoard app version")
     timestamp_ms: Optional[int] = None
 
@@ -36,4 +37,13 @@ class DeviceRegisterCompleteRequest(BaseModel):
     smart_board_id: str
     verification_token: str
     hardware_id: str
+
+class QueuedScan(BaseModel):
+    student_id: str
+    qr_payload: str
+    timestamp: int
+
+class VaultSyncRequest(BaseModel):
+    session_id: str
+    queued_scans: list[QueuedScan]
 

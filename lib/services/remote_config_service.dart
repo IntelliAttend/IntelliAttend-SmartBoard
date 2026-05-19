@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import '../core/utils/logger.dart';
+import 'firestore_rest_client.dart';
 
 /// Lightweight feature-flag provider backed by a single Firestore document.
 ///
@@ -32,12 +32,14 @@ class RemoteConfigService {
 
   Future<void> _fetch() async {
     try {
-      final doc = FirebaseFirestore.instance
-          .collection(_collection)
-          .doc(_document);
-      final snapshot = await doc.get();
-      if (snapshot.exists) {
-        _flags = Map<String, dynamic>.from(snapshot.data() ?? {});
+      final data = await FirestoreRestClient.getDocument(
+        '$_collection/$_document',
+      );
+      if (data != null) {
+        // Drop the synthetic __id key injected by FirestoreRestClient before
+        // exposing the flags map to callers.
+        data.remove('__id');
+        _flags = Map<String, dynamic>.from(data);
       }
     } catch (e) {
       Log.w('[RemoteConfig] Fetch failed, using cached values: $e');

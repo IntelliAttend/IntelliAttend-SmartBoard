@@ -1,18 +1,26 @@
 import secrets
 import base64
 import hashlib
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Optional
 from firebase_admin import firestore
 
+from .cache_service import CacheService
+
 
 class SessionService:
+    OTP_CACHE_TTL = 300  # 5 minutes
+
     @staticmethod
     def generate_deterministic_id(slot_id: str) -> str:
         """v6.0 Protocol: session_id = hash(slot_id + today_date)"""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         seed = f"{slot_id}_{today}"
         return hashlib.sha256(seed.encode()).hexdigest()[:20] # Aligned with hand-off length
+
+    @staticmethod
+    def _otp_cache_key(otp: str) -> str:
+        return f"otp:{otp}"
 
     @staticmethod
     async def create_session(
@@ -29,22 +37,27 @@ class SessionService:
         half1 = base64.urlsafe_b64encode(half1_bytes).decode().rstrip("=")
 
         otp = str(secrets.randbelow(900000) + 100000)
-        otp_expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
 
+        # Zero Storage OTP: OTP is NEVER written to Firestore.
         doc_data = {
             "session_secret_half1": half1,
-            "otp": otp,
-            "status": "otp_pending",
+            "status": "pre_allocated",
             "course_name": course_data.get("course_name", ""),
             "faculty_name": course_data.get("faculty_name", ""),
             "roster_count": course_data.get("roster_count", 0),
             "section_id": course_data.get("section_id", ""),
             "created_at": firestore.SERVER_TIMESTAMP,
-            "otp_expires_at": otp_expires_at.isoformat(),
         }
 
         if db:
             db.collection("Sessions").document(session_id).set(doc_data)
+
+        # Store OTP mapping in ephemeral cache only
+        await CacheService.set_json(
+            SessionService._otp_cache_key(otp),
+            {"session_id": session_id, "session_secret_half1": half1},
+            ttl=SessionService.OTP_CACHE_TTL,
+        )
 
         return {
             "session_id": session_id,
@@ -57,92 +70,47 @@ class SessionService:
         otp: str,
         db: firestore.client,
     ) -> Optional[dict]:
-        if not db:
+        # Zero Storage OTP: look up OTP in ephemeral cache, NOT Firestore
+        cached = await CacheService.get_json(SessionService._otp_cache_key(otp))
+        if not cached:
             return None
 
-        sessions = (
-            db.collection("Sessions")
-            .where("otp", "==", otp)
-            .where("status", "==", "otp_pending")
-            .limit(1)
-            .get()
-        )
-
-        if not sessions:
+        session_id = cached.get("session_id")
+        if not session_id or not db:
             return None
 
-        doc = sessions[0]
-        data = doc.to_dict()
-
-        now = datetime.now(timezone.utc)
-        expires = datetime.fromisoformat(data.get("otp_expires_at", "2000-01-01"))
-        if now > expires.replace(tzinfo=None) if not expires.tzinfo else now > expires:
-            return {"error": "OTP expired"}
-
-        half1 = data.get("session_secret_half1")
-        if not half1:
-            half1 = (data.get("session_secret") or "")[:22]
-
-        data["session_id"] = doc.id
-        data["session_secret_half1"] = half1
-        return data
-
-    @staticmethod
-    async def verify_otp_and_mark_faculty(
-        session_id: str,
-        db: firestore.client,
-    ) -> dict:
-        session_ref = db.collection("Sessions").document(session_id)
-        session_doc = session_ref.get()
-
+        session_doc = db.collection("Sessions").document(session_id).get()
         if not session_doc.exists:
-            return {"error": "Session not found"}
+            return None
 
         data = session_doc.to_dict()
-        if data.get("status") != "otp_pending":
-            return {"error": "Session already activated or expired"}
+        data["session_id"] = session_doc.id
+        data["session_secret_half1"] = cached.get("session_secret_half1") or data.get("session_secret_half1")
 
-        session_ref.update({
-            "otp_verified": True,
-            "otp_verified_at": firestore.SERVER_TIMESTAMP,
-        })
-
-        half1 = data.get("session_secret_half1")
-        if not half1:
-            half1 = (data.get("session_secret") or "")[:22]
-
-        return {
-            "session_secret_half1": half1,
-            "session_id": session_id,
-            "course_name": data.get("course_name", ""),
-            "faculty_name": data.get("faculty_name", ""),
-            "roster_count": data.get("roster_count", 0),
-        }
+        return data
 
     @staticmethod
     async def ignite_session_atomic(
         session_id: str,
-        secret: str,
         db: firestore.client,
     ) -> None:
-        """v6.2 Atomic Ignition: Store secret and activate session only."""
+        """v6.2 Atomic Ignition: Activate session — NO secret written to Firestore.
+        
+        Split-knowledge design: the full session secret is derived on-device
+        from session_secret_half1 + hardware fingerprint. The server never
+        holds or persists the full secret.
+        """
         if not db:
             return
 
-        session_ref = db.collection("Sessions").document(session_id)
-        
-        # 1. Update master session record - Pure Activation
-        session_ref.update({
-            "session_secret": secret,
+        # 1. Activate master session record
+        db.collection("Sessions").document(session_id).update({
             "status": "active",
             "activated_at": firestore.SERVER_TIMESTAMP
         })
         
-        # 2. Sync to ActiveSessions for SmartBoard listeners
-        session_doc = session_ref.get()
-        if session_doc.exists:
-            db.collection("ActiveSessions").document(session_id).set({
-                **session_doc.to_dict(),
-                "session_secret": secret,
-                "status": "active",
-            })
+        # 2. Sync status to ActiveSessions for SmartBoard listeners
+        db.collection("ActiveSessions").document(session_id).update({
+            "status": "active",
+            "activated_at": firestore.SERVER_TIMESTAMP
+        })

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:qr_flutter/qr_flutter.dart';
+import 'optical_qr_view.dart';
 import '../../core/theme/app_theme.dart';
 import 'glass_container.dart';
 
@@ -30,13 +30,12 @@ class QRDisplayPane extends StatelessWidget {
               ],
             ),
             child: token != null
-                ? QrImageView(
-                    data: token!,
-                    version: QrVersions.auto,
-                    size: 300.0,
-                    gapless: true,
-                    eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: Colors.black),
-                    dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: Colors.black),
+                ? Padding(
+                    padding: const EdgeInsets.all(64),
+                    child: OpticalQrView(
+                      data: token!,
+                      size: 300,
+                    ),
                   )
                 : const CircularProgressIndicator(color: AppColors.primary),
           ),

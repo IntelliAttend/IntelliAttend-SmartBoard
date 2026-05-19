@@ -16,9 +16,6 @@ class _MockDeviceRepository implements IDeviceRepository {
   @override Future<void> performMigrationBridge() async {}
   @override Future<void> sendHeartbeat({required String smartBoardId, required String hardwareId, required String screenState, required int uptimeSeconds, required String appVersion}) async {}
   @override Future<void> syncTimetable({bool fullSync = false}) async {}
-  @override Stream<List<TimetableEntry>> watchTodaySchedule(DeviceRegistration registration) => const Stream.empty();
-  @override Stream<Map<String, dynamic>?> watchActiveSession(DeviceRegistration registration) => const Stream.empty();
-  @override Stream<Map<String, dynamic>?> watchSpecificSession(String sessionId) => const Stream.empty();
   @override Future<List<TimetableEntry>> getTodayTimeline() async => [];
   @override Future<List<TimetableEntry>> getWeeklyTimeline() async => [];
   @override Future<TimetableEntry?> getCurrentSlot() async => null;

@@ -2,8 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
-import '../../data/repositories/device_repository.dart';
-import 'package:dio/dio.dart';
+import '../data/repositories/device_repository.dart';
+import 'api_service.dart';
 import '../core/utils/logger.dart';
 import '../main.dart';
 import '../presentation/screens/registration_screen.dart';
@@ -21,22 +21,23 @@ class HeartbeatService {
   static String? _cachedVersion;
   static IDeviceRepository? _deviceRepository;
 
+  // Atomic double-start guard. Set synchronously before any async work so two
+  // near-simultaneous start() calls cannot both pass the check and create
+  // duplicate timers. Using `_timer != null` was racy because the one-shot →
+  // periodic transition momentarily leaves _timer null.
+  static bool _started = false;
+
   /// Current screen state reported in the heartbeat.
   static String screenState = 'unknown';
 
   static Future<void> start(IDeviceRepository deviceRepository) async {
     _deviceRepository = deviceRepository;
 
-    // Guard against double-start (called once from _initTier3() at app launch
-    // and again from startBackgroundProtocols() after registration completes).
-    // The second call must only refresh the repository reference — it must NOT
-    // fire an immediate heartbeat (which risks a 401 that triggers a forced
-    // logout → RegistrationScreen loop) and must NOT create a second concurrent
-    // timer running alongside the first.
-    if (_timer != null) {
-      Log.d('[Heartbeat] Already running — repository reference updated. Next heartbeat on schedule.');
+    if (_started) {
+      Log.d('[Heartbeat] Already running — repository reference updated.');
       return;
     }
+    _started = true;
 
     _startedAt ??= DateTime.now();
     try {
@@ -46,15 +47,24 @@ class HeartbeatService {
       _cachedVersion = 'unknown';
     }
 
-    // Send immediately on start, then every 5 minutes
-    await _send();
-    _timer = Timer.periodic(const Duration(minutes: 5), (_) => _send());
-    Log.i('[Heartbeat] Started (interval: 5m, version: $_cachedVersion).');
+    // Delay the first heartbeat by 30 s so the UI, window manager, and Firebase
+    // platform bindings are fully settled before we call getIdToken(). On Windows
+    // the Firebase Auth C++ plugin delivers its token-refresh callback on a
+    // non-platform thread; if that callback fires during the first 1–2 s while
+    // window_manager is also issuing native calls, the Flutter engine crashes.
+    // After the initial beat we switch to the normal 5-minute periodic timer.
+    _timer = Timer(const Duration(seconds: 30), () async {
+      await _send();
+      _timer = Timer.periodic(const Duration(minutes: 5), (_) => _send());
+      Log.i('[Heartbeat] Periodic timer armed (interval: 5m).');
+    });
+    Log.i('[Heartbeat] Started — first beat in 30 s, then every 5 m (version: $_cachedVersion).');
   }
 
   static Future<void> stop() async {
     _timer?.cancel();
     _timer = null;
+    _started = false;
     Log.i('[Heartbeat] Stopped.');
   }
 
@@ -82,8 +92,8 @@ class HeartbeatService {
         appVersion: _cachedVersion ?? 'unknown',
       );
     } catch (e) {
-      if (e is DioException &&
-          (e.response?.statusCode == 401 || e.response?.statusCode == 404)) {
+      if (e is ApiException &&
+          (e.statusCode == 401 || e.statusCode == 404)) {
         Log.e('🚨 [Heartbeat] Authentication lost or device revoked. Forcing logout...');
         await stop();
         await _deviceRepository?.clearRegistration();

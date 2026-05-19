@@ -1,11 +1,17 @@
 import 'package:isar/isar.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import '../../models/isar_schemas.dart';
-import '../../services/api_service.dart';
+
 import '../../core/security/secure_storage_service.dart';
 import '../../core/utils/logger.dart';
+import '../../models/isar_schemas.dart';
+import '../../services/api_service.dart';
+import '../../services/firestore_rest_client.dart';
 import 'auth_repository.dart';
 
+/// IDeviceRepository — board-side reads / writes that touch device identity,
+/// timetable cache, and live session state.
+///
+/// Timetable data is read from the local Isar cache (synced via one-shot REST).
+/// No Firestore snapshot listeners are used, eliminating unnecessary read costs.
 abstract class IDeviceRepository {
   Future<bool> isRegistered();
   Future<DeviceRegistration?> getRegistration();
@@ -19,11 +25,6 @@ abstract class IDeviceRepository {
     required String appVersion,
   });
   Future<void> syncTimetable({bool fullSync = false});
-  Stream<List<TimetableEntry>> watchTodaySchedule(
-      DeviceRegistration registration);
-  Stream<Map<String, dynamic>?> watchActiveSession(
-      DeviceRegistration registration);
-  Stream<Map<String, dynamic>?> watchSpecificSession(String sessionId);
   Future<List<TimetableEntry>> getTodayTimeline();
   Future<List<TimetableEntry>> getWeeklyTimeline();
   Future<TimetableEntry?> getCurrentSlot();
@@ -63,10 +64,8 @@ class DeviceRepository implements IDeviceRepository {
       final hasToken = await SecureStorageService.getRefreshToken() != null;
 
       if (reg != null && reg.smartBoardId.isNotEmpty && !hasToken) {
-        Log.i(
-            '[MigrationBridge] Detected legacy registration for ${reg.smartBoardId}. Accountability login required.');
-        // Silent migration is disabled in the new Accountable Device model.
-        // The device will prompt for Admin Authentication on next boot.
+        Log.i('[MigrationBridge] Legacy registration for ${reg.smartBoardId} '
+            'without auth tokens — admin login required.');
       }
     } catch (e) {
       Log.e('[MigrationBridge] Error during migration: $e');
@@ -94,101 +93,32 @@ class DeviceRepository implements IDeviceRepository {
     }
   }
 
+  // ─── Timetable sync (one-shot, called on boot / reconnect) ──────────────
+
   @override
   Future<void> syncTimetable({bool fullSync = false}) async {
     final registration = await getRegistration();
     if (registration == null) return;
 
     try {
-      final classroomId = registration.classroomId ?? registration.smartBoardId;
+      final smartBoardId = registration.smartBoardId;
       final now = DateTime.now();
       final dayName = _getDayNameString(now);
 
-      var query = FirebaseFirestore.instance
-          .collection('timetable_slots')
-          .where('classroom_id', isEqualTo: classroomId);
+      // Filter by smart_board_id; optionally narrow to today.
+      final filters = <String, dynamic>{'smart_board_id': smartBoardId};
+      if (!fullSync) filters['day_of_week'] = dayName;
 
-      if (!fullSync) {
-        query = query.where('day_of_week', isEqualTo: dayName);
-      }
+      final docs = await FirestoreRestClient.runQuery(
+        collection: 'timetable_slots',
+        where: filters,
+      );
 
-      final snapshot = await query.get();
-      final entries = snapshot.docs.map((doc) {
-        final data = doc.data();
-        return TimetableEntry()
-          ..dayOfWeek = _getDayNumber(data['day_of_week'] ?? dayName)
-          ..startTime = data['start_time'] ?? ''
-          ..endTime = data['end_time'] ?? ''
-          ..courseName = data['subject_name'] ?? 'Class'
-          ..facultyName = data['faculty_name'] ?? 'Professor'
-          ..sectionId = data['section_id']?.toString() ?? 'N/A'
-          ..slotId = doc.id;
-      }).toList();
-
+      final entries = docs.map(_entryFromDoc).toList();
       await _updateIsarCache(entries, fullSync ? null : now.weekday);
     } catch (e) {
       Log.e('[DeviceRepository] Timetable sync failed: $e');
     }
-  }
-
-  @override
-  Stream<List<TimetableEntry>> watchTodaySchedule(
-      DeviceRegistration registration) {
-    final now = DateTime.now();
-    final dayName = _getDayNameString(now);
-    final classroomId = registration.classroomId ?? registration.smartBoardId;
-
-    return FirebaseFirestore.instance
-        .collection('timetable_slots')
-        .where('classroom_id', isEqualTo: classroomId)
-        .where('day_of_week', isEqualTo: dayName)
-        .snapshots()
-        .map((snapshot) {
-      return snapshot.docs.map((doc) {
-        final data = doc.data();
-        return TimetableEntry()
-          ..dayOfWeek = now.weekday
-          ..startTime = data['start_time'] ?? ''
-          ..endTime = data['end_time'] ?? ''
-          ..courseName = data['subject_name'] ?? 'Unknown'
-          ..facultyName = data['faculty_name'] ?? 'Unknown'
-          ..sectionId = data['section_id']?.toString() ?? 'N/A'
-          ..slotId = doc.id;
-      }).toList();
-    });
-  }
-
-  @override
-  Stream<Map<String, dynamic>?> watchActiveSession(
-      DeviceRegistration registration) {
-    final queryId = registration.classroomId ?? registration.smartBoardId;
-    return FirebaseFirestore.instance
-        .collection('ActiveSessions')
-        .where('classroom_id', isEqualTo: queryId)
-        .where('status', isEqualTo: 'active')
-        .limit(1)
-        .snapshots()
-        .map((snapshot) {
-      if (snapshot.docs.isEmpty) return null;
-      final doc = snapshot.docs.first;
-      final data = doc.data();
-      data['session_id'] = doc.id;
-      return data;
-    });
-  }
-
-  @override
-  Stream<Map<String, dynamic>?> watchSpecificSession(String sessionId) {
-    return FirebaseFirestore.instance
-        .collection('ActiveSessions')
-        .doc(sessionId)
-        .snapshots()
-        .map((doc) {
-      if (!doc.exists) return null;
-      final data = doc.data()!;
-      data['session_id'] = doc.id;
-      return data;
-    });
   }
 
   @override
@@ -227,6 +157,28 @@ class DeviceRepository implements IDeviceRepository {
     return null;
   }
 
+  // ─── Helpers ─────────────────────────────────────────────────────────────
+
+  /// Convert a Firestore REST document (flattened) into a [TimetableEntry].
+  /// Matches the field semantics established earlier:
+  ///   - `subject_name`  → courseName
+  ///   - `faculty_id` or first of `faculty_emails` → facultyName (the
+  ///     IdleScreen UI formats email → display name)
+  ///   - `section_id`     → sectionId
+  TimetableEntry _entryFromDoc(Map<String, dynamic> data) {
+    final facultyEmail = data['faculty_id']?.toString() ??
+        (data['faculty_emails'] as List?)?.firstOrNull?.toString() ??
+        '';
+    return TimetableEntry()
+      ..slotId = data['__id']?.toString() ?? ''
+      ..dayOfWeek = _getDayNumber(data['day_of_week']?.toString() ?? '')
+      ..startTime = data['start_time']?.toString() ?? ''
+      ..endTime = data['end_time']?.toString() ?? ''
+      ..courseName = data['subject_name']?.toString() ?? 'Class'
+      ..facultyName = facultyEmail
+      ..sectionId = data['section_id']?.toString() ?? 'N/A';
+  }
+
   Future<void> _updateIsarCache(
       List<TimetableEntry> entries, int? dayOfWeek) async {
     await _isar.writeTxn(() async {
@@ -243,30 +195,12 @@ class DeviceRepository implements IDeviceRepository {
   }
 
   String _getDayNameString(DateTime date) {
-    final days = [
-      'Monday',
-      'Tuesday',
-      'Wednesday',
-      'Thursday',
-      'Friday',
-      'Saturday',
-      'Sunday'
-    ];
-    return days[date.weekday - 1];
+    return dayNames[date.weekday - 1];
   }
 
   int _getDayNumber(String dayName) {
-    final days = [
-      'Monday',
-      'Tuesday',
-      'Wednesday',
-      'Thursday',
-      'Friday',
-      'Saturday',
-      'Sunday'
-    ];
     final idx =
-        days.indexWhere((d) => d.toLowerCase() == dayName.toLowerCase());
+        dayNames.indexWhere((d) => d.toLowerCase() == dayName.toLowerCase());
     return idx != -1 ? idx + 1 : DateTime.now().weekday;
   }
 }

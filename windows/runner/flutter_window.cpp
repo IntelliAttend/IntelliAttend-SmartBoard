@@ -65,6 +65,20 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
+
+    // ── Kiosk: block window-close system commands ─────────────────────────
+    // Without WS_SYSMENU (removed for security), DefWindowProc bypasses the
+    // normal WM_CLOSE path and calls DestroyWindow directly when Alt+F4 or
+    // the close button is used. We intercept SC_CLOSE here so the window
+    // never closes unintentionally. The Dart-side exit button on the
+    // registration screen uses DestroyWindow() directly and is unaffected.
+    case WM_SYSCOMMAND: {
+      const auto cmd = wparam & 0xFFF0;
+      if (cmd == SC_CLOSE || cmd == SC_MAXIMIZE) {
+        return 0; // Absorb — do not forward to DefWindowProc.
+      }
+      break;
+    }
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);

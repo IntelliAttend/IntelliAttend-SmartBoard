@@ -29,9 +29,6 @@ class ActiveSessionsService:
         }
         db.collection("ActiveSessions").document(session_id).set(doc_data)
 
-        # No Redis write here — only half1 exists.
-        # Redis populated during activate_session().
-
     @classmethod
     async def activate_session(
         cls,

@@ -14,6 +14,8 @@ class PreFlightService {
   factory PreFlightService() => _instance;
   PreFlightService._internal();
 
+  static const int _maxWarmUpRetries = 5;
+
   bool _isDailyBootDone = false;
   bool _isWarmUpInProgress = false;
   int _warmUpRetryCount = 0;
@@ -74,8 +76,12 @@ class PreFlightService {
     Log.i(
         '🏗️ [PreFlight] T-10 Window Detected. Triggering Status 1 Handshake for $slotId...');
     try {
-      // In Status 1, we just sync the timetable and push telemetry
-      // This ensures we are "Ready" and have the latest context
+      // Sync clock before timetable to ensure accurate time comparison.
+      // Skew is persisted in SecureStorage so a single failure doesn't break us.
+      await ApiService.syncTime();
+      // Fallback timetable sync — the Firestore listener normally keeps the
+      // timetable current; this REST call is a safety net in case the listener
+      // missed an update during an offline period.
       await globalDeviceRepository.syncTimetable(fullSync: false);
       await _pushHardwareTelemetry();
       Log.i('✅ [PreFlight] Status 1 Handshake Successful.');
@@ -122,6 +128,8 @@ class PreFlightService {
               .deleteAll(staleSessions.map((s) => s.id).toList());
         });
 
+        // Fallback full timetable sync — the Firestore listener is the
+        // primary update path; this REST call is a safety net on cold boot.
         await globalDeviceRepository.syncTimetable(fullSync: true);
         await _pushHardwareTelemetry();
 
@@ -140,10 +148,27 @@ class PreFlightService {
     }
   }
 
+  /// Cancels any in-flight retry chain and starts a fresh warm-up immediately.
+  /// Used at T-0 when the class has started and preflight hasn't succeeded yet.
+  /// The [onSuccess] callback, if provided, fires on both the immediate call
+  /// AND any subsequent retry success (it is carried through the retry chain).
+  Future<Map<String, dynamic>?> forceWarmUp(String slotId,
+      {void Function(Map<String, dynamic> result)? onSuccess}) async {
+    _retryTimer?.cancel();
+    _isWarmUpInProgress = false;
+    Log.i('🔥 [PreFlight] Forcing warm-up for slot: $slotId');
+    return runPerSessionWarmUp(slotId, onSuccess: onSuccess);
+  }
+
   /// Phase 2: The "Per-Session" Warm-Up (T-3:00 Window)
   /// v6.2: Atomic Ignition - No keys until OTP entry.
+  ///
+  /// The [onSuccess] callback is threaded through the retry chain so that
+  /// the caller (IdleScreen._triggerWarmUp) receives the result even when a
+  /// delayed retry succeeds — not just the initial attempt.
   Future<Map<String, dynamic>?> runPerSessionWarmUp(String slotId,
-      {bool isRetry = false}) async {
+      {bool isRetry = false,
+      void Function(Map<String, dynamic> result)? onSuccess}) async {
     if (_isWarmUpInProgress && !isRetry) return null;
 
     if (!isRetry) {
@@ -173,9 +198,16 @@ class PreFlightService {
 
       Log.i('✅ [PreFlight] Warm-Up Successful. Context loaded for $sessionId');
       _isWarmUpInProgress = false;
+      if (onSuccess != null) onSuccess(result);
       return result;
     } catch (e) {
       Log.e('❌ [PreFlight] Warm-Up Attempt $_warmUpRetryCount Failed: $e');
+
+      if (_warmUpRetryCount >= _maxWarmUpRetries) {
+        Log.w('🚫 [PreFlight] Max retries ($_maxWarmUpRetries) reached. Giving up. Faculty may proceed manually.');
+        _isWarmUpInProgress = false;
+        return null;
+      }
 
       final jitter = Random().nextInt(3);
       final nextRetryDelay = Duration(seconds: 20 + jitter);
@@ -183,7 +215,7 @@ class PreFlightService {
       Log.i('⏳ [PreFlight] Retrying in ${nextRetryDelay.inSeconds}s...');
 
       _retryTimer = Timer(nextRetryDelay, () {
-        runPerSessionWarmUp(slotId, isRetry: true);
+        runPerSessionWarmUp(slotId, isRetry: true, onSuccess: onSuccess);
       });
 
       return null;
@@ -193,14 +225,17 @@ class PreFlightService {
   Future<void> _pushHardwareTelemetry() async {
     try {
       final packageInfo = await PackageInfo.fromPlatform();
+      final registration = await globalDeviceRepository.getRegistration();
+      final boardId = registration?.smartBoardId ?? 'UNKNOWN';
       final data = {
+        'boardId': boardId,
         'wifi_signal_dbm': -45,
         'available_storage_gb': 12.5,
         'app_version': packageInfo.version,
         'timestamp_ms': TimeSyncService.timeNow.millisecondsSinceEpoch,
       };
       await ApiService.sendHardwareTelemetry(data);
-      Log.i('📡 [PreFlight] Hardware Telemetry pushed.');
+      Log.i('📡 [PreFlight] Hardware Telemetry pushed for $boardId.');
     } catch (e) {
       Log.w('⚠️ [PreFlight] Telemetry push failed: $e');
     }

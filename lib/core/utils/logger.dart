@@ -2,6 +2,15 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:logger/logger.dart';
 
+String _dateTimeFormat(DateTime time) {
+  final h = time.hour.toString().padLeft(2, '0');
+  final m = time.minute.toString().padLeft(2, '0');
+  final s = time.second.toString().padLeft(2, '0');
+  return '$h:$m:$s';
+}
+
+String _noDateTimeFormat(DateTime time) => '';
+
 class _RedactingFilter extends LogFilter {
   @override
   bool shouldLog(LogEvent event) {
@@ -17,7 +26,10 @@ class _JsonPrinter extends LogPrinter {
       'timestamp': DateTime.now().toUtc().toIso8601String(),
       'level': event.level.toString(),
       'message': event.message.toString(),
-      'logger': 'intelliattend',
+      'service': 'smartboard',
+      'version': Log._appVersion,
+      'environment': kReleaseMode ? 'production' : 'development',
+      'traceId': Log._generateTraceId(),
     };
     if (event.error != null) {
       entry['error'] = event.error.toString();
@@ -44,6 +56,9 @@ class _RedactingOutput extends LogOutput {
 }
 
 class Log {
+  static String _appVersion = '';
+  static int _traceIdCounter = 0;
+
   static final Logger _logger = Logger(
     filter: _RedactingFilter(),
     printer: kReleaseMode ? _JsonPrinter() : PrettyPrinter(
@@ -52,10 +67,21 @@ class Log {
       lineLength: 80,
       colors: !kReleaseMode,
       printEmojis: !kReleaseMode,
-      printTime: !kReleaseMode,
+      dateTimeFormat: !kReleaseMode ? _dateTimeFormat : _noDateTimeFormat,
     ) as LogPrinter,
     output: _RedactingOutput(),
   );
+
+  static String _generateTraceId() {
+    _traceIdCounter++;
+    final ts = DateTime.now().millisecondsSinceEpoch.toRadixString(16);
+    final seq = _traceIdCounter.toRadixString(16).padLeft(4, '0');
+    return '$ts-$seq';
+  }
+
+  static void setAppVersion(String version) {
+    _appVersion = version;
+  }
 
   static void d(dynamic message, [dynamic error, StackTrace? stackTrace]) {
     _logger.d(message, error: error, stackTrace: stackTrace);

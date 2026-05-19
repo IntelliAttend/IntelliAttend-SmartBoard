@@ -37,7 +37,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     // Registration happens before the board has any identity — there is nothing
     // to protect yet. Drop all kiosk restrictions so the admin can minimise,
     // switch apps, and most importantly EXIT if they need to abort setup.
-    KioskService.setMode(KioskMode.open);
+    // Deferred to post-frame to avoid crashing window_manager during build.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) KioskService.setMode(KioskMode.fullscreen);
+    });
   }
 
   @override
@@ -119,11 +122,12 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           WidgetsBinding.instance.addPostFrameCallback((_) async {
             if (!mounted) return;
             final deviceRepo = context.read<IDeviceRepository>();
+            final nav = Navigator.of(context);
             final registration = await deviceRepo.getRegistration();
             if (!mounted) return;
             if (registration != null) {
               Log.i('[RegistrationScreen] Registration confirmed in Isar — navigating directly to IdleScreen.');
-              Navigator.of(context).pushAndRemoveUntil(
+              nav.pushAndRemoveUntil(
                 MaterialPageRoute(
                   builder: (context) => IdleScreen(registration: registration),
                 ),
@@ -133,7 +137,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
               // Fallback: Isar read returned null (unexpected). Let BootScreen
               // re-verify state and decide where to go.
               Log.w('[RegistrationScreen] Registration not found in Isar after completion — falling back to BootScreen.');
-              Navigator.of(context).pushAndRemoveUntil(
+              nav.pushAndRemoveUntil(
                 MaterialPageRoute(builder: (context) => const BootScreen()),
                 (route) => false,
               );
@@ -208,12 +212,12 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                         borderRadius: BorderRadius.circular(24),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.04),
+                            color: Colors.black.withValues(alpha: 0.04),
                             blurRadius: 40,
                             offset: const Offset(0, 10),
                           ),
                         ],
-                        border: Border.all(color: Colors.black.withOpacity(0.05)),
+                        border: Border.all(color: Colors.black.withValues(alpha: 0.05)),
                       ),
                       child: Form(
                         key: _formKey,
@@ -223,7 +227,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                             Container(
                               padding: const EdgeInsets.all(24),
                               decoration: BoxDecoration(
-                                color: AppColors.primaryTeal.withOpacity(0.1),
+                                color: AppColors.primaryTeal.withValues(alpha: 0.1),
                                 shape: BoxShape.circle,
                               ),
                               child: const Icon(Icons.security_rounded,

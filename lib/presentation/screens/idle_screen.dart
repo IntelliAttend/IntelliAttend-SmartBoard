@@ -1,14 +1,14 @@
-// Pure Firestore snapshots() - exactly like mobile apps
-// No server API calls, no polling, no heartbeats
+// Isar-local schedule data, REST-only sync on boot/day-change.
+// No Firestore snapshot listeners — zero continuous read cost.
 
 import 'dart:async';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/config/app_config.dart';
+import '../../core/telemetry/metrics_collector.dart';
 import '../../core/utils/logger.dart';
 import '../../data/repositories/device_repository.dart';
 import 'package:provider/provider.dart';
@@ -30,16 +30,17 @@ import 'timetable_screen.dart';
 import 'analytics_screen.dart';
 import 'notifications_screen.dart';
 import '../../services/time_sync_service.dart';
+import '../../services/timetable_cache.dart';
 import 'package:video_player/video_player.dart';
 import '../../services/pre_flight_service.dart';
+import '../../services/totp_engine.dart';
 import '../../core/platform/kiosk_service.dart';
 
 enum PreFlightStatus { none, connecting, ready }
 
 class IdleScreen extends StatefulWidget {
   final DeviceRegistration registration;
-  final bool isDegraded;
-  const IdleScreen({super.key, required this.registration, this.isDegraded = false});
+  const IdleScreen({super.key, required this.registration});
   
   @override
   State<IdleScreen> createState() => _IdleScreenState();
@@ -50,23 +51,44 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   List<TimetableEntry> _todayTimeline = [];
   bool _isLoading = false;
   String? _errorMessage;
-  StreamSubscription<List<TimetableEntry>>? _timetableSubscription;
-  StreamSubscription<Map<String, dynamic>?>? _sessionSubscription;
   Timer? _preClassTimer;
   TimetableEntry? _upcomingSlot;
   bool _showStartingSoon = false;
   bool _isKeypadVisible = false;
   Timer? _inactivityTimer;
   final TextEditingController _otpController = TextEditingController();
-  int _presentCount = 0;
-  StreamSubscription<int>? _attendanceSubscription;
+  final int _presentCount = 0;
   VideoPlayerController? _videoController;
   bool _isVideoInitialized = false;
   String _idleTheme = 'auto'; // 'auto', 'white', or 'dark'
   bool _forceShowCard = false; // For starting session in advance via lock icon tap
+
+  // Session ID received from the preflight API response (_triggerWarmUp).
+  // Stored here in RAM so OTP submission (_handleVerifyOtp) can use it
+  // directly. Falls back to initiateSession() API response if this is null.
+  String? _preAllocatedSessionId;
   PreFlightStatus _preFlightStatus = PreFlightStatus.none;
   bool _isReadyCheckDone = false;
+  bool _preFlightForceAttempted = false;
+  String? _currentSlotWarmUpSlotId;
+  /// Tracks which upcoming slot's warm-up has been initiated so the 10-second
+  /// [_preClassTimer] in [_checkUpcomingClass] does NOT re-trigger a warm-up
+  /// that already failed. Without this guard, the UI cycles through
+  /// PENDING → WARMING UP... → PENDING → WARMING UP... every 10 seconds.
+  String? _warmUpTriggeredSlotId;
   StreamSubscription<dynamic>? _preFlightSessionSubscription; // cleanup handle for warm-up
+
+  // Listens to the global TimetableCache — every Firestore snapshot update
+  // triggers _onTimetableCacheChanged which re-reads today's entries from RAM
+  // and calls setState, keeping the entire idle UI in sync without polling.
+  void _onTimetableCacheChanged() {
+    if (mounted) {
+      setState(() {
+        _todayTimeline = TimetableCache().todayTimeline;
+        _bedrockEntry = TimetableCache().currentSlot;
+      });
+    }
+  }
 
   // Cinematic Transition
   late AnimationController _cinematicController;
@@ -77,22 +99,55 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
-    // v6.4: Set to Soft Mode on Idle screen to allow on-demand minimize
-    KioskService.setMode(KioskMode.soft);
 
+    // Only build the animation controller and read local caches synchronously.
+    // Anything that touches window_manager, Firestore, or video network I/O is
+    // deferred to a post-frame callback so it cannot race against Flutter's
+    // first-frame commit on Windows (the cause of the silent engine crash).
     _cinematicController = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 10), // Slow 10s transition
+      duration: const Duration(seconds: 10),
     )..addListener(() => setState(() {}));
 
-    _loadInitialData();
-    _loadPreferences();
-    _startRealTimeListener();
-    _startPreClassTimer();
-    if (AppConfig.enableVideoBreaks) {
-      _initVideoBackground();
-    }
-    _startCinematicMonitor();
+    // Load timetable from Isar + subscribe to in-memory cache for live updates.
+    // The cache is the single source of truth for the current slot — the local
+    // _findCurrentSlot is removed in favour of TimetableCache().currentSlot.
+    _loadInitialData();   // Isar read — local only, safe.
+    _loadPreferences();   // SecureStorage read — local only, safe.
+
+    // Subscribe to the global timetable cache. Every update from the
+    // Firestore listener flows through TimetableCache → this callback,
+    // keeping the idle UI in sync with zero polling overhead.
+    TimetableCache().addListener(_onTimetableCacheChanged);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+
+      // 1. Set kiosk mode FIRST so window state is settled before any
+      //    Firebase auth callbacks arrive on background threads.
+      await KioskService.setMode(KioskMode.fullscreen);
+
+      if (!mounted) return;
+
+      // 2. Start global background protocols (SyncManager, WindowOrchestrator,
+      //    PreFlightService). These open Firestore listeners + a Timer that
+      //    can call window_manager. Now safe because setMode has completed.
+      await startBackgroundProtocols();
+
+      if (!mounted) return;
+
+      // 3. One-shot REST sync to guarantee fresh data on boot.
+      //    The Firestore snapshot listener keeps the cache + Isar updated
+      //    going forward, so subsequent sync calls are no longer needed.
+      await context.read<IDeviceRepository>().syncTimetable(fullSync: true);
+      _refreshTimetable();
+      _checkCrashRecovery();
+      _startPreClassTimer();
+      _startCinematicMonitor();
+      if (AppConfig.enableVideoBreaks) {
+        _initVideoBackground();
+      }
+    });
   }
 
 
@@ -177,18 +232,66 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     return _isBioBreak() || _isLunchBreak();
   }
 
-  bool _isBioBreak() {
+  int _toMinutes(String time) {
+    final parts = time.split(':');
+    if (parts.length != 2) return 0;
+    return int.parse(parts[0]) * 60 + int.parse(parts[1]);
+  }
+
+  int _currentGapMinutes() {
+    if (_todayTimeline.isEmpty) return 0;
     final now = TimeSyncService.timeNow;
-    final start = DateTime(now.year, now.month, now.day, 11, 10);
-    final end = DateTime(now.year, now.month, now.day, 11, 20);
-    return now.isAfter(start) && now.isBefore(end);
+    final nowMinutes = now.hour * 60 + now.minute;
+    final sorted = List<TimetableEntry>.from(_todayTimeline)
+      ..sort((a, b) => _toMinutes(a.startTime).compareTo(_toMinutes(b.startTime)));
+    for (int i = 0; i < sorted.length - 1; i++) {
+      final prevEnd = _toMinutes(sorted[i].endTime);
+      final nextStart = _toMinutes(sorted[i + 1].startTime);
+      int gap = nextStart - prevEnd;
+      if (gap < -1200) gap += 1440;
+      if (gap >= 5 && nowMinutes >= prevEnd && nowMinutes < nextStart) return gap;
+    }
+    return 0;
+  }
+
+  bool _isBioBreak() {
+    final gap = _currentGapMinutes();
+    return gap > 0 && gap <= 15;
   }
 
   bool _isLunchBreak() {
+    final gap = _currentGapMinutes();
+    return gap > 15;
+  }
+
+  bool _isPreBootPhase() {
+    if (_bedrockEntry != null || _todayTimeline.isEmpty) return false;
     final now = TimeSyncService.timeNow;
-    final start = DateTime(now.year, now.month, now.day, 12, 10);
-    final end = DateTime(now.year, now.month, now.day, 12, 50);
-    return now.isAfter(start) && now.isBefore(end);
+    final currentMinutes = now.hour * 60 + now.minute;
+    final firstEntry = _todayTimeline.first;
+    final parts = firstEntry.startTime.split(':');
+    if (parts.length != 2) return false;
+    int firstStart = int.parse(parts[0]) * 60 + int.parse(parts[1]);
+    int diff = firstStart - currentMinutes;
+    if (diff < -1200) diff += 1440;
+    return diff > 0 && diff <= 10;
+  }
+
+  bool _isEveningPhase() {
+    if (_todayTimeline.isEmpty || _bedrockEntry != null) return false;
+    final now = TimeSyncService.timeNow;
+    final currentMinutes = now.hour * 60 + now.minute;
+    for (final entry in _todayTimeline) {
+      final parts = entry.startTime.split(':');
+      if (parts.length != 2) continue;
+      int startMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
+      if (startMinutes > currentMinutes) return false;
+    }
+    final lastEntry = _todayTimeline.last;
+    final endParts = lastEntry.endTime.split(':');
+    if (endParts.length != 2) return false;
+    int lastEndMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+    return currentMinutes > lastEndMinutes;
   }
 
   String _getBreakTip() {
@@ -207,20 +310,18 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     if (mounted) {
       setState(() {
         _todayTimeline = initialTimeline;
-        _bedrockEntry = _findCurrentSlot(initialTimeline);
+        _bedrockEntry = TimetableCache().currentSlot;
       });
     }
   }
 
   @override
   void dispose() {
+    TimetableCache().removeListener(_onTimetableCacheChanged);
     _cinematicTimer?.cancel();
     _videoController?.dispose();
     _otpController.dispose();
     _inactivityTimer?.cancel();
-    _timetableSubscription?.cancel();
-    _sessionSubscription?.cancel();
-    _attendanceSubscription?.cancel();
     _preClassTimer?.cancel();
     _preFlightSessionSubscription?.cancel();
     _cinematicController.dispose();
@@ -239,94 +340,80 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     });
   }
 
-  void _startRealTimeListener() {
-    if (Firebase.apps.isEmpty) {
-      setState(() => _errorMessage = 'Firebase not initialized');
-      return;
-    }
-    
+  /// Refreshes timetable from local Isar storage.
+  /// Called after the one-shot REST sync on boot. Once the Firestore
+  /// snapshot listener fires, the [TimetableCache] listener handles
+  /// subsequent reactive updates.
+  Future<void> _refreshTimetable() async {
     final deviceRepository = context.read<IDeviceRepository>();
-    
-    _timetableSubscription = deviceRepository.watchTodaySchedule(widget.registration).listen(
-      (entries) {
-        if (mounted) {
-          setState(() {
-            _todayTimeline = entries;
-            _bedrockEntry = _findCurrentSlot(entries);
-          });
-        }
-      },
-      onError: (e) => Log.e('❌ [Idle] Timetable stream error: $e'),
-    );
-
-    _sessionSubscription = deviceRepository.watchActiveSession(widget.registration).listen(
-      (sessionData) {
-        if (mounted && sessionData != null) {
-          // Live session detected for this room. We intentionally do NOT
-          // auto-resume into QR generation: the session secret lives only
-          // in this process's RAM (SessionSecretVault) and was wiped on
-          // restart. The faculty must re-enter the PIN to regenerate it.
-          // This is the IntelliAttend "RAM-only secret" contract.
-          Log.i('Active session detected; awaiting faculty PIN re-entry.');
-        }
-      },
-      onError: (e) => Log.e('❌ [Idle] Session stream error: $e'),
-    );
+    final entries = await deviceRepository.getTodayTimeline();
+    if (mounted) {
+      setState(() {
+        _todayTimeline = entries;
+        _bedrockEntry = TimetableCache().currentSlot;
+      });
+    }
   }
 
+  /// Checks the local Isar vault + SecureStorage for a resumable session.
+  /// If one exists (e.g. the board crashed mid-session), navigates straight
+  /// to AttendanceScreen — no OTP re-entry needed.
+  /// This is the sole crash-recovery path — no Firestore listeners needed.
+  Future<void> _checkCrashRecovery() async {
+    try {
+      final session = await SessionManager.getResumeableSession();
+      if (session == null) return;
+
+      final secret =
+          await SecureStorageService.getSessionSecret(session.sessionId);
+      if (secret == null || secret.isEmpty) return;
+
+      Log.i(
+          '[Idle] Crash recovery: resuming session ${session.sessionId}');
+      if (mounted) {
+        final engine = TotpEngine(
+          sessionId: session.sessionId,
+          sessionSecret: secret,
+        );
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (context) => AttendanceScreen(
+              sessionId: session.sessionId,
+              totpEngine: engine,
+              capacity: widget.registration.capacity,
+              courseName: session.courseName,
+              facultyName: session.facultyName,
+              sectionId: session.sectionId,
+              roomName: widget.registration.roomName,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      Log.w('⚠️ [Idle] Crash recovery check failed: $e');
+    }
+  }
   /// Helper to derive the final secret using the hardware fingerprint (Atomic Logic)
   Future<String?> _deriveSecret(Map<String, dynamic> data) async {
     final half1 = data['session_secret_half1']?.toString();
-    if (half1 != null) {
-      final deviceId = await HardwareFingerprintService.getDeviceId();
-      final half2 = Hmac(sha256, utf8.encode(deviceId))
-          .convert(utf8.encode(half1))
-          .toString()
-          .substring(0, 16);
-      return '$half1$half2';
-    } else {
-      return data['session_secret']?.toString();
-    }
-  }
+    if (half1 == null) return null;
 
-  TimetableEntry? _findCurrentSlot(List<TimetableEntry> entries) {
-    if (entries.isEmpty) return null;
-    final now = TimeSyncService.timeNow;
-    final currentMinutes = now.hour * 60 + now.minute;
-    
-    for (final entry in entries) {
-      final startParts = entry.startTime.split(':');
-      final endParts = entry.endTime.split(':');
-      if (startParts.length != 2 || endParts.length != 2) continue;
-
-      int startMins = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
-      int endMins = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
-
-      // Requirement: Ignition window closes 3 minutes before end of session
-      final int ignitionDeadline = endMins - 3;
-
-      // Handle wraparound (e.g., 23:20 to 00:20)
-      if (endMins < startMins) {
-        if (currentMinutes >= startMins || currentMinutes < ignitionDeadline) {
-          return entry;
-        }
-      } else {
-        // Standard session
-        if (currentMinutes >= startMins && currentMinutes < ignitionDeadline) {
-          return entry;
-        }
-      }
-    }
-    return null;
+    final deviceId = await HardwareFingerprintService.getDeviceId();
+    final half2 = Hmac(sha256, utf8.encode(deviceId))
+        .convert(utf8.encode(half1))
+        .toString()
+        .substring(0, 16);
+    return '$half1$half2';
   }
 
   void _startPreClassTimer() {
     _preClassTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
       if (mounted) {
         setState(() {
-          _bedrockEntry = _findCurrentSlot(_todayTimeline);
+          _bedrockEntry = TimetableCache().currentSlot;
         });
       }
+      Log.i('[IdleTimer] tick: bedrockEntry.slotId=${_bedrockEntry?.slotId}  timelineCount=${TimetableCache().todayTimeline.length}  now=${TimeSyncService.timeNow.hour}:${TimeSyncService.timeNow.minute}');
       _checkUpcomingClass();
       _checkDayChange();
     });
@@ -337,10 +424,9 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   void _checkDayChange() {
     final today = TimeSyncService.timeNow.weekday;
     if (_lastQueryDay != null && _lastQueryDay != today) {
-      Log.i('📅 [Idle] Day changed from $_lastQueryDay to $today. Refreshing stream...');
+      Log.i('📅 [Idle] Day changed from $_lastQueryDay to $today. Refreshing from cache...');
       _lastQueryDay = today;
-      _timetableSubscription?.cancel();
-      _startRealTimeListener();
+      _refreshTimetable();
     }
     _lastQueryDay ??= today;
   }
@@ -379,8 +465,12 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
           _showStartingSoon = true;
         });
         
-        // Trigger Per-Session Warm-Up
-        if (_preFlightStatus == PreFlightStatus.none) {
+        // Trigger Per-Session Warm-Up — only ONCE per slot so the timer does
+        // NOT re-trigger after a failed API call every 10 seconds (which would
+        // cause the UI to cycle through PENDING → WARMING UP... → PENDING).
+        if (_preFlightStatus == PreFlightStatus.none &&
+            _warmUpTriggeredSlotId != nextEntry.slotId) {
+          _warmUpTriggeredSlotId = nextEntry.slotId;
           _triggerWarmUp(nextEntry.slotId);
         }
 
@@ -390,8 +480,12 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
           ApiService.syncReadyCheck().catchError((e) => Log.w('⚠️ Ready check failed: $e'));
         }
 
-        // v6.1 Fallback: Show warning if T-0 reached without Pre-Flight success
+        // v6.1 Fallback: Force a fresh preflight attempt at T-0
         if (minDiff == 0 && _preFlightStatus != PreFlightStatus.ready) {
+          if (_upcomingSlot != null && !_preFlightForceAttempted) {
+            _preFlightForceAttempted = true;
+            _triggerWarmUp(_upcomingSlot!.slotId, force: true);
+          }
           setState(() {
             _errorMessage = 'System sync delayed. Enter PIN to proceed.';
           });
@@ -414,25 +508,66 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
           _upcomingSlot = null;
           _forceShowCard = false;
           _preFlightStatus = PreFlightStatus.none;
+          _preFlightForceAttempted = false;
+          _warmUpTriggeredSlotId = null;
           _preFlightSessionSubscription?.cancel();
+          // Clear stale pre-allocated ID — a new one will arrive from the
+          // next preflight API call when the following slot's T-3 window opens.
+          _preAllocatedSessionId = null;
         });
+      }
+
+      // Fallback: current class in progress with no session yet.
+      // Does NOT require nextEntry == null — the current slot might be LIVE
+      // even when there are later classes today. The _preAllocatedSessionId
+      // guard prevents redundant triggers.
+      if (_bedrockEntry != null && _preAllocatedSessionId == null) {
+        final currentSlotId = _bedrockEntry!.slotId;
+        if (_currentSlotWarmUpSlotId != currentSlotId) {
+          _currentSlotWarmUpSlotId = currentSlotId;
+          Log.i('[Idle] Current class $currentSlotId in progress — triggering warm-up.');
+          _triggerWarmUp(currentSlotId);
+        }
+      } else if (_bedrockEntry == null) {
+        _currentSlotWarmUpSlotId = null;
       }
     }
   }
 
 
-  void _triggerWarmUp(String slotId) async {
+  void _triggerWarmUp(String slotId, {bool force = false}) async {
     try {
-      setState(() => _preFlightStatus = PreFlightStatus.connecting);
-      final result = await PreFlightService().runPerSessionWarmUp(slotId);
-      
-      if (result != null && result['status'] == 'ready') {
-        if (mounted) {
-          setState(() => _preFlightStatus = PreFlightStatus.ready);
-          Log.i('✅ [Idle] Board ARMED. SessionID received. Waiting for faculty PIN...');
+      setState(() {
+        _preFlightStatus = PreFlightStatus.connecting;
+        _errorMessage = null;
+      });
+
+      // Callback that fires both on the initial call AND on every retry
+      // success inside PreFlightService. This ensures the UI updates to
+      // "ready" when a delayed retry finally succeeds.
+      void onWarmUpSuccess(Map<String, dynamic> result) {
+        if (!mounted) return;
+        if (result['pre_allocated_session_id'] != null) {
+          final pid = result['pre_allocated_session_id']?.toString();
+          setState(() {
+            _preFlightStatus = PreFlightStatus.ready;
+            _preAllocatedSessionId = pid;
+            _errorMessage = null;
+          });
+          Log.i('✅ [Idle] Board ARMED. SessionID in RAM: $pid.');
         }
-      } else {
-        if (mounted) setState(() => _preFlightStatus = PreFlightStatus.none);
+      }
+
+      final result = force
+          ? await PreFlightService().forceWarmUp(slotId,
+              onSuccess: onWarmUpSuccess)
+          : await PreFlightService().runPerSessionWarmUp(slotId,
+              onSuccess: onWarmUpSuccess);
+
+      if (result == null && mounted) {
+        // Initial attempt failed — the onSuccess callback will still fire
+        // later if a PreFlightService retry eventually succeeds.
+        setState(() => _preFlightStatus = PreFlightStatus.none);
       }
     } catch (e) {
       if (mounted) {
@@ -459,6 +594,18 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       setState(() => _errorMessage = 'Please enter a valid 6-digit PIN');
       return;
     }
+
+    // Try pre-flight warm-up once if session ID is missing. If retries
+    // exhausted, fall back to the session ID from the initiateSession API.
+    if (_preAllocatedSessionId == null) {
+      if (_upcomingSlot != null) {
+        _triggerWarmUp(_upcomingSlot!.slotId, force: true);
+      }
+      if (_preAllocatedSessionId == null) {
+        Log.w('[Idle] Pre-flight unavailable. Faculty may proceed with API-provided session ID.');
+      }
+    }
+
     final rateKey = 'session_pin_${widget.registration.smartBoardId}';
     if (!RateLimiter.isAllowed(rateKey)) {
       setState(() => _errorMessage = 'Too many attempts. Please wait before trying again.');
@@ -466,11 +613,19 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     }
     setState(() { _isLoading = true; _errorMessage = null; });
     try {
+      // Strict OTP Protocol: OTP must never be stored. The text controller is
+      // cleared the instant the API call fires — before waiting for a response.
+      _otpController.clear();
+
       final result = await ApiService.initiateSession(otp);
       RateLimiter.reset(rateKey);
       final data = result['data'] ?? result;
-      final sessionId = data['session_id']?.toString();
-      
+
+      // Pre-allocated session ID from warm-up is authoritative if available.
+      // Fall back to the API response when retries were exhausted.
+      final sessionId =
+          _preAllocatedSessionId ?? data['session_id']?.toString();
+
       final sessionSecret = await _deriveSecret(data);
 
       final rosterCount = data['roster_count'] is int ? data['roster_count'] : int.tryParse(data['roster_count']?.toString() ?? '0') ?? 0;
@@ -478,22 +633,37 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       final courseName = data['course_name']?.toString() ?? 'Active Class';
       final sectionId = data['section_id']?.toString() ?? widget.registration.smartBoardId;
 
-      if (sessionId == null || sessionSecret == null) throw Exception('Invalid server response');
+      if (sessionId == null || sessionSecret == null) {
+        setState(() => _errorMessage = 'Invalid server response: missing session data. Please try again with a new PIN.');
+        return;
+      }
 
       await SessionManager.saveSession(
         sessionId: sessionId, rosterCount: rosterCount, facultyName: facultyName,
         courseName: courseName, sectionId: sectionId, endTime: TimeSyncService.timeNow.add(const Duration(hours: 1)),
       );
-      SessionSecretVault.put(sessionId, sessionSecret);
+      MetricsCollector().recordSessionStart();
+      await SecureStorageService.storeSessionSecret(sessionId, sessionSecret);
+
+      // Session is now live — clear the in-memory pre-allocated ID so it
+      // cannot be accidentally reused if the board returns to IdleScreen.
+      if (mounted) setState(() => _preAllocatedSessionId = null);
 
       if (mounted) {
+        final engine = TotpEngine(
+          sessionId: sessionId,
+          sessionSecret: sessionSecret,
+        );
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (context) => AttendanceScreen(
-              sessionId: sessionId, sessionSecret: sessionSecret,
+              sessionId: sessionId,
+              totpEngine: engine,
               capacity: widget.registration.capacity,
               courseName: courseName,
               facultyName: facultyName,
+              sectionId: sectionId,
+              roomName: widget.registration.roomName,
             ),
           ),
         );
@@ -531,8 +701,8 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     final morph = isBlindlyWhite ? 0.0 : _cinematicController.value;
     
     final overlayColor = Color.lerp(
-      Colors.white.withOpacity(0.1),
-      Colors.black.withOpacity(0.4),
+      Colors.white.withValues(alpha: 0.1),
+      Colors.black.withValues(alpha: 0.4),
       morph
     )!;
     
@@ -555,17 +725,13 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     )!;
 
     // Context-Aware Visibility:
-    // 1. If starting soon (3 min window) OR user tapped the lock to initiate early, show the card.
-    // 2. Otherwise, card opacity depends on the morph (fades out as screen darkens).
-    final bool showCardContextually = _showStartingSoon || _forceShowCard;
+    // 1. OTP card only appears when user taps the unlocked lock icon (at T-3).
+    // 2. Otherwise, show the lock symbol (unlocked at T-3, locked otherwise).
+    final bool showCardContextually = _forceShowCard;
     
-    final cardOpacity = showCardContextually 
-        ? 1.0 
-        : (1.0 - (morph * 1.5)).clamp(0.0, 1.0);
+    final cardOpacity = showCardContextually ? 1.0 : 0.0;
         
-    final lockOpacity = showCardContextually 
-        ? 0.0 
-        : (morph * 2.0 - 1.0).clamp(0.0, 1.0);
+    final lockOpacity = showCardContextually ? 0.0 : 1.0;
 
     List<Widget> stackChildren = [];
     
@@ -635,9 +801,9 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
                             child: ConstrainedBox(
                               constraints: const BoxConstraints(maxWidth: 320),
                               child: _buildAuthCard(
-                                isBlindlyWhite ? Colors.white : headerFooterColor, 
-                                isBlindlyWhite ? AppColors.textPrimaryLight : primaryTextColor, 
-                                isBlindlyWhite ? AppColors.textSecondaryLight : secondaryTextColor, 
+                                isBlindlyWhite ? Colors.white : headerFooterColor,
+                                isBlindlyWhite ? AppColors.textPrimaryLight : primaryTextColor,
+                                isBlindlyWhite ? AppColors.textSecondaryLight : secondaryTextColor,
                                 showVideo && !isBlindlyWhite
                               ),
                             ),
@@ -691,59 +857,12 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
               letterSpacing: -1,
             ),
           ),
-          const SizedBox(width: 12),
-          _buildPreFlightDot(),
-          if (widget.isDegraded)
-            Padding(
-              padding: const EdgeInsets.only(left: 12),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.9),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: const Text('OFFLINE MODE', style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)),
-              ),
-            ),
           const Spacer(),
           _buildNavLinks(textColor),
           const SizedBox(width: 40),
           _buildHeaderActions(textColor),
         ],
       ),
-    );
-  }
-
-  Widget _buildPreFlightDot() {
-    if (_preFlightStatus == PreFlightStatus.none) return const SizedBox.shrink();
-    
-    final color = _preFlightStatus == PreFlightStatus.connecting ? Colors.orange : Colors.green;
-    final label = _preFlightStatus == PreFlightStatus.connecting ? "Connecting..." : "System Ready";
-
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(color: color.withOpacity(0.5), blurRadius: 4, spreadRadius: 1)
-            ],
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          label,
-          style: TextStyle(
-            color: color,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ],
     );
   }
 
@@ -767,11 +886,9 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       children: [
         _navItem('Welcome', activeColor, true, () {}),
         const SizedBox(width: 30),
-        _navItem('Timetable', inactiveColor, false, () async {
-          final weekly = await globalDeviceRepository.getWeeklyTimeline();
-          if (mounted) {
-            Navigator.of(context).push(MaterialPageRoute(builder: (context) => TimetableScreen(weeklyTimeline: weekly)));
-          }
+        _navItem('Timetable', inactiveColor, false, () {
+          final weekly = TimetableCache().weeklyTimeline;
+          Navigator.of(context).push(MaterialPageRoute(builder: (context) => TimetableScreen(weeklyTimeline: weekly)));
         }),
         const SizedBox(width: 30),
         _navItem('Analytics', inactiveColor, false, () {
@@ -857,6 +974,12 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     } else if (isLunch) {
       course = 'LUNCH BREAK';
       faculty = 'RECHARGE';
+    } else if (_bedrockEntry == null && _isEveningPhase()) {
+      course = 'HAPPY EVENING';
+      faculty = 'HAVE A GREAT DAY';
+    } else if (_bedrockEntry == null && _isPreBootPhase()) {
+      course = 'GOOD MORNING';
+      faculty = 'SYSTEM READY';
     }
 
     return Column(
@@ -1004,7 +1127,16 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
           if (_errorMessage != null)
             Padding(
               padding: const EdgeInsets.only(top: 12),
-              child: Text(_errorMessage!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _errorMessage!,
+                  style: const TextStyle(color: AppColors.error, fontSize: 12),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ),
           const SizedBox(height: 32),
           SizedBox(
@@ -1022,6 +1154,7 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
                   ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : Row(
                       mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         const Icon(Icons.check_circle_outline, size: 18),
                         const SizedBox(width: 10),
@@ -1036,26 +1169,39 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'STATUS: ${_getPreFlightStatusText()}',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1,
-                  color: secondaryColor.withValues(alpha: 0.5),
-                ),
-              ),
-              Row(
-                children: [
-                  Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: _getIndicatorColor())),
-                  const SizedBox(width: 8),
-                  Text(
-                    'ENCRYPTED SESSION',
-                    style: TextStyle(
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'STATUS: ${_getPreFlightStatusText()}',
+                    style: const TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 1,
-                      color: secondaryColor.withValues(alpha: 0.5),
+                      color: Colors.grey,
+                    ),
+                    maxLines: 1,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: _getIndicatorColor())),
+                  const SizedBox(width: 8),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: const Text(
+                      'ENCRYPTED SESSION',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1,
+                        color: Colors.grey,
+                      ),
+                      maxLines: 1,
                     ),
                   ),
                 ],
@@ -1096,9 +1242,11 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
                   );
                 }
                 final entry = _todayTimeline[index];
+                final live = entry.slotId == _bedrockEntry?.slotId;
+                Log.i('[TimelineStrip] idx=$index slot=${entry.slotId} bedrock.slot=${_bedrockEntry?.slotId} isLive=$live');
                 return TimelineSlot(
                   entry: entry,
-                  isLive: entry.id == _bedrockEntry?.id,
+                  isLive: live,
                 );
               },
             ),
@@ -1193,9 +1341,8 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   }
 
   String _getFormattedDate(DateTime now) {
-    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return "${days[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}";
+    return "${dayNames[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}";
   }
 
   Widget _buildStartingSoonBanner() {
@@ -1205,19 +1352,24 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
         child: GlassContainer(
           padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
           borderRadius: 30,
-          color: AppColors.primaryTeal.withOpacity(0.9),
+          color: AppColors.primaryTeal.withValues(alpha: 0.9),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               const Icon(Icons.timer_outlined, color: Colors.white, size: 18),
               const SizedBox(width: 12),
-              Text(
-                'CLASS STARTING SOON: ${_upcomingSlot!.courseName.toUpperCase()}',
-                style: const TextStyle(
-                  color: Colors.white, 
-                  fontWeight: FontWeight.w900, 
-                  letterSpacing: 1.5,
-                  fontSize: 14,
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 600),
+                child: Text(
+                  'CLASS STARTING SOON: ${_upcomingSlot!.courseName.toUpperCase()}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1.5,
+                    fontSize: 14,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
@@ -1228,13 +1380,16 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   }
 
   Widget _buildHangingLock(Color color) {
+    final isUnlocked = _showStartingSoon || _bedrockEntry != null;
     return InkWell(
-      onTap: () {
-        setState(() {
-          _forceShowCard = true;
-        });
-        _resetInactivityTimer();
-      },
+      onTap: isUnlocked
+          ? () {
+              setState(() {
+                _forceShowCard = true;
+              });
+              _resetInactivityTimer();
+            }
+          : null,
       borderRadius: BorderRadius.circular(50),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1242,22 +1397,32 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
           Container(
             width: 2,
             height: 40,
-            color: color.withOpacity(0.2),
+            color: color.withValues(alpha: 0.2),
           ),
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: color.withOpacity(0.05),
+              color: isUnlocked
+                  ? AppColors.successLime.withValues(alpha: 0.15)
+                  : color.withValues(alpha: 0.05),
               shape: BoxShape.circle,
-              border: Border.all(color: color.withOpacity(0.1)),
+              border: Border.all(
+                color: isUnlocked
+                    ? AppColors.successLime.withValues(alpha: 0.3)
+                    : color.withValues(alpha: 0.1),
+              ),
             ),
-            child: Icon(Icons.lock_outline, color: color.withOpacity(0.5), size: 32),
+            child: Icon(
+              isUnlocked ? Icons.lock_open_outlined : Icons.lock_outline,
+              color: isUnlocked ? AppColors.successLime : color.withValues(alpha: 0.5),
+              size: 32,
+            ),
           ),
           const SizedBox(height: 12),
           Text(
-            'SESSION LOCKED',
+            isUnlocked ? 'TAP TO START' : 'SESSION LOCKED',
             style: TextStyle(
-              color: color.withOpacity(0.3),
+              color: isUnlocked ? AppColors.successLime : color.withValues(alpha: 0.3),
               fontSize: 10,
               fontWeight: FontWeight.bold,
               letterSpacing: 2,
