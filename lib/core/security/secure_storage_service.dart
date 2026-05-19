@@ -111,6 +111,13 @@ class SecureStorageService {
   static Future<void> storeIsarEncryptKey(String key) => _write(_keyIsarEncrypt, key);
   static Future<String?> getIsarEncryptKey() => _read(_keyIsarEncrypt);
 
+  // Session secrets — stored for crash recovery so the board can resume
+  // a running session without faculty re-entering the PIN.
+  static Future<void> storeSessionSecret(String sessionId, String secret) =>
+      _write('session_secret_$sessionId', secret);
+  static Future<String?> getSessionSecret(String sessionId) =>
+      _read('session_secret_$sessionId');
+
   // Board Firebase credentials — stored after successful registration so the
   // Firebase plugin can sign in on subsequent boots and use .snapshots() streams.
   static Future<void> storeBoardCredentials(String email, String password) async {

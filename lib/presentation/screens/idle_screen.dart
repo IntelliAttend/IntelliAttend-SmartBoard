@@ -17,7 +17,6 @@ import '../../main.dart';
 import '../../services/api_service.dart';
 import '../../core/platform/hardware_fingerprint_service.dart';
 import '../../core/security/secure_storage_service.dart';
-import '../../core/security/session_secret_vault.dart';
 import '../../core/rate_limiter.dart';
 import '../../models/isar_schemas.dart';
 import '../widgets/glass_container.dart';
