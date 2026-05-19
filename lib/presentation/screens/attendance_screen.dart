@@ -60,6 +60,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   Set<int> _presentSeatIndices = {}; // Tracks which seats are green
   int _secondsRemaining = 0; // Loaded from AppConfig on initState
   Timer? _countdownTimer;
+  Timer? _listenerHealthTimer;
+  DateTime? _attendeesLastSnapshot;
+  DateTime? _sessionStatusLastSnapshot;
 
   // Student Roster Data (Used for display mapping)
   List<StudentInfo> _students = [];
@@ -94,6 +97,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     _startCountdown();
     _listenForSessionEnd();
     _listenForAttendees();
+    _startListenerHealthMonitor();
     _loadClassRoster(); // Securely load students and map emails to seats
   } // end initState
 
@@ -209,6 +213,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
       return;
     }
 
+    _attendeesSubscription?.cancel();
     _attendeesSubscription = FirebaseFirestore.instance
         .collection('ActiveSessions')
         .doc(widget.sessionId)
@@ -217,12 +222,16 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
         .snapshots()
         .listen((snapshot) {
       if (!mounted) return;
-
+      _attendeesLastSnapshot = DateTime.now();
       final attendeeDocs = snapshot.docs;
       _updateAttendanceFromDatabase(attendeeDocs);
     }, onError: (e) {
-      Log.e('❌ [Attendance] Attendees stream error: $e');
-    });
+      Log.e('❌ [Attendance] Attendees stream error: $e — listener stays alive.');
+    }, onDone: () {
+      Log.w('⚠️ [Attendance] Attendees stream closed — reconnecting...');
+      _attendeesSubscription = null;
+      if (mounted) _listenForAttendees();
+    }, cancelOnError: false);
   }
 
   void _listenForSessionEnd() {
@@ -230,19 +239,25 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
       Log.w('[Attendance] Firebase not initialized — session end monitoring unavailable.');
       return;
     }
+    _sessionStatusSubscription?.cancel();
     _sessionStatusSubscription = FirebaseFirestore.instance
         .collection('ActiveSessions')
         .doc(widget.sessionId)
         .snapshots()
         .listen((snapshot) {
       if (!mounted) return;
+      _sessionStatusLastSnapshot = DateTime.now();
       final data = snapshot.data();
       if (data?['status'] == 'ended' && !_isSessionEnding) {
         _handleSessionEnd();
       }
     }, onError: (e) {
-      Log.e('❌ [Attendance] Session status stream error: $e');
-    });
+      Log.e('❌ [Attendance] Session status stream error: $e — listener stays alive.');
+    }, onDone: () {
+      Log.w('⚠️ [Attendance] Session status stream closed — reconnecting...');
+      _sessionStatusSubscription = null;
+      if (mounted) _listenForSessionEnd();
+    }, cancelOnError: false);
   }
 
   void _handleSessionEnd() {
@@ -349,8 +364,31 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     );
   }
 
+  void _startListenerHealthMonitor() {
+    _listenerHealthTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      final now = DateTime.now();
+      final staleThreshold = const Duration(minutes: 3);
+
+      if (_attendeesLastSnapshot != null &&
+          now.difference(_attendeesLastSnapshot!) > staleThreshold) {
+        Log.w('⚠️ [Attendance] Attendees stream stale — reconnecting...');
+        _attendeesSubscription?.cancel();
+        _attendeesSubscription = null;
+        if (mounted) _listenForAttendees();
+      }
+      if (_sessionStatusLastSnapshot != null &&
+          now.difference(_sessionStatusLastSnapshot!) > staleThreshold) {
+        Log.w('⚠️ [Attendance] Session status stream stale — reconnecting...');
+        _sessionStatusSubscription?.cancel();
+        _sessionStatusSubscription = null;
+        if (mounted) _listenForSessionEnd();
+      }
+    });
+  }
+
   @override
   void dispose() {
+    _listenerHealthTimer?.cancel();
     _qrRotationTimer?.cancel();
     _countdownTimer?.cancel();
     _attendeesSubscription?.cancel();
