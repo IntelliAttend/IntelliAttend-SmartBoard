@@ -84,7 +84,12 @@ class PreFlightService {
       if (now.day != _lastProcessedDate.day ||
           now.month != _lastProcessedDate.month ||
           now.year != _lastProcessedDate.year) {
-        Log.i('[PreFlight] New day detected. Resetting all daily flags.');
+        Log.i(
+            '[PreFlight] New day detected. Resetting all daily flags and slot states.');
+        for (final state in _slotStates.values) {
+          state.dispose();
+        }
+        _slotStates.clear();
         _isDailyBootDone = false;
         _telemetryPushedForCurrentSlot = false;
         _lastTelemetrySlotId = null;
@@ -117,9 +122,10 @@ class PreFlightService {
         _triggerStatusCheck(nextSlot.slotId);
       }
 
-      if (diffMin <= 3 && diffMin >= 0) {
-        runPerSessionWarmUp(nextSlot.slotId);
-      }
+      // Warm-up at T-3 is handled by IdleScreen._checkUpcomingClass (10s
+      // timer), which passes the onSuccess/onStatusChange callbacks needed
+      // to update the UI to "READY". Skipping here prevents the countdown
+      // watcher from consuming the slot's retry budget without callbacks.
     } catch (e) {
       Log.w('[PreFlight] Countdown check failed: $e');
     }
