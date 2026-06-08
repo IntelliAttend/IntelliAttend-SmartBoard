@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
@@ -19,12 +20,23 @@ class SslPinningService {
   static http.Client _create() {
     final fingerprint = dotenv.env['SSL_PIN_FINGERPRINT'];
 
+    if (fingerprint == null || fingerprint.isEmpty) {
+      if (kReleaseMode) {
+        throw StateError('SSL_PIN_FINGERPRINT not set in .env. '
+            'SSL pinning is mandatory in release mode. '
+            'Generate with: openssl x509 -in cert.pem -outform DER | shasum -a 256');
+      }
+      Log.w(
+          '⚠️ [SSL] SSL_PIN_FINGERPRINT not set. Set it in .env for production.');
+    }
+
     final inner = HttpClient()
       ..connectionTimeout = _connectionTimeout
       ..idleTimeout = _idleTimeout;
 
     if (fingerprint != null && fingerprint.isNotEmpty) {
-      inner.badCertificateCallback = (X509Certificate cert, String host, int port) {
+      inner.badCertificateCallback =
+          (X509Certificate cert, String host, int port) {
         try {
           final digest = sha256.convert(cert.der);
           if (digest.toString() == fingerprint) return true;
@@ -35,9 +47,8 @@ class SslPinningService {
         Log.e('❌ [SSL] Certificate pinning failed for $host');
         return false;
       };
-      Log.i('🔒 [SSL] Pinning enabled (fingerprint: ${fingerprint.substring(0, 8)}…).');
-    } else {
-      Log.w('⚠️ [SSL] SSL_PIN_FINGERPRINT not set. Set it in .env for production.');
+      Log.i(
+          '🔒 [SSL] Pinning enabled (fingerprint: ${fingerprint.substring(0, 8)}…).');
     }
 
     return IOClient(inner);

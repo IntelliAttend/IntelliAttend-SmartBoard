@@ -12,14 +12,15 @@ class FluidQrView extends StatefulWidget {
     required this.data,
     this.size = 300,
     this.color = Colors.black,
-    this.errorCorrectionLevel = QrErrorCorrectLevel.M,
+    this.errorCorrectionLevel = QrErrorCorrectLevel.Q,
   });
 
   @override
   State<FluidQrView> createState() => _FluidQrViewState();
 }
 
-class _FluidQrViewState extends State<FluidQrView> with SingleTickerProviderStateMixin {
+class _FluidQrViewState extends State<FluidQrView>
+    with SingleTickerProviderStateMixin {
   late QrImage _qrImage;
   late AnimationController _controller;
 
@@ -116,18 +117,19 @@ class FluidQrPainter extends CustomPainter {
         Rect.fromLTWH(x, y, s, s),
         Radius.circular(cellSize * 2),
       );
-      
+
       final innerRRect = RRect.fromRectAndRadius(
-        Rect.fromLTWH(x + cellSize, y + cellSize, s - 2 * cellSize, s - 2 * cellSize),
+        Rect.fromLTWH(
+            x + cellSize, y + cellSize, s - 2 * cellSize, s - 2 * cellSize),
         Radius.circular(cellSize),
       );
-      
+
       final path = Path.combine(
         PathOperation.difference,
         Path()..addRRect(outerRRect),
         Path()..addRRect(innerRRect),
       );
-      
+
       canvas.drawPath(path, paint);
 
       // Inner solid circle (matching React code exactly)
@@ -154,7 +156,7 @@ class FluidQrPainter extends CustomPainter {
 
           // Animate scale and opacity like the React code
           final moduleScale = animationValue;
-          
+
           canvas.drawCircle(
             Offset(cx, cy),
             dotRadius * moduleScale,
@@ -162,7 +164,9 @@ class FluidQrPainter extends CustomPainter {
           );
 
           // Horizontal connection
-          if (c + 1 < moduleCount && !isFinder(r, c + 1) && qrImage.isDark(r, c + 1)) {
+          if (c + 1 < moduleCount &&
+              !isFinder(r, c + 1) &&
+              qrImage.isDark(r, c + 1)) {
             canvas.drawRect(
               Rect.fromLTWH(
                 cx,
@@ -175,7 +179,9 @@ class FluidQrPainter extends CustomPainter {
           }
 
           // Vertical connection
-          if (r + 1 < moduleCount && !isFinder(r + 1, c) && qrImage.isDark(r + 1, c)) {
+          if (r + 1 < moduleCount &&
+              !isFinder(r + 1, c) &&
+              qrImage.isDark(r + 1, c)) {
             canvas.drawRect(
               Rect.fromLTWH(
                 cx - dotRadius * moduleScale,
@@ -193,8 +199,8 @@ class FluidQrPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant FluidQrPainter oldDelegate) {
-    return oldDelegate.qrImage != qrImage || 
-           oldDelegate.animationValue != animationValue ||
-           oldDelegate.color != color;
+    return oldDelegate.qrImage != qrImage ||
+        oldDelegate.animationValue != animationValue ||
+        oldDelegate.color != color;
   }
 }

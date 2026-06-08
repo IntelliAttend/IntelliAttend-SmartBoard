@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import '../utils/logger.dart';
 
 /// Real-time Windows system metrics for the heartbeat payload.
 ///
@@ -65,12 +66,16 @@ class SystemMetricsService {
     int memoryMb = 0;
     try {
       memoryMb = int.parse(results[0] ?? '0');
-    } catch (_) {}
+    } catch (e) {
+      Log.d('[Metrics] Could not parse memory value: $e');
+    }
 
     double cpuPercent = 0.0;
     try {
       cpuPercent = double.parse(results[1] ?? '0');
-    } catch (_) {}
+    } catch (e) {
+      Log.d('[Metrics] Could not parse CPU value: $e');
+    }
 
     _cached = SystemMetrics(
       memoryUsageMb: memoryMb,
@@ -93,7 +98,9 @@ class SystemMetricsService {
         final output = result.stdout.toString().trim();
         return output.isNotEmpty ? output : null;
       }
-    } catch (_) {}
+    } catch (e) {
+      Log.w('[Metrics] PowerShell command failed: $e');
+    }
     return null;
   }
 }

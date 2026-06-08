@@ -153,7 +153,8 @@ class TotpEngine {
   static void _isolateWorker(_TotpIsolatePayload payload) {
     int currentSkewMs = payload.initialSkewMs;
     // Pre-compute session ID hash once — it's stable for the session lifetime.
-    final sidHash = sha256.convert(utf8.encode(payload.sessionId)).bytes.take(6).toList();
+    final sidHash =
+        sha256.convert(utf8.encode(payload.sessionId)).bytes.take(6).toList();
 
     final controlPort = ReceivePort();
     controlPort.listen((message) {
@@ -171,10 +172,12 @@ class TotpEngine {
     });
   }
 
-  static void _generateNextToken(_TotpIsolatePayload payload, int skewMs, Random secureRandom, List<int> sidHash) {
+  static void _generateNextToken(_TotpIsolatePayload payload, int skewMs,
+      Random secureRandom, List<int> sidHash) {
     try {
       // 1. Corrected Unix epoch in seconds (not ms — saves 2 bytes).
-      final int timestampSec = ((DateTime.now().millisecondsSinceEpoch + skewMs) / 1000).floor();
+      final int timestampSec =
+          ((DateTime.now().millisecondsSinceEpoch + skewMs) / 1000).floor();
 
       // 2. Timestamp as uint32 big-endian.
       final tsBytes = ByteData(4)..setUint32(0, timestampSec, Endian.big);
@@ -203,8 +206,7 @@ class TotpEngine {
 
       payload.sendPort.send(finalToken);
     } catch (e) {
-      // ignore: avoid_print
-      print('[TotpEngine] Generation Error: $e');
+      Log.e('[TotpEngine] Generation Error: $e');
     }
   }
 }

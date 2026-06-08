@@ -39,6 +39,9 @@ class AppConfig {
   static String get firebaseApiKey => dotenv.env['FIREBASE_API_KEY'] ?? '';
   static String get firebaseProjectId =>
       dotenv.env['FIREBASE_PROJECT_ID'] ?? '';
+  static String get firebaseAppId => dotenv.env['FIREBASE_APP_ID'] ?? '';
+  static String get firebaseMessagingSenderId =>
+      dotenv.env['FIREBASE_MESSAGING_SENDER_ID'] ?? '';
 
   static void validate() {
     if (dotenv.env['API_BASE_URL'] == null) {
@@ -47,6 +50,10 @@ class AppConfig {
     }
     if (firebaseApiKey.isEmpty) {
       Log.w('[AppConfig] FIREBASE_API_KEY not set in .env — auth will fail.');
+    }
+    if (firebaseAppId.isEmpty) {
+      Log.w(
+          '[AppConfig] FIREBASE_APP_ID not set in .env — Firebase init may fail.');
     }
   }
 }

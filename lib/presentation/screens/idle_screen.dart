@@ -426,7 +426,9 @@ class _IdleScreenState extends State<IdleScreen>
       await SessionManager.clearSession(session.sessionId);
       try {
         await SecureStorageService.deleteSessionSecret(session.sessionId);
-      } catch (_) {}
+      } catch (e) {
+        Log.d('[Idle] Could not delete stale session secret: $e');
+      }
       Log.i('[Idle] Stale session cleared safely.');
     } catch (e) {
       Log.w('⚠️ [Idle] Crash recovery cleanup failed: $e');

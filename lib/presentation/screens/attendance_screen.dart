@@ -50,7 +50,8 @@ class AttendanceScreen extends StatefulWidget {
   State<AttendanceScreen> createState() => _AttendanceScreenState();
 }
 
-class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerProviderStateMixin {
+class _AttendanceScreenState extends State<AttendanceScreen>
+    with SingleTickerProviderStateMixin {
   late TotpEngine _totpEngine;
   // ignore: unused_field — kept for future WebSocket integration
   late WebsocketService _wsService;
@@ -133,7 +134,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
           }
         }
       });
-      Log.i('[Attendance] Full state sync: ${_presentSeatIndices.length} seats marked.');
+      Log.i(
+          '[Attendance] Full state sync: ${_presentSeatIndices.length} seats marked.');
     });
 
     _wsAttendanceSubscription = _wsService.onAttendanceMarked.listen((event) {
@@ -164,7 +166,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
 
     if (widget.sectionId != null && widget.sectionId!.isNotEmpty) {
       try {
-        final students = await StudentService().getStudentsBySection(widget.sectionId!);
+        final students =
+            await StudentService().getStudentsBySection(widget.sectionId!);
         if (mounted && students.isNotEmpty) {
           setState(() {
             _students = students;
@@ -178,7 +181,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
             }
             _isRosterLoaded = true;
           });
-          Log.i('[Attendance] Loaded ${_students.length} students for display.');
+          Log.i(
+              '[Attendance] Loaded ${_students.length} students for display.');
           return;
         }
       } catch (e) {
@@ -207,7 +211,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     }
   }
 
-
   void _startCountdown() {
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_secondsRemaining > 0) {
@@ -224,7 +227,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   }
 
   void _startEndSessionCooldown() {
-    _endSessionCooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    _endSessionCooldownTimer =
+        Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_endSessionCountdown > 0) {
         if (mounted) setState(() => _endSessionCountdown--);
       } else {
@@ -245,10 +249,14 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   void _onKillSwitchKeyEvent(KeyEvent event) {
     if (event is! KeyDownEvent) return;
 
-    final ctrl = HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.controlLeft) ||
-                 HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.controlRight);
-    final shift = HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.shiftLeft) ||
-                  HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.shiftRight);
+    final ctrl = HardwareKeyboard.instance
+            .isLogicalKeyPressed(LogicalKeyboardKey.controlLeft) ||
+        HardwareKeyboard.instance
+            .isLogicalKeyPressed(LogicalKeyboardKey.controlRight);
+    final shift = HardwareKeyboard.instance
+            .isLogicalKeyPressed(LogicalKeyboardKey.shiftLeft) ||
+        HardwareKeyboard.instance
+            .isLogicalKeyPressed(LogicalKeyboardKey.shiftRight);
     final isJ = event.logicalKey == LogicalKeyboardKey.keyJ;
 
     if (!ctrl || !shift || !isJ) {
@@ -307,12 +315,17 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                           color: AppColors.error.withValues(alpha: 0.15),
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 40),
+                        child: const Icon(Icons.warning_amber_rounded,
+                            color: AppColors.error, size: 40),
                       ),
                       const SizedBox(height: 24),
                       const Text(
                         'EMERGENCY EXIT',
-                        style: TextStyle(color: AppColors.error, fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: 2),
+                        style: TextStyle(
+                            color: AppColors.error,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 2),
                       ),
                       const SizedBox(height: 12),
                       const Text(
@@ -326,7 +339,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                           Expanded(
                             child: TextButton(
                               onPressed: () => Navigator.of(context).pop(),
-                              child: const Text('CANCEL', style: TextStyle(color: Colors.white60, fontWeight: FontWeight.bold, letterSpacing: 1)),
+                              child: const Text('CANCEL',
+                                  style: TextStyle(
+                                      color: Colors.white60,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 1)),
                             ),
                           ),
                           const SizedBox(width: 16),
@@ -340,11 +357,16 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: AppColors.error,
                                 foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(vertical: 16),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 16),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
                                 elevation: 0,
                               ),
-                              child: const Text('EMERGENCY EXIT', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1)),
+                              child: const Text('EMERGENCY EXIT',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 1)),
                             ),
                           ),
                         ],
@@ -376,10 +398,14 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
 
     try {
       await SessionManager.clearSession(widget.sessionId);
-    } catch (_) {}
+    } catch (e) {
+      Log.d('[KillSwitch] Could not clear session: $e');
+    }
     try {
       await SecureStorageService.deleteSessionSecret(widget.sessionId);
-    } catch (_) {}
+    } catch (e) {
+      Log.d('[KillSwitch] Could not delete session secret: $e');
+    }
     try {
       await ApiService.terminateSession(widget.sessionId);
     } catch (e) {
@@ -447,18 +473,23 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                           color: AppColors.error.withValues(alpha: 0.1),
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 32),
+                        child: const Icon(Icons.warning_amber_rounded,
+                            color: AppColors.error, size: 32),
                       ),
                       const SizedBox(height: 24),
                       const Text(
                         'End Session?',
-                        style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 12),
                       Text(
                         '$_presentCount students marked present.\nAre you sure you want to end "${widget.courseName}"?',
                         textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white70, fontSize: 14),
+                        style: const TextStyle(
+                            color: Colors.white70, fontSize: 14),
                       ),
                       const SizedBox(height: 32),
                       Row(
@@ -466,7 +497,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                           Expanded(
                             child: TextButton(
                               onPressed: () => Navigator.of(context).pop(),
-                              child: const Text('CANCEL', style: TextStyle(color: Colors.white60, fontWeight: FontWeight.bold)),
+                              child: const Text('CANCEL',
+                                  style: TextStyle(
+                                      color: Colors.white60,
+                                      fontWeight: FontWeight.bold)),
                             ),
                           ),
                           const SizedBox(width: 16),
@@ -479,11 +513,15 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: AppColors.error,
                                 foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(vertical: 16),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 16),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
                                 elevation: 0,
                               ),
-                              child: const Text('END SESSION', style: TextStyle(fontWeight: FontWeight.bold)),
+                              child: const Text('END SESSION',
+                                  style:
+                                      TextStyle(fontWeight: FontWeight.bold)),
                             ),
                           ),
                         ],
@@ -498,8 +536,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
       },
     );
   }
-
-
 
   @override
   void dispose() {
@@ -557,42 +593,42 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
       autofocus: true,
       onKeyEvent: _onKillSwitchKeyEvent,
       child: Scaffold(
-      backgroundColor: isDark ? AppColors.bgDark : AppColors.bgLight,
-      body: Stack(
-        children: [
-          Opacity(
-            opacity: isDark ? 0.05 : 0.03,
-            child: Center(
-              child: Image.asset(
-                'assets/background.png',
-                width: size.width * 0.6,
-                fit: BoxFit.contain,
+        backgroundColor: isDark ? AppColors.bgDark : AppColors.bgLight,
+        body: Stack(
+          children: [
+            Opacity(
+              opacity: isDark ? 0.05 : 0.03,
+              child: Center(
+                child: Image.asset(
+                  'assets/background.png',
+                  width: size.width * 0.6,
+                  fit: BoxFit.contain,
+                ),
               ),
             ),
-          ),
-          Column(
-            children: [
-          _buildHeader(isDark),
-          Expanded(
-            child: Row(
+            Column(
               children: [
+                _buildHeader(isDark),
                 Expanded(
-                  flex: 4,
-                  child: _buildSeatingSection(isDark),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: 4,
+                        child: _buildSeatingSection(isDark),
+                      ),
+                      Expanded(
+                        flex: 6,
+                        child: _buildQrArena(isDark, size),
+                      ),
+                    ],
+                  ),
                 ),
-                Expanded(
-                  flex: 6,
-                  child: _buildQrArena(isDark, size),
-                ),
+                _buildFooter(isDark),
               ],
             ),
-          ),
-          _buildFooter(isDark),
-            ],
-          ),
-        ],
+          ],
+        ),
       ),
-    ),
     );
   }
 
@@ -602,7 +638,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
       padding: const EdgeInsets.symmetric(horizontal: 32),
       decoration: BoxDecoration(
         color: isDark ? AppColors.bgDark : AppColors.bgLight,
-        border: Border(bottom: BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
+        border: Border(
+            bottom:
+                BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
       ),
       child: Row(
         children: [
@@ -616,7 +654,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
             ),
           ),
           const SizedBox(width: 32),
-          Container(width: 1, height: 24, color: isDark ? Colors.white10 : Colors.black12),
+          Container(
+              width: 1,
+              height: 24,
+              color: isDark ? Colors.white10 : Colors.black12),
           const SizedBox(width: 24),
           Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -633,13 +674,23 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
               const SizedBox(height: 2),
               Row(
                 children: [
-                  Icon(Icons.person_outline, size: 14, color: isDark ? Colors.white38 : Colors.black38),
+                  Icon(Icons.person_outline,
+                      size: 14,
+                      color: isDark ? Colors.white38 : Colors.black38),
                   const SizedBox(width: 4),
-                  Text(widget.facultyName, style: TextStyle(fontSize: 12, color: isDark ? Colors.white38 : Colors.black38)),
+                  Text(widget.facultyName,
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: isDark ? Colors.white38 : Colors.black38)),
                   const SizedBox(width: 16),
-                  Icon(Icons.meeting_room_outlined, size: 14, color: isDark ? Colors.white38 : Colors.black38),
+                  Icon(Icons.meeting_room_outlined,
+                      size: 14,
+                      color: isDark ? Colors.white38 : Colors.black38),
                   const SizedBox(width: 4),
-                  Text(widget.roomName, style: TextStyle(fontSize: 12, color: isDark ? Colors.white38 : Colors.black38)),
+                  Text(widget.roomName,
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: isDark ? Colors.white38 : Colors.black38)),
                 ],
               ),
             ],
@@ -647,28 +698,40 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
           const Spacer(),
           Row(
             children: [
-              IconButton(onPressed: () {}, icon: const Icon(Icons.notifications_none, size: 20)),
-              IconButton(onPressed: () {}, icon: const Icon(Icons.help_outline, size: 20)),
+              IconButton(
+                  onPressed: () {},
+                  icon: const Icon(Icons.notifications_none, size: 20)),
+              IconButton(
+                  onPressed: () {},
+                  icon: const Icon(Icons.help_outline, size: 20)),
               const SizedBox(width: 16),
               ElevatedButton(
                 onPressed: _canEndSession ? _handlePhysicalTapEnd : null,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: _canEndSession ? AppColors.primaryTeal : Colors.grey,
+                  backgroundColor:
+                      _canEndSession ? AppColors.primaryTeal : Colors.grey,
                   foregroundColor: Colors.white,
                   minimumSize: const Size(120, 44),
                   padding: const EdgeInsets.symmetric(horizontal: 20),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
                 ),
                 child: Text(
-                  _canEndSession ? 'End Session' : 'End Session (${_endSessionCountdown}s)',
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                  _canEndSession
+                      ? 'End Session'
+                      : 'End Session (${_endSessionCountdown}s)',
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.bold),
                 ),
               ),
               const SizedBox(width: 16),
               CircleAvatar(
                 radius: 18,
-                backgroundColor: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
-                child: Icon(Icons.person, size: 20, color: isDark ? Colors.white54 : Colors.black54),
+                backgroundColor: isDark
+                    ? Colors.white10
+                    : Colors.black.withValues(alpha: 0.05),
+                child: Icon(Icons.person,
+                    size: 20, color: isDark ? Colors.white54 : Colors.black54),
               ),
             ],
           ),
@@ -682,14 +745,19 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
       return Container(
         padding: const EdgeInsets.all(32),
         decoration: BoxDecoration(
-          color: isDark ? Colors.black.withValues(alpha: 0.2) : Colors.white.withValues(alpha: 0.5),
-          border: Border(right: BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
+          color: isDark
+              ? Colors.black.withValues(alpha: 0.2)
+              : Colors.white.withValues(alpha: 0.5),
+          border: Border(
+              right:
+                  BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const SizedBox(
-              width: 40, height: 40,
+              width: 40,
+              height: 40,
               child: CircularProgressIndicator(strokeWidth: 3),
             ),
             const SizedBox(height: 16),
@@ -708,8 +776,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     return Container(
       padding: const EdgeInsets.all(32),
       decoration: BoxDecoration(
-        color: isDark ? Colors.black.withValues(alpha: 0.2) : Colors.white.withValues(alpha: 0.5),
-        border: Border(right: BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
+        color: isDark
+            ? Colors.black.withValues(alpha: 0.2)
+            : Colors.white.withValues(alpha: 0.5),
+        border: Border(
+            right: BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
       ),
       child: Column(
         children: [
@@ -726,22 +797,26 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
               itemBuilder: (context, index) {
                 // Determine if this seat is present
                 final isPresent = _presentSeatIndices.contains(index);
-                
+
                 // Get display info for this seat
                 final isLoaded = index < _students.length;
-                final displayLabel = isLoaded 
-                    ? _students[index].rollNumber 
+                final displayLabel = isLoaded
+                    ? _students[index].rollNumber
                     : RollNumberUtils.generateSeatCode(index);
-                
+
                 return Container(
                   decoration: BoxDecoration(
-                    color: isPresent 
-                        ? (isDark ? AppColors.successLime.withValues(alpha: 0.1) : const Color(0xFFF1F9E6))
-                        : (isDark ? Colors.white.withValues(alpha: 0.03) : const Color(0xFFF1F5F9)),
+                    color: isPresent
+                        ? (isDark
+                            ? AppColors.successLime.withValues(alpha: 0.1)
+                            : const Color(0xFFF1F9E6))
+                        : (isDark
+                            ? Colors.white.withValues(alpha: 0.03)
+                            : const Color(0xFFF1F5F9)),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: isPresent 
-                          ? AppColors.successLime 
+                      color: isPresent
+                          ? AppColors.successLime
                           : (isDark ? Colors.white10 : const Color(0xFFE2E8F0)),
                       width: isPresent ? 2 : 1.5,
                     ),
@@ -754,9 +829,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.bold,
-                          color: isPresent 
-                              ? (isDark ? AppColors.successLime : const Color(0xFF1A2E05))
-                              : (isDark ? Colors.white24 : const Color(0xFF94A3B8)),
+                          color: isPresent
+                              ? (isDark
+                                  ? AppColors.successLime
+                                  : const Color(0xFF1A2E05))
+                              : (isDark
+                                  ? Colors.white24
+                                  : const Color(0xFF94A3B8)),
                         ),
                       ),
                     ),
@@ -769,11 +848,18 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
             decoration: BoxDecoration(
-              color: isDark ? Colors.white.withValues(alpha: 0.03) : Colors.white,
+              color:
+                  isDark ? Colors.white.withValues(alpha: 0.03) : Colors.white,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05)),
+              border: Border.all(
+                  color: isDark
+                      ? Colors.white10
+                      : Colors.black.withValues(alpha: 0.05)),
               boxShadow: [
-                BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 4)),
+                BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.05),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4)),
               ],
             ),
             child: Row(
@@ -781,7 +867,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
               children: [
                 _buildLegendItem('PRESENT', AppColors.successLime, isDark),
                 const SizedBox(width: 32),
-                _buildLegendItem('EMPTY', isDark ? Colors.white24 : const Color(0xFFE2E8F0), isDark),
+                _buildLegendItem('EMPTY',
+                    isDark ? Colors.white24 : const Color(0xFFE2E8F0), isDark),
               ],
             ),
           ),
@@ -826,7 +913,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
             decoration: BoxDecoration(
               color: AppColors.successLime.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(100),
-              border: Border.all(color: AppColors.successLime.withValues(alpha: 0.3)),
+              border: Border.all(
+                  color: AppColors.successLime.withValues(alpha: 0.3)),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -834,18 +922,23 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                 Container(
                   width: 8,
                   height: 8,
-                  decoration: const BoxDecoration(shape: BoxShape.circle, color: AppColors.successLime),
+                  decoration: const BoxDecoration(
+                      shape: BoxShape.circle, color: AppColors.successLime),
                 ),
                 const SizedBox(width: 10),
                 const Text(
                   'LIVE SESSION ACTIVE',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.successLime, letterSpacing: 1),
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.successLime,
+                      letterSpacing: 1),
                 ),
               ],
             ),
           ),
           const SizedBox(height: 48),
-          
+
           // Pulsing QR Arena with white quiet zone for optimal scanning
           AnimatedBuilder(
             animation: _progressController,
@@ -853,15 +946,19 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
               return Container(
                 padding: const EdgeInsets.all(48),
                 decoration: BoxDecoration(
-                  color: isDark ? Colors.black.withValues(alpha: 0.3) : Colors.white,
+                  color: isDark
+                      ? Colors.black.withValues(alpha: 0.3)
+                      : Colors.white,
                   borderRadius: BorderRadius.circular(32),
                   border: Border.all(
-                    color: AppColors.successLime.withValues(alpha: 0.2 + (0.3 * _progressController.value)),
+                    color: AppColors.successLime.withValues(
+                        alpha: 0.2 + (0.3 * _progressController.value)),
                     width: 8,
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: AppColors.successLime.withValues(alpha: 0.1 * _progressController.value),
+                      color: AppColors.successLime
+                          .withValues(alpha: 0.1 * _progressController.value),
                       blurRadius: 40 * _progressController.value,
                       spreadRadius: 10 * _progressController.value,
                     ),
@@ -885,13 +982,17 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                   : const CircularProgressIndicator(color: Colors.black54),
             ),
           ),
-          
+
           const SizedBox(height: 48),
           Column(
             children: [
               const Text(
                 'TIME REMAINING',
-                style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey, letterSpacing: 3),
+                style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey,
+                    letterSpacing: 3),
               ),
               const SizedBox(height: 8),
               Text(
@@ -910,14 +1011,17 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   }
 
   Widget _buildFooter(bool isDark) {
-    final attendanceRate = widget.capacity > 0 ? (_presentCount / widget.capacity * 100).toInt() : 0;
+    final attendanceRate = widget.capacity > 0
+        ? (_presentCount / widget.capacity * 100).toInt()
+        : 0;
 
     return Container(
       height: 72,
       padding: const EdgeInsets.symmetric(horizontal: 32),
       decoration: BoxDecoration(
         color: isDark ? AppColors.bgDark : AppColors.bgLight,
-        border: Border(top: BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
+        border: Border(
+            top: BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
       ),
       child: Row(
         children: [
@@ -925,33 +1029,53 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('ATTENDANCE RATE', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey, letterSpacing: 2)),
+              const Text('ATTENDANCE RATE',
+                  style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey,
+                      letterSpacing: 2)),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text('$_presentCount', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                  Text(' / ${widget.capacity}', style: const TextStyle(fontSize: 16, color: Colors.grey)),
+                  Text('$_presentCount',
+                      style: const TextStyle(
+                          fontSize: 24, fontWeight: FontWeight.bold)),
+                  Text(' / ${widget.capacity}',
+                      style: const TextStyle(fontSize: 16, color: Colors.grey)),
                   const SizedBox(width: 12),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                     decoration: BoxDecoration(
                       color: AppColors.successLime.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(100),
                     ),
-                    child: Text('$attendanceRate%', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.successLime)),
+                    child: Text('$attendanceRate%',
+                        style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.successLime)),
                   ),
                 ],
               ),
             ],
           ),
           const SizedBox(width: 48),
-          Container(width: 1, height: 24, color: isDark ? Colors.white10 : Colors.black12),
+          Container(
+              width: 1,
+              height: 24,
+              color: isDark ? Colors.white10 : Colors.black12),
           const Spacer(),
           Row(
             children: [
               _buildAvatarStack(),
               const SizedBox(width: 12),
-              Text('$_presentCount Students Present', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Colors.grey)),
+              Text('$_presentCount Students Present',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey)),
             ],
           ),
         ],
@@ -973,13 +1097,17 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
               left: i * 20.0,
               child: Container(
                 padding: const EdgeInsets.all(2),
-                decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                decoration: const BoxDecoration(
+                    color: Colors.white, shape: BoxShape.circle),
                 child: CircleAvatar(
                   radius: 14,
                   backgroundColor: _avatarColor(i),
                   child: Text(
                     _initials(displayed[i].name),
-                    style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold),
                   ),
                 ),
               ),
@@ -996,7 +1124,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                   border: Border.all(color: Colors.white, width: 2),
                 ),
                 child: Center(
-                  child: Text('+$remaining', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                  child: Text('+$remaining',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold)),
                 ),
               ),
             ),

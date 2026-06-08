@@ -9,8 +9,12 @@ from fastapi import Request, HTTPException
 
 logger = logging.getLogger("IntelliAttend.Auth")
 
-# Use a default secret for dev, but this should be injected from environment in production
-JWT_SECRET = os.environ.get("JWT_SECRET", "dev_secret_key_change_me_in_production")
+JWT_SECRET = os.environ.get("JWT_SECRET")
+if not JWT_SECRET:
+    raise RuntimeError(
+        "JWT_SECRET environment variable is not set. "
+        "The application cannot start securely without it."
+    )
 
 class AuthService:
     @staticmethod

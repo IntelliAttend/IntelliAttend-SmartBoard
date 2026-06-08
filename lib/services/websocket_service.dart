@@ -236,7 +236,9 @@ class WebsocketService {
     _pingTimer = Timer.periodic(pingInterval, (_) {
       try {
         _channel?.sink.add(jsonEncode({'type': 'ping'}));
-      } catch (_) {}
+      } catch (e) {
+        Log.d('[WS] Ping send failed: $e');
+      }
     });
   }
 

@@ -52,10 +52,14 @@ class _GlobalKillSwitchState extends State<GlobalKillSwitch> {
   void _onKeyEvent(KeyEvent event) {
     if (event is! KeyDownEvent) return;
 
-    final ctrl = HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.controlLeft) ||
-                 HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.controlRight);
-    final shift = HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.shiftLeft) ||
-                  HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.shiftRight);
+    final ctrl = HardwareKeyboard.instance
+            .isLogicalKeyPressed(LogicalKeyboardKey.controlLeft) ||
+        HardwareKeyboard.instance
+            .isLogicalKeyPressed(LogicalKeyboardKey.controlRight);
+    final shift = HardwareKeyboard.instance
+            .isLogicalKeyPressed(LogicalKeyboardKey.shiftLeft) ||
+        HardwareKeyboard.instance
+            .isLogicalKeyPressed(LogicalKeyboardKey.shiftRight);
     final isJ = event.logicalKey == LogicalKeyboardKey.keyJ;
 
     if (!ctrl || !shift || !isJ) {
@@ -71,7 +75,8 @@ class _GlobalKillSwitchState extends State<GlobalKillSwitch> {
 
     if (_jCount >= 3) {
       _jCount = 0;
-      Log.w('🚨 [GlobalKillSwitch] Emergency exit triggered by keyboard (Ctrl+Shift+JJJ).');
+      Log.w(
+          '🚨 [GlobalKillSwitch] Emergency exit triggered by keyboard (Ctrl+Shift+JJJ).');
       KioskService.setMode(KioskMode.fullscreen);
       navigatorKey.currentState?.pushAndRemoveUntil(
         MaterialPageRoute(builder: (context) => const BootScreen()),
@@ -185,7 +190,9 @@ void main() {
     try {
       final info = await PackageInfo.fromPlatform();
       Log.setAppVersion('${info.version}+${info.buildNumber}');
-    } catch (_) {}
+    } catch (e) {
+      Log.w('[Startup] Could not read package version: $e');
+    }
 
     // ─── TIER 2: Timeout-aware (fail gracefully, flag degraded) ─────────────
     await _initTier2(status);
@@ -202,7 +209,8 @@ void main() {
                 const Icon(Icons.error_outline, size: 64, color: Colors.red),
                 const SizedBox(height: 16),
                 const Text('Device Integrity Check Failed',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                    style:
+                        TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
                 const Text('Contact IT Support. Code: TAMPER-01'),
               ],
@@ -258,7 +266,8 @@ void main() {
 // was a heuristic; PID liveness is authoritative.
 
 Future<void> _acquireSingleInstanceLock() async {
-  final lockFile = File('${Directory.systemTemp.path}/intelliattend_smartboard.lock');
+  final lockFile =
+      File('${Directory.systemTemp.path}/intelliattend_smartboard.lock');
 
   Future<RandomAccessFile?> tryAcquire() async {
     try {
@@ -300,22 +309,30 @@ Future<void> _acquireSingleInstanceLock() async {
     final contents = await lockFile.readAsString();
     final firstLine = contents.split('\n').first.trim();
     heldPid = int.tryParse(firstLine);
-  } catch (_) {}
+  } catch (e) {
+    Log.w('[SingleInstance] Could not read lock file: $e');
+  }
 
   final alive = heldPid != null && await _isProcessAlive(heldPid);
   if (alive) {
-    debugPrint('⚠️ [SingleInstance] Another instance is running (PID $heldPid). Exiting.');
+    Log.w(
+        '[SingleInstance] Another instance is running (PID $heldPid). Exiting.');
     exit(0);
   }
 
   // Stale lock — the recorded PID is no longer running. Delete and retry.
-  debugPrint('🧹 [SingleInstance] Removed stale lock (dead PID $heldPid).');
-  try { await lockFile.delete(); } catch (_) {}
+  Log.i('[SingleInstance] Removed stale lock (dead PID $heldPid).');
+  try {
+    await lockFile.delete();
+  } catch (e) {
+    Log.w('[SingleInstance] Could not delete stale lock file: $e');
+  }
   raf = await tryAcquire();
   if (raf != null) {
     _retainedLock = raf;
   } else {
-    debugPrint('⚠️ [SingleInstance] Could not acquire lock after stale cleanup. Continuing without guard.');
+    Log.w(
+        '[SingleInstance] Could not acquire lock after stale cleanup. Continuing without guard.');
   }
 }
 
@@ -377,7 +394,7 @@ Future<void> _initWindow() async {
       await windowReady.future;
     }
   } catch (e) {
-    debugPrint('⚠️ [WindowManager] Init error: $e');
+    Log.w('[WindowManager] Init error: $e');
   }
 }
 
@@ -463,8 +480,7 @@ Future<void> startBackgroundProtocols() async {
     // Start real-time Firestore listener for timetable changes.
     TimetableListenerService().start(
       boardId,
-      restFallback: () =>
-          globalDeviceRepository.syncTimetable(fullSync: true),
+      restFallback: () => globalDeviceRepository.syncTimetable(fullSync: true),
     );
 
     // Start real-time notifications listener for admin/faculty messages.
@@ -533,7 +549,8 @@ Future<bool> _verifyIntegrity() async {
   bool tampered = false;
 
   if (!IntegrityVerifier.verify()) {
-    Log.e('🚨 [Integrity] Critical constants hash mismatch — possible tampering');
+    Log.e(
+        '🚨 [Integrity] Critical constants hash mismatch — possible tampering');
     tampered = true;
   }
 
@@ -580,12 +597,16 @@ Future<void> _initFirebase() async {
     final options = DefaultFirebaseOptions.fromConfig(
       apiKey: AppConfig.firebaseApiKey,
       projectId: AppConfig.firebaseProjectId,
+      appId: AppConfig.firebaseAppId,
+      messagingSenderId: AppConfig.firebaseMessagingSenderId,
     );
     await Firebase.initializeApp(options: options);
 
-    Log.i('[Firebase] Initialised. Native .snapshots() ready for real-time updates.');
+    Log.i(
+        '[Firebase] Initialised. Native .snapshots() ready for real-time updates.');
   } catch (e) {
-    Log.w('[Firebase] Plugin init failed (non-fatal): $e. REST clients will be used as fallback.');
+    Log.w(
+        '[Firebase] Plugin init failed (non-fatal): $e. REST clients will be used as fallback.');
     // Don't rethrow — REST-based clients (FirebaseRestAuth, FirestoreRestClient)
     // operate independently of the Firebase plugin.
   }
@@ -594,7 +615,7 @@ Future<void> _initFirebase() async {
 Future<void> _loadEnvironment() async {
   await dotenv.load(fileName: '.env');
   AppConfig.validate();
-  debugPrint('Environment loaded');
+  Log.i('[Startup] Environment loaded');
 }
 
 void _configureOrientation() {
@@ -610,12 +631,12 @@ void _configureOrientation() {
 
 Future<void> _initSecureStorage() async {
   await SecureStorageService.init();
-  debugPrint('Secure storage initialized');
+  Log.i('[Startup] Secure storage initialized');
 }
 
 Future<void> _initLocalVault() async {
   await SessionManager.init();
-  debugPrint('Local vault initialized');
+  Log.i('[Startup] Local vault initialized');
 }
 
 class IntelliAttendApp extends StatelessWidget {

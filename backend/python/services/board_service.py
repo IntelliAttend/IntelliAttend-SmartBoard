@@ -9,8 +9,12 @@ from services.alert_service import AlertService
 
 logger = logging.getLogger("IntelliAttend")
 
-# Fallback for dev, should be consistent with AuthService
-JWT_SECRET = os.environ.get("JWT_SECRET", "dev_secret_key_change_me_in_production")
+JWT_SECRET = os.environ.get("JWT_SECRET")
+if not JWT_SECRET:
+    raise RuntimeError(
+        "JWT_SECRET environment variable is not set. "
+        "The application cannot start securely without it."
+    )
 
 class BoardService:
     COLLECTION = "smart_boards"
@@ -88,13 +92,10 @@ class BoardService:
                 board_data["device_id"] = x_device_id
                 return board_data
                 
-            # Mock for local dev without Firebase
-            return {
-                "smart_board_id": board_id,
-                "device_id": x_device_id,
-                "room_id": "ROOM_CSE_402",
-                "status": "ACTIVE",
-            }
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="DATABASE_UNAVAILABLE: Firestore is not configured. Set GOOGLE_APPLICATION_CREDENTIALS in the environment."
+            )
         return _verify
 
 

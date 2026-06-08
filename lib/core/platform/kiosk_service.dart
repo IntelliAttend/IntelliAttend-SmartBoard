@@ -81,10 +81,13 @@ class KioskService {
     try {
       final full = await windowManager.isFullScreen();
       if (!full) {
-        Log.w('🛡️ [Kiosk] Health check: window not fullscreen. Re-applying $mode.');
+        Log.w(
+            '🛡️ [Kiosk] Health check: window not fullscreen. Re-applying $mode.');
         await setMode(mode, force: true);
       }
-    } catch (_) {}
+    } catch (e) {
+      Log.d('[Kiosk] Health check failed: $e');
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -120,7 +123,11 @@ class KioskService {
     final completer = Completer<void>();
     _inFlight = completer.future;
     if (prior != null) {
-      try { await prior; } catch (_) {}
+      try {
+        await prior;
+      } catch (e) {
+        Log.d('[Kiosk] Prior operation failed (clearing): $e');
+      }
     }
     try {
       await _applyMode(mode);
@@ -134,7 +141,8 @@ class KioskService {
 
   static Future<void> _applyMode(KioskMode mode) async {
     if (_isApplyingMode) {
-      Log.w('🔄 [Kiosk] Re-entrant _applyMode($mode) — skipping (already applying).');
+      Log.w(
+          '🔄 [Kiosk] Re-entrant _applyMode($mode) — skipping (already applying).');
       return;
     }
     _isApplyingMode = true;
@@ -196,7 +204,8 @@ class KioskService {
           _preSuspendMode = _currentMode;
           await windowManager.setAlwaysOnTop(false);
           await windowManager.setFullScreen(false);
-          await windowManager.setResizable(true); // Allow resizing when suspended
+          await windowManager
+              .setResizable(true); // Allow resizing when suspended
           if (Platform.isWindows) {
             await windowManager.setPreventClose(false);
             // Show icon on taskbar when minimized so user knows it's alive.
@@ -207,7 +216,8 @@ class KioskService {
       }
 
       // Restore screen capture + brightness when leaving absoluteLocked
-      if (prev == KioskMode.absoluteLocked && mode != KioskMode.absoluteLocked) {
+      if (prev == KioskMode.absoluteLocked &&
+          mode != KioskMode.absoluteLocked) {
         await _allowScreenCapture();
         await _restoreBrightness();
       }

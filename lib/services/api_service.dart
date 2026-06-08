@@ -377,8 +377,13 @@ class ApiService {
         headers: await _authHeaders(),
         maxRetries: 1,
       );
+      if (response.statusCode == 403) {
+        Log.w(
+            '[ApiService] Board unregistered or forbidden — recovery poll detected 403.');
+      }
       return response.statusCode == 200;
-    } catch (_) {
+    } catch (e) {
+      Log.d('[ApiService] Board ready check failed: $e');
       return false;
     }
   }
@@ -434,7 +439,9 @@ class ApiService {
       serverMessage = data['detail']?.toString() ??
           data['message']?.toString() ??
           data['error']?.toString();
-    } catch (_) {}
+    } catch (e) {
+      Log.w('[ApiService] Could not parse error response body: $e');
+    }
 
     final userMessage =
         serverMessage ?? _userFriendlyMessage(response.statusCode);

@@ -27,7 +27,8 @@ class HardwareFingerprintService {
       } else if (Platform.isWindows) {
         rawString = await _getWindowsRaw();
       } else if (Platform.isAndroid) {
-        rawString = 'ANDROID_${Platform.localHostname}_${Platform.operatingSystemVersion}';
+        rawString =
+            'ANDROID_${Platform.localHostname}_${Platform.operatingSystemVersion}';
       } else {
         rawString = 'OTHER_${Platform.localHostname}';
       }
@@ -36,7 +37,8 @@ class HardwareFingerprintService {
       _cachedDeviceId = sha256.convert(bytes).toString();
       return _cachedDeviceId!;
     } catch (e) {
-      _cachedDeviceId = sha256.convert(utf8.encode(Platform.localHostname)).toString();
+      _cachedDeviceId =
+          sha256.convert(utf8.encode(Platform.localHostname)).toString();
       return _cachedDeviceId!;
     }
   }
@@ -60,11 +62,13 @@ class HardwareFingerprintService {
     }
   }
 
-  static Future<ProcessResult?> _runSafeCommand(String exe, List<String> args) async {
+  static Future<ProcessResult?> _runSafeCommand(
+      String exe, List<String> args) async {
     try {
       if (kIsWeb) return null;
       return await Process.run(exe, args);
-    } catch (_) {
+    } catch (e) {
+      Log.d('[Hardware] Command failed: $exe $args — $e');
       return null;
     }
   }
@@ -87,10 +91,12 @@ class HardwareFingerprintService {
     final serial = await _runPowerShell(
       r'(Get-CimInstance -ClassName Win32_BaseBoard).SerialNumber',
     );
-    return serial ?? await _getRegistryValue(
-      r'HKLM:\HARDWARE\DESCRIPTION\System\BIOS',
-      'BaseBoardSerialNumber',
-    ) ?? 'UNKNOWN_MB';
+    return serial ??
+        await _getRegistryValue(
+          r'HKLM:\HARDWARE\DESCRIPTION\System\BIOS',
+          'BaseBoardSerialNumber',
+        ) ??
+        'UNKNOWN_MB';
   }
 
   static Future<String> _getCpuId() async {
@@ -132,7 +138,9 @@ class HardwareFingerprintService {
     try {
       final info = await PackageInfo.fromPlatform();
       appVersion = '${info.version}+${info.buildNumber}';
-    } catch (_) {}
+    } catch (e) {
+      Log.d('[Hardware] Could not read app version: $e');
+    }
 
     if (kIsWeb || !Platform.isWindows) {
       _cachedMetadata = {
@@ -145,29 +153,48 @@ class HardwareFingerprintService {
 
     // Run independent queries in parallel
     final results = await Future.wait([
-      _getMotherboardSerial(),                          // 0
-      _getCpuId(),                                      // 1
-      _getMacAddress(),                                 // 2
-      _runPowerShell(r'(Get-CimInstance Win32_OperatingSystem).Caption'),  // 3 os_version
-      _runPowerShell(r'(Get-CimInstance Win32_ComputerSystem).Manufacturer'), // 4 brand
-      _runPowerShell(r'(Get-CimInstance Win32_ComputerSystem).Model'),     // 5 model
-      _runPowerShell(r'(Get-CimInstance Win32_Processor | Select-Object -First 1).Name'), // 6 cpu_model
-      _runPowerShell(r'(Get-CimInstance Win32_Processor | Select-Object -First 1).NumberOfCores'), // 7 cpu_cores
-      _runPowerShell(r'(Get-CimInstance Win32_Processor | Select-Object -First 1).Architecture'), // 8 cpu_arch_code
-      _runPowerShell(r'$d=Get-PSDrive C; "$([math]::Round(($d.Used+$d.Free)/1GB,1)),$([math]::Round($d.Free/1GB,1))"'), // 9 storage
-      _runPowerShell(r'$o=Get-CimInstance Win32_OperatingSystem; "$([math]::Round($o.TotalVisibleMemorySize/1MB,1)),$([math]::Round($o.FreePhysicalMemory/1MB,1))"'), // 10 ram
-      _runPowerShell(r'(Get-PhysicalDisk | Where-Object {$_.DeviceId -eq 0}).MediaType'), // 11 storage_type
-      _runPowerShell(r'$v=Get-CimInstance Win32_VideoController|Select-Object -First 1; "$($v.CurrentHorizontalResolution)x$($v.CurrentVerticalResolution)"'), // 12 screen_resolution
-      _runPowerShell(r'(Get-CimInstance Win32_BIOS).SMBIOSBIOSVersion'), // 13 firmware_version
-      _runPowerShell(r"(Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -notlike '*Loopback*' -and $_.IPAddress -notlike '169.*'} | Select-Object -First 1).IPAddress"), // 14 network_ip
-      _runPowerShell(r"(Get-NetAdapter | Where-Object {$_.InterfaceDescription -like '*Wi-Fi*' -or $_.InterfaceDescription -like '*Wireless*'} | Select-Object -First 1).MacAddress"), // 15 network_wifi_mac
-      _runPowerShell(r'(Get-CimInstance Win32_DiskDrive | Select-Object -First 1).SerialNumber'), // 16 disk_serial
-      _runPowerShell(r"(Get-PnpDevice -Class 'HIDClass' | Where-Object {$_.FriendlyName -like '*touch*'}).Count -gt 0"), // 17 touch_capable
+      _getMotherboardSerial(), // 0
+      _getCpuId(), // 1
+      _getMacAddress(), // 2
+      _runPowerShell(
+          r'(Get-CimInstance Win32_OperatingSystem).Caption'), // 3 os_version
+      _runPowerShell(
+          r'(Get-CimInstance Win32_ComputerSystem).Manufacturer'), // 4 brand
+      _runPowerShell(
+          r'(Get-CimInstance Win32_ComputerSystem).Model'), // 5 model
+      _runPowerShell(
+          r'(Get-CimInstance Win32_Processor | Select-Object -First 1).Name'), // 6 cpu_model
+      _runPowerShell(
+          r'(Get-CimInstance Win32_Processor | Select-Object -First 1).NumberOfCores'), // 7 cpu_cores
+      _runPowerShell(
+          r'(Get-CimInstance Win32_Processor | Select-Object -First 1).Architecture'), // 8 cpu_arch_code
+      _runPowerShell(
+          r'$d=Get-PSDrive C; "$([math]::Round(($d.Used+$d.Free)/1GB,1)),$([math]::Round($d.Free/1GB,1))"'), // 9 storage
+      _runPowerShell(
+          r'$o=Get-CimInstance Win32_OperatingSystem; "$([math]::Round($o.TotalVisibleMemorySize/1MB,1)),$([math]::Round($o.FreePhysicalMemory/1MB,1))"'), // 10 ram
+      _runPowerShell(
+          r'(Get-PhysicalDisk | Where-Object {$_.DeviceId -eq 0}).MediaType'), // 11 storage_type
+      _runPowerShell(
+          r'$v=Get-CimInstance Win32_VideoController|Select-Object -First 1; "$($v.CurrentHorizontalResolution)x$($v.CurrentVerticalResolution)"'), // 12 screen_resolution
+      _runPowerShell(
+          r'(Get-CimInstance Win32_BIOS).SMBIOSBIOSVersion'), // 13 firmware_version
+      _runPowerShell(
+          r"(Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -notlike '*Loopback*' -and $_.IPAddress -notlike '169.*'} | Select-Object -First 1).IPAddress"), // 14 network_ip
+      _runPowerShell(
+          r"(Get-NetAdapter | Where-Object {$_.InterfaceDescription -like '*Wi-Fi*' -or $_.InterfaceDescription -like '*Wireless*'} | Select-Object -First 1).MacAddress"), // 15 network_wifi_mac
+      _runPowerShell(
+          r'(Get-CimInstance Win32_DiskDrive | Select-Object -First 1).SerialNumber'), // 16 disk_serial
+      _runPowerShell(
+          r"(Get-PnpDevice -Class 'HIDClass' | Where-Object {$_.FriendlyName -like '*touch*'}).Count -gt 0"), // 17 touch_capable
     ]);
 
     // cpu_cores
     int? cpuCores;
-    try { cpuCores = int.parse(results[7] ?? ''); } catch (_) {}
+    try {
+      cpuCores = int.parse(results[7] ?? '');
+    } catch (e) {
+      Log.d('[Hardware] Could not parse CPU cores: $e');
+    }
 
     // cpu_arch
     String cpuArch = 'x86_64';
@@ -180,7 +207,9 @@ class HardwareFingerprintService {
       } else {
         cpuArch = 'x86_64';
       }
-    } catch (_) {}
+    } catch (e) {
+      Log.d('[Hardware] Could not parse CPU arch: $e');
+    }
 
     // storage
     double? storageTotalGb, storageFreeGb;
@@ -190,7 +219,9 @@ class HardwareFingerprintService {
         storageTotalGb = double.parse(parts[0].trim());
         storageFreeGb = double.parse(parts[1].trim());
       }
-    } catch (_) {}
+    } catch (e) {
+      Log.d('[Hardware] Could not parse storage: $e');
+    }
 
     // ram
     double? ramTotalGb, ramFreeGb;
@@ -200,7 +231,9 @@ class HardwareFingerprintService {
         ramTotalGb = double.parse(parts[0].trim());
         ramFreeGb = double.parse(parts[1].trim());
       }
-    } catch (_) {}
+    } catch (e) {
+      Log.d('[Hardware] Could not parse RAM: $e');
+    }
 
     // storage_type
     String storageType = 'Unknown';
@@ -308,12 +341,15 @@ class HardwareFingerprintService {
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        r'$m = Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods -ErrorAction SilentlyContinue; if ($null -ne $m) { $a = @{}; $a["Timeout"] = [UInt32]0; $a["Brightness"] = [Byte]' + original.toString() + r'; Invoke-CimMethod -InputObject $m -MethodName WmiSetBrightness -Arguments $a -ErrorAction SilentlyContinue }',
+        r'$m = Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods -ErrorAction SilentlyContinue; if ($null -ne $m) { $a = @{}; $a["Timeout"] = [UInt32]0; $a["Brightness"] = [Byte]' +
+            original.toString() +
+            r'; Invoke-CimMethod -InputObject $m -MethodName WmiSetBrightness -Arguments $a -ErrorAction SilentlyContinue }',
       ]);
       if (result.exitCode == 0) {
         Log.i('💡 [Brightness] Restored to $original%.');
       } else {
-        Log.w('⚠️ [Brightness] Restore failed (exit ${result.exitCode}): ${result.stderr.toString().trim()}');
+        Log.w(
+            '⚠️ [Brightness] Restore failed (exit ${result.exitCode}): ${result.stderr.toString().trim()}');
       }
     } catch (e) {
       Log.w('⚠️ [Brightness] Restore error: $e');

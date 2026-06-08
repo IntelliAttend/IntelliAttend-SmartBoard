@@ -76,7 +76,8 @@ class FirebaseRestAuth {
           '[FirebaseRestAuth] Malformed signInWithPassword response: $data');
     }
     final expiresIn = int.parse(expiresInStr);
-    final expiryMs = TimeSyncService.timeNow.millisecondsSinceEpoch + (expiresIn * 1000);
+    final expiryMs =
+        TimeSyncService.timeNow.millisecondsSinceEpoch + (expiresIn * 1000);
 
     await SecureStorageService.storeRefreshToken(refreshToken);
     await SecureStorageService.storeAccessToken(idToken, expiryMs);
@@ -198,7 +199,9 @@ class FirebaseRestAuth {
         message = err['message']?.toString();
         code = message ?? code;
       }
-    } catch (_) {}
+    } catch (e) {
+      Log.d('[FirebaseRestAuth] Could not parse error body: $e');
+    }
     Log.w('[FirebaseRestAuth] $operation ${response.statusCode}: $code');
     return FirebaseRestAuthException(
       operation: operation,

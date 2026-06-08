@@ -31,8 +31,13 @@ from models.board_auth_schema import (
     VaultSyncRequest,
 )
 
-# Load JWT Secret
-JWT_SECRET = os.environ.get("JWT_SECRET", "dev_secret_key_change_me_in_production")
+# Load JWT Secret — fail hard if not set
+JWT_SECRET = os.environ.get("JWT_SECRET")
+if not JWT_SECRET:
+    raise RuntimeError(
+        "JWT_SECRET environment variable is not set. "
+        "The application cannot start securely without it."
+    )
 
 # Configure Logging (v6.0 Measurement Requirement)
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
