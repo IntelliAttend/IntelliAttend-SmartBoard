@@ -4,31 +4,48 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../data/repositories/device_repository.dart';
 import 'api_service.dart';
+import 'time_sync_service.dart';
 import '../core/utils/logger.dart';
+import '../core/state/board_state_machine.dart';
 import '../main.dart';
 import '../presentation/screens/registration_screen.dart';
 
-/// v6.0: Periodic heartbeat sender (Accountable Device Model).
-///
-/// Sends a POST /api/v1/device/heartbeat every 5 minutes so IT can monitor
-/// board health via the Admin Panel.
-///
-/// Why 5 minutes:
-///   - Balanced for kiosk monitoring without excessive API load.
+class HeartbeatSessionInfo {
+  final String? sessionId;
+  final String? status;
+
+  HeartbeatSessionInfo({this.sessionId, this.status});
+
+  bool get isActive => status == 'active' && (sessionId?.isNotEmpty ?? false);
+  bool get isCompleted => status == 'completed';
+  bool get isEmpty => sessionId == null && status == null;
+}
+
 class HeartbeatService {
   static Timer? _timer;
   static DateTime? _startedAt;
   static String? _cachedVersion;
   static IDeviceRepository? _deviceRepository;
 
-  // Atomic double-start guard. Set synchronously before any async work so two
-  // near-simultaneous start() calls cannot both pass the check and create
-  // duplicate timers. Using `_timer != null` was racy because the one-shot →
-  // periodic transition momentarily leaves _timer null.
   static bool _started = false;
+  static int _consecutiveNullSessions = 0;
+  static const int _maxNullSessionsBeforeForceEnd = 2;
 
-  /// Current screen state reported in the heartbeat.
   static String screenState = 'unknown';
+
+  static final List<String> _pendingTerminations = [];
+
+  static void enqueuePendingTermination(String sessionId) {
+    if (!_pendingTerminations.contains(sessionId)) {
+      _pendingTerminations.add(sessionId);
+      Log.w('[Heartbeat] Enqueued pending termination for $sessionId');
+    }
+  }
+
+  static final StreamController<HeartbeatSessionInfo> _sessionController =
+      StreamController<HeartbeatSessionInfo>.broadcast();
+  static Stream<HeartbeatSessionInfo> get onSessionUpdate =>
+      _sessionController.stream;
 
   static Future<void> start(IDeviceRepository deviceRepository) async {
     _deviceRepository = deviceRepository;
@@ -39,7 +56,7 @@ class HeartbeatService {
     }
     _started = true;
 
-    _startedAt ??= DateTime.now();
+    _startedAt ??= TimeSyncService.timeNow;
     try {
       final info = await PackageInfo.fromPlatform();
       _cachedVersion = '${info.version}+${info.buildNumber}';
@@ -47,30 +64,34 @@ class HeartbeatService {
       _cachedVersion = 'unknown';
     }
 
-    // Delay the first heartbeat by 30 s so the UI, window manager, and Firebase
-    // platform bindings are fully settled before we call getIdToken(). On Windows
-    // the Firebase Auth C++ plugin delivers its token-refresh callback on a
-    // non-platform thread; if that callback fires during the first 1–2 s while
-    // window_manager is also issuing native calls, the Flutter engine crashes.
-    // After the initial beat we switch to the normal 5-minute periodic timer.
-    _timer = Timer(const Duration(seconds: 30), () async {
-      await _send();
-      _timer = Timer.periodic(const Duration(minutes: 5), (_) => _send());
-      Log.i('[Heartbeat] Periodic timer armed (interval: 5m).');
-    });
-    Log.i('[Heartbeat] Started — first beat in 30 s, then every 5 m (version: $_cachedVersion).');
+    _send();
+    _timer = Timer.periodic(const Duration(minutes: 5), (_) => _send());
+    Log.i('[Heartbeat] Started — immediate beat, then every 5 m (version: $_cachedVersion).');
   }
 
   static Future<void> stop() async {
     _timer?.cancel();
     _timer = null;
     _started = false;
+    _consecutiveNullSessions = 0;
     Log.i('[Heartbeat] Stopped.');
   }
 
+  static void dispose() {
+    _sessionController.close();
+  }
+
   static Future<void> _send() async {
-    // Skip silently if the board has no registration yet — there is no auth
-    // token to send, and a 401 on an unregistered device is meaningless noise.
+    for (final pendingId in List<String>.from(_pendingTerminations)) {
+      try {
+        await ApiService.terminateSession(pendingId);
+        _pendingTerminations.remove(pendingId);
+        Log.i('[Heartbeat] Pending termination succeeded for $pendingId');
+      } catch (e) {
+        Log.w('[Heartbeat] Pending termination retry failed for $pendingId: $e');
+      }
+    }
+
     final registration = await _deviceRepository?.getRegistration();
     if (registration == null) {
       Log.d('[Heartbeat] No registration — skipping heartbeat.');
@@ -78,23 +99,45 @@ class HeartbeatService {
     }
 
     final uptime = _startedAt != null
-        ? DateTime.now().difference(_startedAt!).inSeconds
+        ? TimeSyncService.timeNow.difference(_startedAt!).inSeconds
         : 0;
 
     try {
-      final smartBoardId = registration.smartBoardId;
-      final hardwareId = registration.hardwareId;
-      await _deviceRepository?.sendHeartbeat(
-        smartBoardId: smartBoardId,
-        hardwareId: hardwareId,
+      final result = await ApiService.sendHeartbeatV2(
+        smartBoardId: registration.smartBoardId,
         screenState: screenState,
         uptimeSeconds: uptime,
         appVersion: _cachedVersion ?? 'unknown',
       );
+
+      final sessionData = result['session'];
+      if (sessionData is Map<String, dynamic>) {
+        _consecutiveNullSessions = 0;
+        final info = HeartbeatSessionInfo(
+          sessionId: sessionData['session_id']?.toString(),
+          status: sessionData['status']?.toString(),
+        );
+        _sessionController.add(info);
+        _applySessionToStateMachine(info);
+      } else if (sessionData == null) {
+        _consecutiveNullSessions++;
+        final isServerError = result['status'] == 'error';
+        if (_consecutiveNullSessions < _maxNullSessionsBeforeForceEnd &&
+            !isServerError) {
+          Log.w('[Heartbeat] session: null (#$_consecutiveNullSessions) — waiting for next beat');
+          return;
+        }
+        _sessionController.add(HeartbeatSessionInfo());
+        final machine = BoardStateMachine();
+        if (machine.currentState == BoardState.attendance) {
+          Log.w('[Heartbeat] $_consecutiveNullSessions consecutive null sessions — force-ending');
+          machine.forceTransitionTo(BoardState.summary);
+        }
+      }
     } catch (e) {
       if (e is ApiException &&
           (e.statusCode == 401 || e.statusCode == 404)) {
-        Log.e('🚨 [Heartbeat] Authentication lost or device revoked. Forcing logout...');
+        Log.e('[Heartbeat] Auth lost or device revoked. Forcing logout...');
         await stop();
         await _deviceRepository?.clearRegistration();
 
@@ -106,6 +149,22 @@ class HeartbeatService {
       }
 
       Log.w('[Heartbeat] Send failed (will retry in 5m): $e');
+    }
+  }
+
+  static void _applySessionToStateMachine(HeartbeatSessionInfo info) {
+    final machine = BoardStateMachine();
+    final current = machine.currentState;
+
+    if (info.isActive && current == BoardState.idle) {
+      Log.i('[Heartbeat] Active session exists — triggering PRE-FLIGHT');
+      machine.transitionTo(BoardState.preFlight);
+    } else if (info.isCompleted && current == BoardState.attendance) {
+      Log.i('[Heartbeat] Session completed — transitioning to SUMMARY');
+      machine.transitionTo(BoardState.summary);
+    } else if (info.isEmpty && current == BoardState.attendance) {
+      Log.w('[Heartbeat] Session null on server — force-ending');
+      machine.forceTransitionTo(BoardState.summary);
     }
   }
 }

@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:window_manager/window_manager.dart';
+import '../utils/logger.dart';
 
 class HardwareFingerprintService {
   // Cached on first call — avoids re-running 3 PowerShell processes on every
@@ -249,18 +250,73 @@ class HardwareFingerprintService {
     return _cachedMetadata!;
   }
 
-  static Future<void> maximizeBrightness() async {
-    if (kIsWeb || !Platform.isWindows) return;
+  /// Saved original brightness level (0-100) so it can be restored after
+  /// the attendance session ends.
+  static int? _originalBrightness;
+
+  /// Reads the current monitor brightness via WMI (0-100).
+  static Future<int?> getCurrentBrightness() async {
+    if (kIsWeb || !Platform.isWindows) return null;
     final result = await Process.run('powershell', [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      r'$m = Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods -ErrorAction SilentlyContinue; if ($null -ne $m) { $m | ForEach-Object { $_.WmiSetBrightness(0, 100) }; exit 0 } else { Write-Error "No WmiMonitorBrightnessMethods instances found"; exit 1 }',
+      r'(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness).CurrentBrightness',
+    ]);
+    if (result.exitCode == 0) {
+      final output = result.stdout.toString().trim();
+      final parsed = int.tryParse(output);
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+
+  /// Saves the current brightness level and then sets the display to 100%.
+  /// Subsequent calls without an intervening [restoreBrightness] are no-ops
+  /// so the original value is never overwritten.
+  static Future<void> maximizeBrightness() async {
+    if (kIsWeb || !Platform.isWindows) return;
+    // Only save once — the original brightness must survive across re-entries.
+    if (_originalBrightness == null) {
+      _originalBrightness = await getCurrentBrightness();
+      Log.i('💡 [Brightness] Saved original brightness: $_originalBrightness');
+    }
+    final result = await Process.run('powershell', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      r'$m = Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods -ErrorAction SilentlyContinue; if ($null -ne $m) { $a = @{}; $a["Timeout"] = [UInt32]0; $a["Brightness"] = [Byte]100; Invoke-CimMethod -InputObject $m -MethodName WmiSetBrightness -Arguments $a -ErrorAction Stop; exit 0 } else { Write-Error "No WmiMonitorBrightnessMethods instances found"; exit 1 }',
     ]);
     if (result.exitCode != 0) {
       throw Exception(
         'maximizeBrightness failed (exit ${result.exitCode}): ${result.stderr.toString().trim()}',
       );
+    }
+    Log.i('💡 [Brightness] Display set to 100%.');
+  }
+
+  /// Restores the display brightness to the value saved by [maximizeBrightness].
+  /// Once restored, the saved value is cleared so a future call to
+  /// [maximizeBrightness] will re-save.
+  static Future<void> restoreBrightness() async {
+    if (kIsWeb || !Platform.isWindows) return;
+    final original = _originalBrightness;
+    if (original == null) return;
+    _originalBrightness = null; // Clear so next maximize re-saves
+    try {
+      final result = await Process.run('powershell', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        r'$m = Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods -ErrorAction SilentlyContinue; if ($null -ne $m) { $a = @{}; $a["Timeout"] = [UInt32]0; $a["Brightness"] = [Byte]' + original.toString() + r'; Invoke-CimMethod -InputObject $m -MethodName WmiSetBrightness -Arguments $a -ErrorAction SilentlyContinue }',
+      ]);
+      if (result.exitCode == 0) {
+        Log.i('💡 [Brightness] Restored to $original%.');
+      } else {
+        Log.w('⚠️ [Brightness] Restore failed (exit ${result.exitCode}): ${result.stderr.toString().trim()}');
+      }
+    } catch (e) {
+      Log.w('⚠️ [Brightness] Restore error: $e');
     }
   }
 

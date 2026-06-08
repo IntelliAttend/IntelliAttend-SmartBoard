@@ -83,6 +83,43 @@ class Log {
     _appVersion = version;
   }
 
+  // ───── Smart / context-aware helpers ─────
+
+  static final _lastLogMs = <String, int>{};
+  static final _loggedOnce = <String>{};
+  static final _lastValues = <String, dynamic>{};
+
+  /// Logs at info level, but no more than once per [cooldownMs] for the
+  /// given [key]. Useful for high-frequency loops that should only produce
+  /// occasional output.
+  static void iThrottled(String key, dynamic message, {int cooldownMs = 30000, dynamic error, StackTrace? stackTrace}) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final last = _lastLogMs[key];
+    if (last != null && (now - last) < cooldownMs) return;
+    _lastLogMs[key] = now;
+    _logger.i(message, error: error, stackTrace: stackTrace);
+  }
+
+  /// Logs at info level, but only the first time for the given [key] across
+  /// the application lifetime. Resets on app restart.
+  static void iOnce(String key, dynamic message, {dynamic error, StackTrace? stackTrace}) {
+    if (_loggedOnce.contains(key)) return;
+    _loggedOnce.add(key);
+    _logger.i(message, error: error, stackTrace: stackTrace);
+  }
+
+  /// Logs at info level, but only when [value] differs from the last call
+  /// for the same [key]. Ideal for state-transition logging inside builders
+  /// or polling loops.
+  static void iOnChange(String key, dynamic value, dynamic message, {dynamic error, StackTrace? stackTrace}) {
+    final prev = _lastValues[key];
+    if (prev == value) return;
+    _lastValues[key] = value;
+    _logger.i(message, error: error, stackTrace: stackTrace);
+  }
+
+  // ───── Standard methods ─────
+
   static void d(dynamic message, [dynamic error, StackTrace? stackTrace]) {
     _logger.d(message, error: error, stackTrace: stackTrace);
   }

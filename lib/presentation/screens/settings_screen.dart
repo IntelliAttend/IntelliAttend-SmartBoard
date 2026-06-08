@@ -4,6 +4,7 @@ import '../../models/isar_schemas.dart';
 import '../../main.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../core/config/app_config.dart';
+import 'qr_test_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   final DeviceRegistration registration;
@@ -122,6 +123,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             label: 'FORCE SYNC',
                             onTap: _isSyncing ? null : _handleForceSync,
                             isLoading: _isSyncing,
+                          ),
+                        ),
+                        const SizedBox(width: 24),
+                        Expanded(
+                          child: _buildActionButton(
+                            icon: Icons.qr_code_scanner_rounded,
+                            label: 'QR DIAGNOSTIC',
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(builder: (context) => const QrTestScreen()),
+                              );
+                            },
                           ),
                         ),
                       ],

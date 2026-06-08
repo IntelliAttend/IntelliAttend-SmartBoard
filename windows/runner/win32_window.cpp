@@ -131,13 +131,29 @@ bool Win32Window::Create(const std::wstring& title,
   const POINT target_point = {static_cast<LONG>(origin.x),
                               static_cast<LONG>(origin.y)};
   HMONITOR monitor = MonitorFromPoint(target_point, MONITOR_DEFAULTTONEAREST);
-  UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
-  double scale_factor = dpi / 96.0;
 
+  MONITORINFO monitor_info = { sizeof(monitor_info) };
+  GetMonitorInfo(monitor, &monitor_info);
+  const RECT& rc = monitor_info.rcWork;
+
+  // Use WS_OVERLAPPEDWINDOW with rcWork (excludes taskbar) rather than
+  // WS_POPUP with rcMonitor. Creating the window as a fullscreen popup
+  // before the Flutter engine and plugins (Firebase C++ SDK, etc.) are
+  // initialised is dangerous — if a native plugin throws a C++ exception
+  // during startup, the process dies while DWM has already hidden the
+  // taskbar, leaving the system frozen with no visible window.
+  //
+  // The Dart-side KioskService.setMode(KioskMode.fullscreen) is called
+  // after Tier-1 plugin init succeeds and switches the window to true
+  // fullscreen via window_manager. This is the safer ordering:
+  //   1. Create normal overlapped window
+  //   2. Init plugins (may fail → clean exit, DWM recovers)
+  //   3. Switch to fullscreen popup (kiosk mode active)
   HWND window = CreateWindow(
-      window_class, title.c_str(), WS_OVERLAPPED | WS_CAPTION | WS_THICKFRAME,
-      Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
-      Scale(size.width, scale_factor), Scale(size.height, scale_factor),
+      window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
+      rc.left, rc.top,
+      rc.right - rc.left,
+      rc.bottom - rc.top,
       nullptr, nullptr, GetModuleHandle(nullptr), this);
 
   if (!window) {
@@ -150,7 +166,7 @@ bool Win32Window::Create(const std::wstring& title,
 }
 
 bool Win32Window::Show() {
-  return ShowWindow(window_handle_, SW_SHOWNORMAL);
+  return ShowWindow(window_handle_, SW_SHOW);
 }
 
 // static

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, Dict
+from typing import Optional
 
 class TelemetryPayload(BaseModel):
     boardId: str = Field(..., description="SmartBoard ID (e.g. IASB-4208)")
@@ -7,13 +7,6 @@ class TelemetryPayload(BaseModel):
     available_storage_gb: Optional[float] = Field(None, description="Available storage in GB")
     app_version: str = Field(..., description="Current SmartBoard app version")
     timestamp_ms: Optional[int] = None
-
-class PreFlightResponse(BaseModel):
-    status: str = "ready"
-    server_timestamp: int
-    pre_allocated_session_id: str
-    session_secret_half1: Optional[str] = None
-    slot_verification: Dict[str, str]
 
 class SessionInitiateRequest(BaseModel):
     otp: str = Field(..., min_length=6, max_length=6)

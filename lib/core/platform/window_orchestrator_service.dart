@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:window_manager/window_manager.dart';
+import '../config/firestore_schema.dart';
 import 'kiosk_service.dart';
 import 'notification_service.dart';
 import '../../services/time_sync_service.dart';
@@ -15,7 +16,7 @@ class WindowOrchestratorService {
   Timer? _monitorTimer;
 
   /// Guards against timer stacking: if a tick is still running when the next
-  /// 60s interval fires (e.g. due to slow DB queries over poor Wi-Fi), the
+  /// 10s interval fires (e.g. due to slow DB queries over poor Wi-Fi), the
   /// overlapping tick is silently dropped. Two concurrent setMode calls would
   /// crash the Flutter engine on Windows.
   bool _isTickRunning = false;
@@ -30,7 +31,9 @@ class WindowOrchestratorService {
 
   void start() {
     _monitorTimer?.cancel();
-    _monitorTimer = Timer.periodic(const Duration(minutes: 1), (_) => _tick());
+    // Increased from 60s to 10s so T-3 / T-0 window events fire with
+    // sub-minute precision — critical for restoring from minimized state.
+    _monitorTimer = Timer.periodic(const Duration(seconds: 10), (_) => _tick());
     _tick();
   }
 
@@ -57,21 +60,29 @@ class WindowOrchestratorService {
         _lastTickDate = now;
       }
 
+      // ── Fullscreen health check (replaces KioskService's separate 10s
+      //     watchdog timer).  Single source of truth for window state so
+      //     concurrent platform-channel calls cannot race and crash the
+      //     Flutter engine on Windows.
+      await KioskService.ensureFullscreen();
+
       final todaySlots = await globalDeviceRepository.getTodayTimeline();
       if (todaySlots.isEmpty) return;
 
+      // ── First-class pre-boot at T-3 (not T-10) ──────────────────────────
       if (!_isFirstClassPreBootDone) {
         final firstSlot = todaySlots.first;
         final firstStart = _parseTime(firstSlot.startTime, now);
-        final diffToFirst = firstStart.difference(now).inMinutes;
+        final diffSec = firstStart.difference(now).inSeconds;
 
-        if (diffToFirst <= 10 && diffToFirst >= 0) {
-          Log.i('🚀 [Orchestrator] T-10 First Class Pre-Boot — Bringing window to foreground.');
-          await KioskService.setMode(KioskMode.locked);
+        if (diffSec <= 180 && diffSec >= 0) {
+          Log.i('🚀 [Orchestrator] T-3 First Class Pre-Boot — Restoring window.');
+          await KioskService.setMode(KioskMode.fullscreen);
           _isFirstClassPreBootDone = true;
         }
       }
 
+      // ── Next-slot checks (T-3 / T-0) ────────────────────────────────────
       final timeStr = _formatHHMM(now);
       final nextSlot = todaySlots
           .where((s) => s.startTime.compareTo(timeStr) > 0)
@@ -79,70 +90,81 @@ class WindowOrchestratorService {
 
       if (nextSlot != null) {
         final nextStart = _parseTime(nextSlot.startTime, now);
-        final diffMin = nextStart.difference(now).inMinutes;
+        final diffSec = nextStart.difference(now).inSeconds;
         final slotKey = nextSlot.slotId;
 
-        if (diffMin <= 3 && diffMin > 0 && !_t3FiredSlots.contains(slotKey)) {
+        // T-3 window: restore window + notification (if currently minimized)
+        if (diffSec <= 180 && diffSec > 0 && !_t3FiredSlots.contains(slotKey)) {
           _t3FiredSlots.add(slotKey);
+          Log.i('📺 [Orchestrator] T-3 Slot[$slotKey] — Restoring window (diffSec=$diffSec).');
+          await KioskService.setMode(KioskMode.fullscreen);
           final isMinimized = await windowManager.isMinimized();
           if (isMinimized) {
-            Log.i('🔔 [Orchestrator] T-3 Slot[$slotKey] — App is minimized. Sending OS notification.');
             await NotificationService.showWarning(
               'Class Starting Soon',
               '${nextSlot.courseName} starts in ~3 minutes. Please return to SmartBoard.',
             );
-          } else {
-            Log.i('📺 [Orchestrator] T-3 Slot[$slotKey] — App is visible. Session ID fetch is in progress.');
           }
         }
 
-        if (diffMin <= 0 && !_t0FiredSlots.contains(slotKey)) {
+        // T-0: ensure window is restored + show OTP card (safety net —
+        // IdleScreen handles the card via its own 10s timer).
+        if (diffSec <= 0 && !_t0FiredSlots.contains(slotKey)) {
           _t0FiredSlots.add(slotKey);
-          Log.i('🚨 [Orchestrator] T-0 Slot[$slotKey] — FORCING window takeover to locked mode.');
-          await KioskService.setMode(KioskMode.locked);
+          Log.i('🚨 [Orchestrator] T-0 Slot[$slotKey] — Ensuring window is restored.');
+          await KioskService.setMode(KioskMode.fullscreen);
+          final isMinimized = await windowManager.isMinimized();
+          if (isMinimized) {
+            await NotificationService.showWarning(
+              'Class Started',
+              '${nextSlot.courseName} has started. Please return to SmartBoard.',
+            );
+          }
         }
       }
 
+      // ── Back-to-back pressure (T-10 to next class while current is active) ──
       final currentSlot = await globalDeviceRepository.getCurrentSlot();
       if (currentSlot != null && nextSlot != null) {
         final nextStart = _parseTime(nextSlot.startTime, now);
-        final diffToNext = nextStart.difference(now).inMinutes;
+        final diffSec = nextStart.difference(now).inSeconds;
         final pressureKey = '${currentSlot.slotId}_pressure';
 
-        if (diffToNext <= 10 && diffToNext > 0 && !_backPressureFiredSlots.contains(pressureKey)) {
+        if (diffSec <= 600 && diffSec > 0 && !_backPressureFiredSlots.contains(pressureKey)) {
           _backPressureFiredSlots.add(pressureKey);
-          Log.w('⚠️ [Orchestrator] Back-to-back pressure: Next class (${nextSlot.courseName}) in ~$diffToNext min.');
+          Log.w('⚠️ [Orchestrator] Back-to-back pressure: Next class (${nextSlot.courseName}) in ~${diffSec ~/ 60} min.');
           await NotificationService.showWarning(
             'Attendance Deadline',
-            'Next class "${nextSlot.courseName}" starts in ~$diffToNext minutes. Please complete current attendance.',
+            'Next class "${nextSlot.courseName}" starts in ~${diffSec ~/ 60} minutes. Please complete current attendance.',
           );
         }
       }
 
+      // ── End-of-class check (T-5, no attendance taken) ────────────────────
       if (currentSlot != null) {
         final slotEnd = _parseTime(currentSlot.endTime, now);
-        final minToEnd = slotEnd.difference(now).inMinutes;
+        final diffSec = slotEnd.difference(now).inSeconds;
         final endKey = '${currentSlot.slotId}_end';
 
-        if (minToEnd <= 5 && minToEnd > 0 && !_endOfClassFiredSlots.contains(endKey)) {
+        if (diffSec <= 300 && diffSec > 0 && !_endOfClassFiredSlots.contains(endKey)) {
           _endOfClassFiredSlots.add(endKey);
           try {
             final registration = await globalDeviceRepository.getRegistration();
             if (registration != null) {
               final boardId = registration.smartBoardId;
               final activeSessions = await FirestoreRestClient.runQuery(
-                collection: 'ActiveSessions',
-                where: {'smart_board_id': boardId, 'status': 'active'},
+                collection: FirestoreSchema.activeSessions,
+                where: {FirestoreSchema.fieldSmartBoardId: boardId, FirestoreSchema.fieldStatus: FirestoreSchema.statusActive},
                 limit: 1,
               );
 
               bool attendeeFound = false;
               if (activeSessions.isNotEmpty) {
-                final sessionId = activeSessions.first['__id']?.toString();
+                final sessionId = activeSessions.first[FirestoreSchema.fieldDocId]?.toString();
                 if (sessionId != null) {
                   final attendees = await FirestoreRestClient.runQuery(
-                    collection: 'attendees',
-                    where: {'session_id': sessionId},
+                    collection: FirestoreSchema.attendees,
+                    where: {FirestoreSchema.fieldSessionId: sessionId},
                     limit: 1,
                   );
                   attendeeFound = attendees.isNotEmpty;
@@ -150,11 +172,11 @@ class WindowOrchestratorService {
               }
 
               if (!attendeeFound) {
-                Log.w('🚨 [Orchestrator] Class ending in $minToEnd min — No attendance taken. Forcing full-screen.');
-                await KioskService.setMode(KioskMode.locked);
+                Log.w('🚨 [Orchestrator] Class ending in ~${diffSec ~/ 60} min — No attendance taken. Restoring window.');
+                await KioskService.setMode(KioskMode.fullscreen);
                 await NotificationService.showWarning(
                   'Attendance Required',
-                  '"${currentSlot.courseName}" ends in ~$minToEnd minutes. Please take attendance now.',
+                  '"${currentSlot.courseName}" ends in ~${diffSec ~/ 60} minutes. Please take attendance now.',
                 );
               }
             }

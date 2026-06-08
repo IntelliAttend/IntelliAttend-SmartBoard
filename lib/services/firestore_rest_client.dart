@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../core/config/app_config.dart';
+import '../core/config/firestore_schema.dart';
 import '../core/security/firebase_rest_auth.dart';
 import '../core/utils/logger.dart';
 
@@ -65,7 +66,7 @@ class FirestoreRestClient {
       if (fields == null) return null;
       final flat = _flattenFields(fields);
       // Inject the document ID (last path segment) so callers can use it.
-      flat['__id'] = docPath.split('/').last;
+      flat[FirestoreSchema.fieldDocId] = docPath.split('/').last;
       return flat;
     } catch (e) {
       Log.w('[FirestoreRest] getDocument($docPath) error: $e');
@@ -152,7 +153,7 @@ class FirestoreRestClient {
         // Firestore returns the document's resource name like
         // `projects/.../documents/<collection>/<id>` — peel off just the ID.
         final name = doc['name']?.toString() ?? '';
-        flat['__id'] = name.split('/').last;
+        flat[FirestoreSchema.fieldDocId] = name.split('/').last;
         out.add(flat);
       }
       return out;

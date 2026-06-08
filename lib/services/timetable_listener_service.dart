@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'package:isar/isar.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../core/config/firestore_schema.dart';
 import '../models/isar_schemas.dart';
 import '../core/utils/logger.dart';
 import 'session_manager.dart';
 import 'timetable_cache.dart';
+import 'firestore_rest_client.dart';
 
 class TimetableListenerService {
   static final TimetableListenerService _instance =
@@ -21,32 +24,71 @@ class TimetableListenerService {
   static const Duration _staleThreshold = Duration(minutes: 5);
 
   bool get isListening => _subscription != null;
+  bool get isNative => _subscription != null;
   bool get isHealthy =>
       _lastSnapshotTime != null &&
       DateTime.now().difference(_lastSnapshotTime!) < _staleThreshold;
 
   void start(String smartBoardId, {void Function()? restFallback}) {
-    if (_subscription != null && _currentBoardId == smartBoardId) return;
+    if (isListening && _currentBoardId == smartBoardId) return;
 
     stop();
     _currentBoardId = smartBoardId;
     _restFallback = restFallback;
 
-    _subscription = FirebaseFirestore.instance
-        .collection('timetable_slots')
-        .where('smart_board_id', isEqualTo: smartBoardId)
-        .snapshots(includeMetadataChanges: false)
-        .listen(
-          _onTimetableChanged,
-          onError: _onError,
-          onDone: _onDone,
-          cancelOnError: false,
-        );
+    try {
+      _subscription = FirebaseFirestore.instance
+          .collection(FirestoreSchema.timetableSlots)
+          .where(FirestoreSchema.fieldSmartBoardId, isEqualTo: smartBoardId)
+          .snapshots(includeMetadataChanges: false)
+          .listen(
+            _onTimetableChanged,
+            onError: _onSnapshotError,
+            onDone: _onSnapshotDone,
+            cancelOnError: false,
+          );
+      Log.i('[TimetableListener] Listening for changes (board: $smartBoardId)');
+    } catch (e) {
+      Log.w('[TimetableListener] Native snapshots unavailable: $e');
+      Log.w('[TimetableListener] Use forceSync() for manual one-time sync.');
+    }
 
     _startHealthMonitor();
+  }
 
-    Log.i(
-        '[TimetableListener] Listening for changes (board: $smartBoardId)');
+  /// Manually sync timetable from Firestore via REST (one-shot).
+  /// Safe to call at any time — no automatic polling.
+  Future<void> forceSync() async {
+    final boardId = _currentBoardId;
+    if (boardId == null) return;
+
+    try {
+      final docs = await FirestoreRestClient.runQuery(
+        collection: FirestoreSchema.timetableSlots,
+        where: {FirestoreSchema.fieldSmartBoardId: boardId},
+      );
+
+      _lastSnapshotTime = DateTime.now();
+
+      if (docs.isEmpty) {
+        Log.w('[TimetableListener] forceSync returned 0 docs — preserving existing cache');
+        return;
+      }
+
+      final entries = <TimetableEntry>[];
+      for (final data in docs) {
+        final docId = data[FirestoreSchema.fieldDocId]?.toString() ?? '';
+        if (docId.isEmpty) continue;
+        entries.add(_docToEntry(docId, data));
+      }
+
+      final allEntries = await _reconcileAll(entries);
+      TimetableCache().updateAll(allEntries);
+
+      Log.i('[TimetableListener] Updated ${entries.length} entries from force sync');
+    } catch (e) {
+      Log.e('[TimetableListener] Force sync failed: $e');
+    }
   }
 
   void stop() {
@@ -68,76 +110,192 @@ class TimetableListenerService {
     if (!isListening) return;
 
     if (!isHealthy) {
-      final minutesSince =
-          DateTime.now().difference(_lastSnapshotTime!).inMinutes;
-      Log.w(
-          '[TimetableListener] No snapshot in $minutesSince min — triggering REST fallback');
+      if (_lastSnapshotTime == null) {
+        Log.w('[TimetableListener] No snapshots received since startup — triggering REST fallback');
+      } else {
+        final minutesSince =
+            DateTime.now().difference(_lastSnapshotTime!).inMinutes;
+        Log.w('[TimetableListener] No snapshot in $minutesSince min — triggering REST fallback');
+      }
       _restFallback?.call();
     }
   }
 
-  void _onDone() {
-    Log.w(
-        '[TimetableListener] Stream closed unexpectedly. Check Firebase connection.');
+  void _onSnapshotDone() {
+    Log.w('[TimetableListener] Stream closed unexpectedly.');
+    Log.w('[TimetableListener] Call forceSync() to re-sync timetable manually.');
     _lastSnapshotTime = null;
     _healthTimer?.cancel();
   }
 
+  void _onSnapshotError(Object error) {
+    Log.e('[TimetableListener] Snapshot error: $error');
+    _lastSnapshotTime = null;
+    Log.w('[TimetableListener] Native snapshots unavailable — use forceSync() for manual sync.');
+  }
+
+  /// Processes a Firestore snapshot using docChanges for granular
+  /// add/modify/remove operations on Isar.  Never clears the entire
+  /// collection — individual upserts keep existing data intact when the
+  /// stream delivers an empty or error state (offline, token expired, etc.).
   void _onTimetableChanged(QuerySnapshot snapshot) async {
     _lastSnapshotTime = DateTime.now();
 
     try {
-      final entries = <TimetableEntry>[];
-
-      for (final doc in snapshot.docs) {
-        final data = doc.data() as Map<String, dynamic>?;
-        if (data == null) continue;
-
-        entries.add(_docToEntry(doc.id, data));
+      if (snapshot.docChanges.isEmpty && snapshot.docs.isEmpty) {
+        Log.w('[TimetableListener] Empty snapshot — preserving existing cache');
+        return;
       }
 
       final isar = SessionManager.isar;
-      await isar.writeTxn(() async {
-        await isar.timetableEntrys.clear();
-        await isar.timetableEntrys.putAll(entries);
-      });
 
-      TimetableCache().updateAll(entries);
+      if (snapshot.docChanges.isNotEmpty) {
+        // Process granular changes from the native listener.
+        // Read all existing entries once for O(1) slotId lookups.
+        // (~40-50 entries for a weekly timetable — negligible overhead.)
+        final allExisting = await isar.timetableEntrys.where().findAll();
+        final existingBySlotId =
+            {for (final e in allExisting) e.slotId: e};
 
-      Log.i(
-          '[TimetableListener] Updated ${entries.length} entries from snapshot');
+        await isar.writeTxn(() async {
+          for (final change in snapshot.docChanges) {
+            final data = change.doc.data() as Map<String, dynamic>?;
+            if (data == null) continue;
+
+            switch (change.type) {
+              case DocumentChangeType.added:
+              case DocumentChangeType.modified:
+                final entry = _docToEntry(change.doc.id, data);
+                final existing = existingBySlotId[entry.slotId];
+                if (existing != null) {
+                  existing
+                    ..dayOfWeek = entry.dayOfWeek
+                    ..startTime = entry.startTime
+                    ..endTime = entry.endTime
+                    ..courseName = entry.courseName
+                    ..facultyName = entry.facultyName
+                    ..sectionId = entry.sectionId;
+                  await isar.timetableEntrys.put(existing);
+                } else {
+                  await isar.timetableEntrys.put(entry);
+                }
+                break;
+
+              case DocumentChangeType.removed:
+                final existing = existingBySlotId[change.doc.id];
+                if (existing != null) {
+                  await isar.timetableEntrys.delete(existing.id);
+                }
+                break;
+            }
+          }
+        });
+      } else {
+        // No docChanges (unusual but defensive) — fall back to bulk upsert.
+        final entries = <TimetableEntry>[];
+        for (final doc in snapshot.docs) {
+          final data = doc.data() as Map<String, dynamic>?;
+          if (data == null) continue;
+          entries.add(_docToEntry(doc.id, data));
+        }
+        if (entries.isEmpty) return;
+
+        final allExisting = await isar.timetableEntrys.where().findAll();
+        final existingBySlotId =
+            {for (final e in allExisting) e.slotId: e};
+
+        await isar.writeTxn(() async {
+          for (final entry in entries) {
+            final existing = existingBySlotId[entry.slotId];
+            if (existing != null) {
+              existing
+                ..dayOfWeek = entry.dayOfWeek
+                ..startTime = entry.startTime
+                ..endTime = entry.endTime
+                ..courseName = entry.courseName
+                ..facultyName = entry.facultyName
+                ..sectionId = entry.sectionId;
+              await isar.timetableEntrys.put(existing);
+            } else {
+              await isar.timetableEntrys.put(entry);
+            }
+          }
+        });
+      }
+
+      // Re-read the full timeline from Isar to refresh the in-memory cache.
+      final allEntries = await isar.timetableEntrys
+          .where()
+          .sortByDayOfWeek()
+          .thenByStartTime()
+          .findAll();
+      TimetableCache().updateAll(allEntries);
+
+      Log.i('[TimetableListener] Incremental update applied (${snapshot.docChanges.length} changes)');
     } catch (e) {
       Log.e('[TimetableListener] Failed to process update: $e');
     }
   }
 
-  void _onError(Object error) {
-    Log.e('[TimetableListener] Snapshot error: $error');
+  /// Upserts [incoming] entries into Isar by slotId, then deletes any
+  /// entries that are no longer in the synced set.  Never clears the
+  /// collection — empty results are already rejected by the caller.
+  Future<List<TimetableEntry>> _reconcileAll(
+      List<TimetableEntry> incoming) async {
+    final isar = SessionManager.isar;
+    final existingAll = await isar.timetableEntrys.where().findAll();
+    final existingBySlotId = {for (final e in existingAll) e.slotId: e};
+    final incomingSlotIds = incoming.map((e) => e.slotId).toSet();
+
+    await isar.writeTxn(() async {
+      for (final entry in incoming) {
+        final existing = existingBySlotId[entry.slotId];
+        if (existing != null) {
+          existing
+            ..dayOfWeek = entry.dayOfWeek
+            ..startTime = entry.startTime
+            ..endTime = entry.endTime
+            ..courseName = entry.courseName
+            ..facultyName = entry.facultyName
+            ..sectionId = entry.sectionId;
+          await isar.timetableEntrys.put(existing);
+        } else {
+          await isar.timetableEntrys.put(entry);
+        }
+      }
+
+      for (final existing in existingAll) {
+        if (existing.slotId.isEmpty) continue;
+        if (incomingSlotIds.contains(existing.slotId)) continue;
+        await isar.timetableEntrys.delete(existing.id);
+      }
+    });
+
+    return await isar.timetableEntrys
+        .where()
+        .sortByDayOfWeek()
+        .thenByStartTime()
+        .findAll();
   }
 
   TimetableEntry _docToEntry(String docId, Map<String, dynamic> data) {
-    final facultyEmail = data['faculty_id']?.toString() ??
-        (data['faculty_emails'] as List?)?.firstOrNull?.toString() ?? '';
+    final facultyEmail = data[FirestoreSchema.fieldFacultyId]?.toString() ??
+        (data[FirestoreSchema.fieldFacultyEmails] as List?)?.firstOrNull?.toString() ?? '';
 
     return TimetableEntry()
       ..slotId = docId
-      ..dayOfWeek = _dayNumber(data['day_of_week']?.toString() ?? '')
-      ..startTime = data['start_time']?.toString() ?? ''
-      ..endTime = data['end_time']?.toString() ?? ''
-      ..courseName = data['subject_name']?.toString() ?? 'Class'
+      ..dayOfWeek = _dayNumber(data[FirestoreSchema.fieldDayOfWeek]?.toString() ?? '')
+      ..startTime = data[FirestoreSchema.fieldStartTime]?.toString() ?? ''
+      ..endTime = data[FirestoreSchema.fieldEndTime]?.toString() ?? ''
+      ..courseName = data[FirestoreSchema.fieldSubjectName]?.toString() ?? 'Class'
       ..facultyName = facultyEmail
-      ..sectionId = data['section_id']?.toString() ?? 'N/A';
+      ..sectionId = data[FirestoreSchema.fieldSectionId]?.toString() ?? 'N/A';
   }
 
   int _dayNumber(String dayName) {
     const days = [
-      'Monday',
-      'Tuesday',
-      'Wednesday',
-      'Thursday',
-      'Friday',
-      'Saturday',
-      'Sunday',
+      'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday',
+      'Saturday', 'Sunday',
     ];
     final idx =
         days.indexWhere((d) => d.toLowerCase() == dayName.toLowerCase());

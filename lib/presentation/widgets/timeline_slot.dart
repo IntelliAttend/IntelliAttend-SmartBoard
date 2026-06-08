@@ -5,11 +5,15 @@ import '../../core/theme/app_theme.dart';
 class TimelineSlot extends StatelessWidget {
   final TimetableEntry entry;
   final bool isLive;
+  final bool isCompleted;
+  final bool isFailed;
 
   const TimelineSlot({
     super.key,
     required this.entry,
     this.isLive = false,
+    this.isCompleted = false,
+    this.isFailed = false,
   });
 
   @override
@@ -20,14 +24,18 @@ class TimelineSlot extends StatelessWidget {
         : (isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       decoration: BoxDecoration(
         color: isLive 
             ? AppColors.primaryTeal.withValues(alpha: 0.05) 
             : Colors.transparent,
-        border: isLive 
-            ? Border(top: BorderSide(color: AppColors.primaryTeal, width: 2)) 
-            : null,
+        border: isLive
+            ? Border(top: BorderSide(color: AppColors.primaryTeal, width: 2))
+            : isFailed
+                ? Border(top: BorderSide(color: AppColors.warningAmber, width: 2))
+                : isCompleted
+                    ? Border(top: BorderSide(color: AppColors.successLime, width: 2))
+                    : null,
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -54,7 +62,7 @@ class TimelineSlot extends StatelessWidget {
           Text(
             "${entry.startTime} – ${entry.endTime}",
             style: TextStyle(
-              color: isLive ? color : const Color(0xFF0F172A), // slate-900
+              color: isLive ? color : (isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight),
               fontSize: 12,
               fontWeight: FontWeight.bold,
               letterSpacing: 0.5,
@@ -64,7 +72,7 @@ class TimelineSlot extends StatelessWidget {
           Text(
             entry.courseName,
             style: TextStyle(
-              color: isLive ? color.withValues(alpha: 0.7) : const Color(0xFF64748B), // slate-500
+              color: isLive ? color.withValues(alpha: 0.7) : (isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight),
               fontSize: 10,
               fontWeight: FontWeight.w500,
               letterSpacing: 0.2,

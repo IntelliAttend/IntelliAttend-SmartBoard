@@ -5,17 +5,19 @@ import '../../core/theme/app_theme.dart';
 class PinInput extends StatelessWidget {
   final int length;
   final String value;
+  final bool obscureText;
 
   const PinInput({
     super.key,
     this.length = 6,
     required this.value,
+    this.obscureText = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: List.generate(
@@ -30,22 +32,22 @@ class PinInput extends StatelessWidget {
             height: 52,
             margin: const EdgeInsets.symmetric(horizontal: 4),
             decoration: BoxDecoration(
-              color: isDark 
-                  ? Colors.white.withValues(alpha: 0.05) 
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.05)
                   : AppColors.bgLight,
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
-                color: isFocused 
-                    ? AppColors.primaryTeal 
+                color: isFocused
+                    ? AppColors.primaryTeal
                     : (isDark ? Colors.white10 : Colors.black12),
                 width: 1.5,
               ),
             ),
             child: Center(
               child: Text(
-                char,
+                obscureText && isFilled ? '●' : char,
                 style: GoogleFonts.jetBrainsMono(
-                  fontSize: 20,
+                  fontSize: obscureText && isFilled ? 12 : 20,
                   fontWeight: FontWeight.bold,
                   color: isFilled ? AppColors.primaryTeal : (isDark ? Colors.white24 : Colors.black12),
                 ),

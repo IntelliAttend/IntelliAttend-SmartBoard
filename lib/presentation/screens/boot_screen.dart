@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import '../../core/config/app_config.dart';
 import '../../core/theme/app_theme.dart';
 import 'registration_screen.dart';
@@ -21,6 +22,7 @@ class BootScreen extends StatefulWidget {
 class _BootScreenState extends State<BootScreen> {
   final String _statusMessage = 'INITIALIZING SYSTEM...';
   String? _errorMessage;
+  String _appVersion = '';
 
   DeviceRegistration? _registration;
   bool _needsReauth = false;
@@ -32,6 +34,20 @@ class _BootScreenState extends State<BootScreen> {
   void initState() {
     super.initState();
     _performHandshake();
+    _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (mounted) {
+        setState(() => _appVersion = 'v${info.version}+${info.buildNumber}');
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _appVersion = 'v0.0.0');
+      }
+    }
   }
 
   @override
@@ -231,16 +247,13 @@ class _BootScreenState extends State<BootScreen> {
                 children: [
                   GestureDetector(
                     onLongPress: () => _showWipeConfirmation(),
-                    child: Container(
-                      padding: const EdgeInsets.all(32),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary.withValues(alpha: 0.1),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.settings_input_antenna_rounded,
-                        size: 80,
-                        color: AppColors.primary,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(20),
+                      child: Image.asset(
+                        'assets/logo.png',
+                        width: 360,
+                        height: 360,
+                        fit: BoxFit.contain,
                       ),
                     ),
                   ),
@@ -293,7 +306,7 @@ class _BootScreenState extends State<BootScreen> {
               child: Center(
                 child: Opacity(
                   opacity: 0.3,
-                  child: Text('v5.4.1-STABLE', style: Theme.of(context).textTheme.labelLarge),
+                  child: Text(_appVersion, style: Theme.of(context).textTheme.labelLarge),
                 ),
               ),
             ),
@@ -466,6 +479,9 @@ class _BootScreenState extends State<BootScreen> {
                 }
 
                 setDialogState(() => isVerifying = true);
+
+                final repo = context.read<IDeviceRepository>();
+                final nav = Navigator.of(context);
                 
                 final isValid = await ApiService.verifyAdminPin(pin);
                 
@@ -485,8 +501,6 @@ class _BootScreenState extends State<BootScreen> {
                   // We continue with local wipe anyway to ensure device is cleared
                 }
 
-                final repo = context.read<IDeviceRepository>();
-                final nav = Navigator.of(context);
                 await repo.clearRegistration();
                 
                 if (mounted) {

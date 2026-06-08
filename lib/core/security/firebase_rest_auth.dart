@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../../services/time_sync_service.dart';
 import '../config/app_config.dart';
 import '../utils/logger.dart';
 import 'secure_storage_service.dart';
@@ -75,7 +76,7 @@ class FirebaseRestAuth {
           '[FirebaseRestAuth] Malformed signInWithPassword response: $data');
     }
     final expiresIn = int.parse(expiresInStr);
-    final expiryMs = DateTime.now().millisecondsSinceEpoch + (expiresIn * 1000);
+    final expiryMs = TimeSyncService.timeNow.millisecondsSinceEpoch + (expiresIn * 1000);
 
     await SecureStorageService.storeRefreshToken(refreshToken);
     await SecureStorageService.storeAccessToken(idToken, expiryMs);
@@ -83,55 +84,6 @@ class FirebaseRestAuth {
     Log.i('[FirebaseRestAuth] Signed in via password. '
         'ID token expires in ${expiresIn}s.');
     return data;
-  }
-
-  /// Exchanges a server-issued Firebase Custom Token for an ID token + refresh
-  /// token. Called from [AuthRepository] exactly once, when the board first
-  /// registers. Persists the resulting tokens to secure storage.
-  static Future<void> signInWithCustomToken(String customToken) async {
-    final apiKey = AppConfig.firebaseApiKey;
-    if (apiKey.isEmpty) {
-      throw StateError('FIREBASE_API_KEY missing — cannot sign in.');
-    }
-
-    final uri = Uri.parse(
-      'https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken'
-      '?key=$apiKey',
-    );
-
-    final response = await _client
-        .post(
-          uri,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'token': customToken,
-            'returnSecureToken': true,
-          }),
-        )
-        .timeout(const Duration(seconds: 15));
-
-    if (response.statusCode != 200) {
-      Log.e('[FirebaseRestAuth] signInWithCustomToken ${response.statusCode}: '
-          '${response.body}');
-      throw _decodeError(response, 'signInWithCustomToken');
-    }
-
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final idToken = data['idToken'] as String?;
-    final refreshToken = data['refreshToken'] as String?;
-    final expiresInStr = data['expiresIn'] as String?;
-    if (idToken == null || refreshToken == null || expiresInStr == null) {
-      throw StateError(
-          '[FirebaseRestAuth] Malformed sign-in response: $data');
-    }
-    final expiresIn = int.parse(expiresInStr);
-    final expiryMs = DateTime.now().millisecondsSinceEpoch + (expiresIn * 1000);
-
-    await SecureStorageService.storeRefreshToken(refreshToken);
-    await SecureStorageService.storeAccessToken(idToken, expiryMs);
-
-    Log.i('[FirebaseRestAuth] Signed in via custom token. '
-        'ID token expires in ${expiresIn}s.');
   }
 
   /// Quick check if auth tokens exist (cached access token or refresh token).
@@ -207,7 +159,7 @@ class FirebaseRestAuth {
       }
       final expiresIn = int.parse(expiresInStr);
       final expiryMs =
-          DateTime.now().millisecondsSinceEpoch + (expiresIn * 1000);
+          TimeSyncService.timeNow.millisecondsSinceEpoch + (expiresIn * 1000);
 
       // Google may rotate the refresh token; persist whichever it returned.
       if (newRefresh != null && newRefresh != refreshToken) {
@@ -232,10 +184,6 @@ class FirebaseRestAuth {
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────
-
-  static Exception _decodeError(http.Response response, String operation) {
-    return _toRestAuthException(response, operation);
-  }
 
   static FirebaseRestAuthException _toRestAuthException(
     http.Response response,

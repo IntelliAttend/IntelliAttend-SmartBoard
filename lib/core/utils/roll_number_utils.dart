@@ -50,11 +50,6 @@ class RollNumberUtils {
     return 'SE${(index + 1).toString().padLeft(3, '0')}';
   }
 
-  /// Generate a list of roll numbers for a given capacity.
-  static List<String> generateRollNumbers(int capacity) {
-    return List.generate(capacity, (index) => generateSeatCode(index));
-  }
-
   /// Parse a 2-character roll code back to its seat index.
   /// Returns -1 if the code is invalid.
   static int parseSeatCode(String code) {

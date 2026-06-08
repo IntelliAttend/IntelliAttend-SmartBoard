@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../../services/time_sync_service.dart';
 import '../utils/logger.dart';
 
 class SecureStorageService {
@@ -72,7 +73,7 @@ class SecureStorageService {
     final expiry = int.tryParse(expiryStr);
     if (expiry == null) return null;
 
-    final now = DateTime.now().millisecondsSinceEpoch;
+    final now = TimeSyncService.timeNow.millisecondsSinceEpoch;
     if (now >= (expiry - 60000)) {
       if (kDebugMode) {
         debugPrint('⚠️ [SecureStorage] Access token expired or expiring soon');
@@ -117,6 +118,8 @@ class SecureStorageService {
       _write('session_secret_$sessionId', secret);
   static Future<String?> getSessionSecret(String sessionId) =>
       _read('session_secret_$sessionId');
+  static Future<void> deleteSessionSecret(String sessionId) =>
+      _delete('session_secret_$sessionId');
 
   // Board Firebase credentials — stored after successful registration so the
   // Firebase plugin can sign in on subsequent boots and use .snapshots() streams.

@@ -29,6 +29,13 @@ enum KioskMode {
 
 class KioskService {
   static bool _enabled = false;
+  static bool _screenCaptureFailed = false;
+
+  static final StreamController<bool> _screenCapController =
+      StreamController<bool>.broadcast();
+  static Stream<bool> get onScreenCaptureWarning => _screenCapController.stream;
+  static bool get isScreenCaptureCompromised => _screenCaptureFailed;
+
   // Use a sentinel value so the very first setMode() call always applies.
   static KioskMode? _currentMode;
 
@@ -44,10 +51,11 @@ class KioskService {
   // the Flutter engine silently.
   static Future<void>? _inFlight;
 
-  /// Periodic watchdog that re-enforces fullscreen in case any edge case
-  /// causes the window to leave fullscreen (e.g. monitor hotplug, DPI
-  /// change, or a missed restore event).
-  static Timer? _fullscreenWatchdog;
+  // Guards against re-entrant _applyMode calls when a window_manager native
+  // call (e.g. setFullScreen) triggers a window event (onWindowRestore)
+  // that itself calls setMode. Without this guard, the window listener
+  // would queue a redundant re-apply, wasting platform channel calls.
+  static bool _isApplyingMode = false;
 
   static void enable() {
     if (!Platform.isWindows) return;
@@ -58,41 +66,54 @@ class KioskService {
     // Without this, minimizing a fullscreen window and clicking the taskbar
     // icon restores it as a normal windowed frame—not fullscreen.
     windowManager.addListener(_KioskWindowListener());
-    _startFullscreenWatchdog();
     Log.i('🛡️ [Kiosk] Kiosk hardening enabled');
   }
 
-  /// Starts a periodic timer (every 10s) that checks if the window is in
-  /// fullscreen when it should be. If not, it re-applies the current mode.
-  /// This is a safety net for edge cases (monitor hotplug, missed restore
-  /// events, DPI changes, etc.).
-  static void _startFullscreenWatchdog() {
-    _fullscreenWatchdog?.cancel();
-    _fullscreenWatchdog = Timer.periodic(
-      const Duration(seconds: 10),
-      (_) async {
-        if (!_enabled) return;
-        final mode = _currentMode;
-        if (mode == null || mode == KioskMode.suspended) return;
-        try {
-          final full = await windowManager.isFullScreen();
-          if (!full) {
-            Log.w('🛡️ [Kiosk] Watchdog: window not fullscreen. Re-applying $mode.');
-            await setMode(mode);
-          }
-        } catch (_) {}
-      },
-    );
+  /// Checks whether the window is currently in the expected fullscreen state
+  /// and re-applies the current mode if not. This is called from
+  /// [WindowOrchestratorService]'s single periodic tick so there is exactly
+  /// one timer source checking window health — preventing the concurrent
+  /// platform-channel call storm that caused system-wide DWM freezes.
+  static Future<void> ensureFullscreen() async {
+    if (!_enabled) return;
+    final mode = _currentMode;
+    if (mode == null || mode == KioskMode.suspended) return;
+    try {
+      final full = await windowManager.isFullScreen();
+      if (!full) {
+        Log.w('🛡️ [Kiosk] Health check: window not fullscreen. Re-applying $mode.');
+        await setMode(mode, force: true);
+      }
+    } catch (_) {}
   }
 
   // ---------------------------------------------------------------------------
   // setMode — the central state machine.
   //
-  // NOTE: We intentionally do NOT skip when mode == _currentMode. Every call
-  // re-applies the window state so a crash/recovery or dual-monitor hotplug
-  // always restores the correct fullscreen state.
+  // When [force] is false (default) and [mode] matches the cached [_currentMode],
+  // we check the actual window state via [windowManager.isFullScreen] before
+  // applying. This eliminates redundant platform-channel calls that were
+  // causing concurrent-call crashes and DWM freezes on Windows.
+  //
+  // Pass [force: true] only when a crash recovery or monitor-hotplug scenario
+  // genuinely requires re-application (e.g. [ensureFullscreen]).
   // ---------------------------------------------------------------------------
-  static Future<void> setMode(KioskMode mode) async {
+  static Future<void> setMode(KioskMode mode, {bool force = false}) async {
+    // Skip re-apply if mode hasn't changed and we can verify the window is
+    // already in the correct state.  Always apply on first call (sentinel).
+    if (!force && _currentMode != null && mode == _currentMode) {
+      if (mode == KioskMode.suspended) {
+        // For suspended we trust the cached state — no way to check.
+        return;
+      }
+      try {
+        final isFull = await windowManager.isFullScreen();
+        if (isFull) return;
+      } catch (_) {
+        // Platform channel unavailable; proceed to re-apply defensively.
+      }
+    }
+
     // Serialise so a second caller waits for the first to fully finish before
     // issuing any window_manager native calls.
     final prior = _inFlight;
@@ -112,6 +133,12 @@ class KioskService {
   }
 
   static Future<void> _applyMode(KioskMode mode) async {
+    if (_isApplyingMode) {
+      Log.w('🔄 [Kiosk] Re-entrant _applyMode($mode) — skipping (already applying).');
+      return;
+    }
+    _isApplyingMode = true;
+
     final prev = _currentMode;
     Log.i('🔄 [Kiosk] setMode($mode) [was $prev]');
 
@@ -120,34 +147,40 @@ class KioskService {
         // ── FULLSCREEN ────────────────────────────────────────────────────────
         case KioskMode.fullscreen:
           await windowManager.setResizable(false);
+          // alwaysOnTop BEFORE show/focus so the window is already on-top
+          // when it becomes visible — prevents taskbar flash during restore.
           await windowManager.setAlwaysOnTop(true);
+          await windowManager.show();
+          await windowManager.focus();
           if (Platform.isWindows) {
             await windowManager.setPreventClose(true);
-            await windowManager.setSkipTaskbar(false);
+            // Skip taskbar entirely in fullscreen — app never appears on the taskbar.
+            await windowManager.setSkipTaskbar(true);
           }
           await windowManager.setFullScreen(true);
           break;
 
-        // ── LOCKED ───────────────────────────────────────────────────────────
+        // ── LOCKED (deprecated — superseded by fullscreen with skipTaskbar) ──
         case KioskMode.locked:
+          // Fall through to fullscreen behaviour.
           await windowManager.setResizable(false);
+          await windowManager.setAlwaysOnTop(true);
           await windowManager.show();
           await windowManager.focus();
-          await windowManager.setFullScreen(true);
-          await windowManager.setAlwaysOnTop(true);
           if (Platform.isWindows) {
             await windowManager.setPreventClose(true);
             await windowManager.setSkipTaskbar(true);
           }
+          await windowManager.setFullScreen(true);
           break;
 
         // ── ABSOLUTE LOCKED (QR scanning) ──────────────────────────────────
         case KioskMode.absoluteLocked:
           await windowManager.setResizable(false);
+          await windowManager.setAlwaysOnTop(true);
           await windowManager.show();
           await windowManager.focus();
           await windowManager.setFullScreen(true);
-          await windowManager.setAlwaysOnTop(true);
           if (Platform.isWindows) {
             await windowManager.setPreventClose(true);
             await windowManager.setSkipTaskbar(true);
@@ -159,28 +192,31 @@ class KioskService {
         // ── SUSPENDED ────────────────────────────────────────────────────────
         case KioskMode.suspended:
           // Remember the mode we're suspending from so onWindowRestore can
-          // restore fullscreen with the correct mode when the user clicks the
-          // taskbar icon.
+          // restore fullscreen with the correct mode.
           _preSuspendMode = _currentMode;
           await windowManager.setAlwaysOnTop(false);
           await windowManager.setFullScreen(false);
-          await windowManager.setResizable(false);
+          await windowManager.setResizable(true); // Allow resizing when suspended
           if (Platform.isWindows) {
             await windowManager.setPreventClose(false);
+            // Show icon on taskbar when minimized so user knows it's alive.
             await windowManager.setSkipTaskbar(false);
           }
           await windowManager.minimize();
           break;
       }
 
-      // Restore screen capture when leaving absoluteLocked
+      // Restore screen capture + brightness when leaving absoluteLocked
       if (prev == KioskMode.absoluteLocked && mode != KioskMode.absoluteLocked) {
         await _allowScreenCapture();
+        await _restoreBrightness();
       }
 
       _currentMode = mode;
     } catch (e) {
       Log.e('❌ [Kiosk] setMode($mode) failed: $e');
+    } finally {
+      _isApplyingMode = false;
     }
   }
 
@@ -193,11 +229,24 @@ class KioskService {
     }
   }
 
+  static Future<void> _restoreBrightness() async {
+    try {
+      await HardwareFingerprintService.restoreBrightness();
+      Log.i('💡 [Kiosk] Display brightness restored.');
+    } catch (e) {
+      Log.w('⚠️ [Kiosk] Brightness restore failed: $e');
+    }
+  }
+
   static Future<void> _preventScreenCapture() async {
     try {
       await HardwareFingerprintService.preventScreenCapture();
+      _screenCaptureFailed = false;
+      _screenCapController.add(false);
       Log.i('🛡️ [Kiosk] Screen capture blocked (WDA_MONITOR).');
     } catch (e) {
+      _screenCaptureFailed = true;
+      _screenCapController.add(true);
       Log.w('⚠️ [Kiosk] Screen capture prevention failed: $e');
     }
   }
@@ -228,12 +277,13 @@ class _KioskWindowListener extends WindowListener {
     _enforceOnRestore();
   }
 
-  /// Re-applies fullscreen after window restore. The underlying
-  /// [windowManager.setFullScreen] call from [KioskService.setMode] works
-  /// reliably here because the method channel provides a natural async
-  /// boundary — the window has already finished its OS restore transition
-  /// by the time the Dart handler executes.
+  /// Re-applies fullscreen after window restore. Skips if we are already
+  /// in the middle of [_applyMode] so a platform-channel call like
+  /// [windowManager.setFullScreen] cannot trigger a re-entrant apply loop
+  /// that freezes the Windows message pump.
   static Future<void> _enforceOnRestore() async {
+    if (KioskService._isApplyingMode) return;
+
     final mode = KioskService.currentMode;
     if (mode == KioskMode.suspended) {
       await KioskService.setMode(

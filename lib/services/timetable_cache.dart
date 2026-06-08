@@ -32,15 +32,13 @@ class TimetableCache extends ChangeNotifier {
       final startMins =
           int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
       final endMins = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
-      final ignitionDeadline = endMins - 3;
 
       if (endMins < startMins) {
-        if (currentMinutes >= startMins || currentMinutes < ignitionDeadline) {
+        if (currentMinutes >= startMins || currentMinutes < endMins) {
           return entry;
         }
       } else {
-        if (currentMinutes >= startMins &&
-            currentMinutes < ignitionDeadline) {
+        if (currentMinutes >= startMins && currentMinutes < endMins) {
           return entry;
         }
       }

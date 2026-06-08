@@ -9,7 +9,6 @@ import '../core/utils/logger.dart';
 import '../core/config/app_config.dart';
 import '../core/telemetry/metrics_collector.dart';
 import '../core/platform/hardware_fingerprint_service.dart';
-import '../core/platform/system_metrics_service.dart';
 import '../core/security/ssl_pinning_service.dart';
 import '../core/circuit_breaker.dart';
 import 'time_sync_service.dart';
@@ -185,6 +184,8 @@ class ApiService {
   static bool _isTransient(Object error) {
     return error is SocketException ||
         error is http.ClientException ||
+        error is TlsException ||
+        error is HandshakeException ||
         (error is Exception && error.toString().contains('Connection refused'));
   }
 
@@ -198,60 +199,21 @@ class ApiService {
       headers['X-Device-ID'] = deviceId;
     }
 
-    // REST-based ID token (replaces firebase_auth plugin) — pulls a fresh
-    // token from Identity Toolkit if the cached one is missing or expiring.
-    final idToken = await FirebaseRestAuth.getIdToken();
-    if (idToken != null && idToken.isNotEmpty) {
-      headers['Authorization'] = 'Bearer $idToken';
+    // v5.4 Strategy: Prefer the backend-issued Access Token (JWT) over
+    // the initial Firebase ID token. This token is bound to the hardware.
+    final backendToken = await SecureStorageService.getValidAccessToken();
+    if (backendToken != null && backendToken.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $backendToken';
       return headers;
     }
 
-    final apiKey = await SecureStorageService.getApiKey();
-    if (apiKey != null && apiKey.isNotEmpty) {
-      headers['X-API-Key'] = apiKey;
+    // Fallback: Use Firebase ID token if backend token is missing (e.g. during initial handshake)
+    final idToken = await FirebaseRestAuth.getIdToken();
+    if (idToken != null && idToken.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $idToken';
     }
 
     return headers;
-  }
-
-  // ─── Registration Flow ────────────────────────────────────────────────────
-
-  static Future<void> requestRegistrationOtp(
-      {required String smartBoardId}) async {
-    final response = await _request(
-      'POST',
-      'api/v1/board/register/request-otp',
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'classroom_id': smartBoardId}),
-    );
-
-    if (response.statusCode != 200) {
-      throw _apiError('OTP request', response);
-    }
-  }
-
-  static Future<Map<String, dynamic>> verifyRegistrationOtp({
-    required String smartBoardId,
-    required String otp,
-    String? deviceName,
-  }) async {
-    final hardwareId = await HardwareFingerprintService.getDeviceId();
-    final response = await _request(
-      'POST',
-      'api/v1/board/register',
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'classroom_id': smartBoardId,
-        'otp': otp,
-        'hardware_fingerprint': hardwareId,
-        'device_name': deviceName ?? 'SmartBoard $smartBoardId',
-      }),
-    );
-
-    if (response.statusCode == 200 || response.statusCode == 201) {
-      return jsonDecode(response.body) as Map<String, dynamic>;
-    }
-    throw _apiError('Registration verification', response);
   }
 
   // ─── Time & Context ───────────────────────────────────────────────────────
@@ -276,14 +238,6 @@ class ApiService {
     return serverTs;
   }
 
-  static Future<Map<String, dynamic>> syncContext() async {
-    final response = await _request('GET', 'api/v1/board/sync-context',
-        headers: await _authHeaders());
-
-    if (response.statusCode != 200) throw _apiError('Context sync', response);
-    return jsonDecode(response.body) as Map<String, dynamic>;
-  }
-
   // ─── Session Operations ───────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> initiateSession(String otp) async {
@@ -298,30 +252,6 @@ class ApiService {
       throw _apiError('Session initiation', response);
     }
     return jsonDecode(response.body) as Map<String, dynamic>;
-  }
-
-  static Future<void> recordLiveAttendance({
-    required String studentId,
-    required String sessionId,
-    required String smartBoardId,
-    required String entryType,
-  }) async {
-    final response = await _request(
-      'POST',
-      'api/v1/board/session/attendance/record-live',
-      headers: await _authHeaders(),
-      body: jsonEncode({
-        'student_id': studentId,
-        'session_id': sessionId,
-        'room_id': smartBoardId,
-        'entry_type': entryType,
-        'timestamp_ms': DateTime.now().millisecondsSinceEpoch,
-      }),
-    );
-
-    if (response.statusCode != 200) {
-      throw _apiError('Live attendance', response);
-    }
   }
 
   static Future<void> syncVault({
@@ -354,46 +284,60 @@ class ApiService {
     }
   }
 
-  // ─── Heartbeat (AUDIT-1.3) ─────────────────────────────────────────────────
+  // ─── Heartbeat (v2.0 — SmartBoard Integration Contract) ──────────────────
   //
-  // Called every 60s by HeartbeatService. Writes to board_heartbeats/<device_id>
-  // in Firestore so IT can monitor board health.
+  // Called every 5 minutes by HeartbeatService. Returns the authoritative
+  // session context from the server. This is the board's safety net — if
+  // WebSocket disconnects, the heartbeat tells you exactly what session
+  // is active.
 
-  static Future<void> sendHeartbeat({
+  static Future<Map<String, dynamic>> sendHeartbeatV2({
     required String smartBoardId,
-    required String hardwareId,
     required String screenState,
     required int uptimeSeconds,
     required String appVersion,
   }) async {
     final headers = await _authHeaders();
-    final timestamp = DateTime.now().toUtc().toIso8601String();
-
-    final sysMetrics = await SystemMetricsService.collect();
+    final timestamp = TimeSyncService.timeNow.toUtc().toIso8601String();
 
     final response = await _request(
       'POST',
-      'api/v1/device/heartbeat',
+      'api/v1/board/heartbeat',
       headers: headers,
       body: jsonEncode({
-        'smart_board_id': smartBoardId,
-        'hardware_id': hardwareId,
-        'screen_state': screenState,
-        'uptime_seconds': uptimeSeconds,
-        'app_version': appVersion,
-        'system_metrics': {
-          'memory_usage_mb': sysMetrics.memoryUsageMb,
-          'cpu_load_percent': sysMetrics.cpuLoadPercent,
-          'network_latency_ms': sysMetrics.networkLatencyMs,
-        },
-        'business_metrics': MetricsCollector().toJson(),
+        'boardId': smartBoardId,
+        'screenState': screenState,
+        'uptimeSeconds': uptimeSeconds,
+        'appVersion': appVersion,
         'timestamp': timestamp,
       }),
     );
 
-    if (response.statusCode != 200) {
-      Log.w(
-          '[Heartbeat] API returned ${response.statusCode}: ${response.body}');
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    Log.w('[Heartbeat] API returned ${response.statusCode}: ${response.body}');
+    return {'status': 'error', 'session': null};
+  }
+
+  // ─── WebSocket Ticket (v2.0) ─────────────────────────────────────────────
+
+  static Future<Map<String, dynamic>?> getWebSocketTicket() async {
+    final headers = await _authHeaders();
+    try {
+      final response = await _request(
+        'POST',
+        'api/v1/websocket/ticket',
+        headers: headers,
+      );
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+      Log.w('[Ticket] Failed: ${response.statusCode} ${response.body}');
+      return null;
+    } catch (e) {
+      Log.e('[Ticket] Error: $e');
+      return null;
     }
   }
 

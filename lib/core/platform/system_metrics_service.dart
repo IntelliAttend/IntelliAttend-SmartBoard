@@ -28,10 +28,6 @@ class SystemMetricsService {
   static DateTime? _cachedAt;
   static const Duration _cacheDuration = Duration(minutes: 4);
 
-  // Updated by ApiService.syncTime() after each time-sync RTT measurement.
-  // Starts at 0 until the first sync completes.
-  static int _lastLatencyMs = 0;
-
   /// Collects current Windows memory and CPU metrics.
   ///
   /// Returns a cached result if one is available and younger than 4 minutes.
@@ -79,17 +75,10 @@ class SystemMetricsService {
     _cached = SystemMetrics(
       memoryUsageMb: memoryMb,
       cpuLoadPercent: cpuPercent,
-      networkLatencyMs: _lastLatencyMs,
+      networkLatencyMs: 0,
     );
     _cachedAt = now;
     return _cached!;
-  }
-
-  /// Called by [ApiService.syncTime()] after each time-sync response is
-  /// received. The [rttMs] is the full round-trip time in milliseconds.
-  /// The next [collect()] call will include this value in the metrics.
-  static void updateLatency(int rttMs) {
-    _lastLatencyMs = rttMs;
   }
 
   static Future<String?> _runPowerShell(String command) async {

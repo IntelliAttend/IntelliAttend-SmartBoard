@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../models/isar_schemas.dart';
+import '../../services/time_sync_service.dart';
 
 class TimetableScreen extends StatelessWidget {
   final List<TimetableEntry> weeklyTimeline;
@@ -10,7 +11,7 @@ class TimetableScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final currentDayIdx = DateTime.now().weekday - 1;
+    final currentDayIdx = TimeSyncService.timeNow.weekday - 1;
 
     return DefaultTabController(
       length: 7,
@@ -60,7 +61,7 @@ class TimetableScreen extends StatelessWidget {
                 letterSpacing: 2,
               ),
             ),
-            if (DateTime.now().weekday == DateTime.sunday) ...[
+            if (TimeSyncService.timeNow.weekday == DateTime.sunday) ...[
               const SizedBox(height: 8),
               const Text(
                 'SUNDAY FUNDAY',
@@ -83,7 +84,7 @@ class TimetableScreen extends StatelessWidget {
       separatorBuilder: (context, index) => const SizedBox(height: 16),
       itemBuilder: (context, index) {
         final entry = entries[index];
-        final now = DateTime.now();
+        final now = TimeSyncService.timeNow;
         final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
         final isLive = entry.startTime.compareTo(timeStr) <= 0 && entry.endTime.compareTo(timeStr) > 0 && entry.dayOfWeek == now.weekday;
 

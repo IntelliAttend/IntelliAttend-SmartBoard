@@ -1,17 +1,12 @@
 import 'package:dio/dio.dart';
-import '../../../core/platform/hardware_fingerprint_service.dart';
 import '../../../core/utils/logger.dart';
 
 class SecurityInterceptor extends Interceptor {
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) async {
     try {
-      final deviceId = await HardwareFingerprintService.getDeviceId();
-      
-      options.headers['X-Device-ID'] = deviceId;
       options.headers['X-Platform'] = 'SmartBoard';
-      
-      Log.d('[SecurityInterceptor] Hardware Identity Attached: $deviceId');
+      Log.d('[SecurityInterceptor] Platform Headers Attached.');
     } catch (e) {
       Log.e('[SecurityInterceptor] Error attaching security headers: $e');
     }

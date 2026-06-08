@@ -28,22 +28,26 @@ void main() {
     channelCalls = [];
     channelArgs = [];
 
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(
-      MethodChannel('window_manager'),
-      (MethodCall methodCall) async {
-        channelCalls.add(methodCall.method);
-        channelArgs.add(methodCall.arguments);
-        switch (methodCall.method) {
-          case 'getBounds':
-            return [0.0, 0.0, 1920.0, 1080.0];
-          case 'isMinimized':
-            return false;
-          default:
-            return true;
-        }
-      },
-    );
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+        MethodChannel('window_manager'),
+        (MethodCall methodCall) async {
+          channelCalls.add(methodCall.method);
+          channelArgs.add(methodCall.arguments);
+          switch (methodCall.method) {
+            case 'getBounds':
+              return [0.0, 0.0, 1920.0, 1080.0];
+            case 'isMinimized':
+              return false;
+            case 'isFullScreen':
+              return false;
+            case 'getId':
+              return 12345; // Mock HWND
+            default:
+              return true;
+          }
+        },
+      );
   });
 
   tearDown(() {
@@ -57,18 +61,17 @@ void main() {
   group('KioskService', () {
     // ── setMode — fullscreen ───────────────────────────────────────────────
     group('setMode', () {
-      test('fullscreen: resizable, always-on-top, fullscreen in order',
+      test('fullscreen: resizable, always-on-top, show, focus, fullscreen in order',
           () async {
         await KioskService.setMode(KioskMode.fullscreen);
 
         expect(channelCalls, containsAllInOrder([
           'setResizable',
           'setAlwaysOnTop',
+          'show',
+          'focus',
           'setFullScreen',
         ]));
-        final resizableIdx = channelCalls.indexOf('setResizable');
-        final fullscreenIdx = channelCalls.indexOf('setFullScreen');
-        expect(resizableIdx, lessThan(fullscreenIdx));
       });
 
       test('fullscreen: preventClose true', () async {
@@ -81,28 +84,28 @@ void main() {
         }
       });
 
-      test('fullscreen: skipTaskbar false', () async {
+      test('fullscreen: skipTaskbar true', () async {
         await KioskService.setMode(KioskMode.fullscreen);
 
         if (Platform.isWindows) {
           final idx = channelCalls.indexOf('setSkipTaskbar');
           expect(idx, greaterThanOrEqualTo(0));
-          expect(argBool(channelArgs[idx], 'isSkipTaskbar'), isFalse);
+          expect(argBool(channelArgs[idx], 'isSkipTaskbar'), isTrue);
         }
       });
     });
 
     // ── setMode — locked ──────────────────────────────────────────────────
     group('locked', () {
-      test('locked: show → focus → fullscreen → alwaysOnTop', () async {
+      test('locked: alwaysOnTop → show → focus → fullscreen', () async {
         await KioskService.setMode(KioskMode.locked);
 
         expect(channelCalls, containsAllInOrder([
           'setResizable',
+          'setAlwaysOnTop',
           'show',
           'focus',
           'setFullScreen',
-          'setAlwaysOnTop',
         ]));
       });
 
@@ -123,22 +126,22 @@ void main() {
 
     // ── setMode — absoluteLocked ──────────────────────────────────────────
     group('absoluteLocked', () {
-      test('absoluteLocked: locked chain + brightness', () async {
+      test('absoluteLocked: alwaysOnTop → show → focus → fullscreen', () async {
         await KioskService.setMode(KioskMode.absoluteLocked);
 
         expect(channelCalls, containsAllInOrder([
           'setResizable',
+          'setAlwaysOnTop',
           'show',
           'focus',
           'setFullScreen',
-          'setAlwaysOnTop',
         ]));
       });
     });
 
     // ── setMode — suspended ───────────────────────────────────────────────
     group('suspended', () {
-      test('suspended: alwaysOnTop off, fullscreen off, minimize', () async {
+      test('suspended: alwaysOnTop off, fullscreen off, resizable off, minimize', () async {
         await KioskService.setMode(KioskMode.suspended);
 
         expect(channelCalls, containsAllInOrder([
@@ -156,9 +159,14 @@ void main() {
     // ── Serialization ─────────────────────────────────────────────────────
     group('serialization', () {
       test('concurrent setMode calls are serialized', () async {
+        // Reset to a known state so no cached _currentMode matches.
+        await KioskService.setMode(KioskMode.fullscreen, force: true);
+        channelCalls.clear();
+        channelArgs.clear();
+
         final results = await Future.wait([
-          KioskService.setMode(KioskMode.fullscreen),
           KioskService.setMode(KioskMode.locked),
+          KioskService.setMode(KioskMode.absoluteLocked),
           KioskService.setMode(KioskMode.suspended),
         ]);
 
@@ -179,16 +187,20 @@ void main() {
             callCount++;
             channelCalls.add(methodCall.method);
             channelArgs.add(methodCall.arguments);
-            if (methodCall.method == 'setAlwaysOnTop') {
+            if (methodCall.method == 'setFullScreen') {
               throw PlatformException(code: 'TEST_ERROR');
             }
+            // Return false for isFullScreen so the condition check proceeds.
+            if (methodCall.method == 'isFullScreen') return false;
             return true;
           },
         );
 
         await KioskService.setMode(KioskMode.fullscreen);
         await KioskService.setMode(KioskMode.locked);
-        expect(callCount, greaterThanOrEqualTo(6));
+        // Each call should at least attempt setResizable, setAlwaysOnTop, show,
+        // focus, setFullScreen, plus the isFullScreen condition check per mode.
+        expect(callCount, greaterThanOrEqualTo(10));
       });
     });
   });
@@ -216,16 +228,33 @@ void main() {
         createListener().onWindowRestore();
         await drainAsync();
 
+        // Debug: print actual channel state
+        // ignore: avoid_print
+        print('DEBUG-RESTORE channelCalls: $channelCalls');
+        // ignore: avoid_print
+        print('DEBUG-RESTORE channelArgs: $channelArgs');
+        final last = channelCalls.lastIndexOf('setFullScreen');
+        // ignore: avoid_print
+        print('DEBUG-RESTORE last: $last');
+        if (last >= 0 && last < channelArgs.length) {
+          // ignore: avoid_print
+          print('DEBUG-RESTORE channelArgs[$last]: ${channelArgs[last]} (${channelArgs[last].runtimeType})');
+        }
+
         // Should have re-applied fullscreen chain.
         expect(channelCalls, containsAllInOrder([
           'setResizable',
           'setAlwaysOnTop',
+          'show',
+          'focus',
           'setFullScreen',
         ]));
         // Last setFullScreen should be true (fullscreen, not false).
-        final last = channelCalls.lastIndexOf('setFullScreen');
         expect(last, greaterThanOrEqualTo(0));
-        expect(argBool(channelArgs[last], 'isFullScreen'), isTrue);
+        // Cast to Map first to check key existence before extraction
+        expect(channelArgs[last], isA<Map>());
+        expect((channelArgs[last] as Map).containsKey('isFullScreen'), isTrue);
+        expect((channelArgs[last] as Map)['isFullScreen'], isTrue);
       });
 
       test('falls back to fullscreen when _preSuspendMode is null', () async {
@@ -239,6 +268,8 @@ void main() {
         expect(channelCalls, containsAllInOrder([
           'setResizable',
           'setAlwaysOnTop',
+          'show',
+          'focus',
           'setFullScreen',
         ]));
         final last = channelCalls.lastIndexOf('setFullScreen');
@@ -255,10 +286,10 @@ void main() {
 
         expect(channelCalls, containsAllInOrder([
           'setResizable',
+          'setAlwaysOnTop',
           'show',
           'focus',
           'setFullScreen',
-          'setAlwaysOnTop',
         ]));
       });
     });
@@ -272,16 +303,30 @@ void main() {
         createListener().onWindowMinimize();
         await drainAsync();
 
+        // Debug: print actual channel state
+        // ignore: avoid_print
+        print('DEBUG channelCalls: $channelCalls');
+        // ignore: avoid_print
+        print('DEBUG channelArgs: $channelArgs');
+        final last = channelCalls.lastIndexOf('setFullScreen');
+        // ignore: avoid_print
+        print('DEBUG last: $last');
+        if (last >= 0 && last < channelArgs.length) {
+          // ignore: avoid_print
+          print('DEBUG channelArgs[$last]: ${channelArgs[last]} (${channelArgs[last].runtimeType})');
+        }
+
         expect(channelCalls, containsAllInOrder([
           'setResizable',
+          'setAlwaysOnTop',
           'show',
           'focus',
           'setFullScreen',
-          'setAlwaysOnTop',
         ]));
-        final last = channelCalls.lastIndexOf('setFullScreen');
         expect(last, greaterThanOrEqualTo(0));
-        expect(argBool(channelArgs[last], 'isFullScreen'), isTrue);
+        expect(channelArgs[last], isA<Map>());
+        expect((channelArgs[last] as Map).containsKey('isFullScreen'), isTrue);
+        expect((channelArgs[last] as Map)['isFullScreen'], isTrue);
       });
 
       test('allows minimize during fullscreen', () async {

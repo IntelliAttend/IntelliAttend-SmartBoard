@@ -15,13 +15,16 @@ class AppConfig {
 
   static String get sslFingerprint => dotenv.env['SSL_PIN_FINGERPRINT'] ?? '';
 
-  static String get localApiUrl =>
-      dotenv.env['LOCAL_API_URL'] ?? 'http://127.0.0.1:8000/v1/board/telemetry';
-
   static bool get isDebug => dotenv.env['DEBUG']?.toLowerCase() == 'true';
 
   static bool get enableVideoBreaks =>
       dotenv.env['ENABLE_VIDEO_BREAKS']?.toLowerCase() == 'true' || false;
+
+  /// Background ambient video URL. Set AMBIENT_VIDEO_URL in .env.
+  /// Defaults to Flutter's demo butterfly video if unset.
+  static String get ambientVideoUrl =>
+      dotenv.env['AMBIENT_VIDEO_URL'] ??
+      'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4';
 
   /// QR Attendance countdown window in seconds. Set OTP_ROTATION_WINDOW_SECONDS in .env.
   static int get otpRotationWindowSeconds =>

@@ -1,46 +1,49 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
-import 'package:qr_flutter/qr_flutter.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
 import '../../services/totp_engine.dart';
-import '../../services/session_manager.dart';
 import '../../services/api_service.dart';
+import '../../services/websocket_service.dart';
 import '../../services/student_service.dart';
+import '../../services/session_manager.dart';
+import '../../services/heartbeat_service.dart';
 import '../../core/utils/roll_number_utils.dart';
 import '../../core/platform/kiosk_service.dart';
+import '../../core/security/secure_storage_service.dart';
 import '../../core/utils/logger.dart';
 import '../../core/config/app_config.dart';
 import '../../main.dart';
-import 'idle_screen.dart';
+import 'summary_screen.dart';
+import 'boot_screen.dart';
 import '../widgets/glass_container.dart';
+import '../widgets/fluid_qr_view.dart';
 
 class AttendanceScreen extends StatefulWidget {
   final String sessionId;
-  final String sessionSecret;
   final int capacity;
   final String courseName;
   final String facultyName;
   final String roomName;
-  final String? sectionId; // Optional: Used to fetch specific student roster
-  final TotpEngine totpEngine; // QR Engine
+  final String? sectionId;
+  final String? slotId;
+  final TotpEngine totpEngine;
+  final WebsocketService websocketService;
   final bool isOffline;
-  final List<String>? initialVerifiedIds;
 
   const AttendanceScreen({
     super.key,
     required this.sessionId,
-    this.sessionSecret = '', // Optional: Only needed if creating engine internally
     required this.capacity,
     required this.courseName,
     required this.facultyName,
     required this.roomName,
     required this.totpEngine,
+    required this.websocketService,
     this.sectionId,
+    this.slotId,
     this.isOffline = false,
-    this.initialVerifiedIds,
   });
 
   @override
@@ -49,57 +52,110 @@ class AttendanceScreen extends StatefulWidget {
 
 class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerProviderStateMixin {
   late TotpEngine _totpEngine;
+  // ignore: unused_field — kept for future WebSocket integration
+  late WebsocketService _wsService;
   String _currentQrData = '';
   late AnimationController _progressController;
-  Timer? _qrRotationTimer;
-  StreamSubscription<QuerySnapshot>? _attendeesSubscription;
-  StreamSubscription<DocumentSnapshot>? _sessionStatusSubscription;
   bool _isSessionEnding = false;
-  final bool _qrRotationStopped = false;
+  // ignore: prefer_final_fields - mutated when WS re-enabled
   int _presentCount = 0;
-  Set<int> _presentSeatIndices = {}; // Tracks which seats are green
-  int _secondsRemaining = 0; // Loaded from AppConfig on initState
+  // ignore: prefer_final_fields - mutated when WS re-enabled
+  Set<int> _presentSeatIndices = {};
+  int _secondsRemaining = 0;
   Timer? _countdownTimer;
-  Timer? _listenerHealthTimer;
-  DateTime? _attendeesLastSnapshot;
-  DateTime? _sessionStatusLastSnapshot;
 
-  // Student Roster Data (Used for display mapping)
+  static const int _endSessionCooldownSeconds = 7;
+  bool _canEndSession = false;
+  int _endSessionCountdown = _endSessionCooldownSeconds;
+  Timer? _endSessionCooldownTimer;
+
+  bool _isRosterLoaded = false;
+
+  // Kill switch: Ctrl+Shift held + triple-J to escape absoluteLocked mode
+  int _killSwitchJCount = 0;
+  Timer? _killSwitchJTimer;
+  final FocusNode _killSwitchFocusNode = FocusNode();
+
   List<StudentInfo> _students = [];
-  final Map<String, int> _emailToSeatIndex = {}; // Maps Email -> Seat Index
+  final Map<String, int> _emailToSeatIndex = {};
+
+  // WebSocket subscriptions
+  StreamSubscription? _wsAttendanceSubscription;
+  StreamSubscription? _wsSyncSubscription;
+  StreamSubscription? _wsSessionEndedSubscription;
 
   @override
   void initState() {
     super.initState();
-    
-    // v6.4: Strictly Human Security Baseline - Lock Kiosk & Max Brightness
-    KioskService.setMode(KioskMode.locked);
-    // DESIGN-3: Read countdown from config, not hardcoded
-    _secondsRemaining = AppConfig.otpRotationWindowSeconds;
+
+    KioskService.setMode(KioskMode.absoluteLocked);
+    _totpEngine = widget.totpEngine;
+    _wsService = widget.websocketService;
+
+    // v6.4: The session countdown is the total window duration (e.g. 5–10 min),
+    // NOT the 30s rotation interval.
+    _secondsRemaining = _totpEngine.windowDuration.inSeconds;
 
     _progressController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 3500),
     )..repeat();
 
-    _totpEngine = widget.totpEngine;
-    
     _totpEngine.qrStream.listen((token) {
-      if (mounted && !_qrRotationStopped) {
+      if (mounted) {
         setState(() => _currentQrData = token);
       }
+    }, onError: (e) {
+      Log.e('[Attendance] TOTP stream error: $e');
     });
 
     _totpEngine.start();
-    // NOTE: _qrRotationTimer removed — the countdown timer below handles session
-    // expiry at _secondsRemaining == 0. Having two 300s timers was a race condition
-    // (BUG-2: both could call _handleEndAttendance() simultaneously).
     _startCountdown();
-    _listenForSessionEnd();
-    _listenForAttendees();
-    _startListenerHealthMonitor();
-    _loadClassRoster(); // Securely load students and map emails to seats
-  } // end initState
+    _startEndSessionCooldown();
+    _loadClassRoster();
+
+    // Hook up WebSocket for real-time sync.
+    _connectWebSocket();
+  }
+
+  void _connectWebSocket() {
+    _wsService.connect(widget.sessionId);
+
+    _wsSyncSubscription = _wsService.onFullStateSync.listen((students) {
+      if (!mounted) return;
+      setState(() {
+        _presentCount = students.length;
+        _presentSeatIndices.clear();
+        for (final student in students) {
+          final index = _emailToSeatIndex[student.studentId.toLowerCase()];
+          if (index != null) {
+            _presentSeatIndices.add(index);
+          }
+        }
+      });
+      Log.i('[Attendance] Full state sync: ${_presentSeatIndices.length} seats marked.');
+    });
+
+    _wsAttendanceSubscription = _wsService.onAttendanceMarked.listen((event) {
+      if (!mounted) return;
+      setState(() {
+        final index = _emailToSeatIndex[event.studentId.toLowerCase()];
+        if (index != null) {
+          if (!_presentSeatIndices.contains(index)) {
+            _presentSeatIndices.add(index);
+            _presentCount++;
+          }
+        }
+      });
+      Log.i('[Attendance] WebSocket: ${event.studentId} marked present.');
+    });
+
+    _wsSessionEndedSubscription = _wsService.onSessionEnded.listen((event) {
+      if (!mounted) return;
+      Log.i('[Attendance] WebSocket: Session ended by server.');
+      _handleSessionEnd();
+    });
+  }
 
   /// Loads students and builds a mapping of Email -> Seat Index.
   /// This allows the board to know which grid box to highlight when the database updates.
@@ -120,6 +176,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                 _emailToSeatIndex[email] = i;
               }
             }
+            _isRosterLoaded = true;
           });
           Log.i('[Attendance] Loaded ${_students.length} students for display.');
           return;
@@ -135,52 +192,21 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   void _generateFallbackRoster() {
     if (mounted) {
       setState(() {
-        // Fallback to generic seat codes if no student data is available
         _students = List.generate(widget.capacity, (index) {
           final code = RollNumberUtils.generateSeatCode(index);
           return StudentInfo(
             rollNumber: code,
             name: 'Seat $code',
-            email: '', // No email in fallback mode
+            email: '',
             sectionId: '',
             classId: '',
           );
         });
+        _isRosterLoaded = true;
       });
     }
   }
 
-  /// Updates the attendance state based *strictly* on database records.
-  /// The Smart Board acts as a display: it trusts the server's verification.
-  void _updateAttendanceFromDatabase(List<QueryDocumentSnapshot> attendeeDocs) {
-    final newIndices = <int>{};
-    
-    for (final doc in attendeeDocs) {
-      final data = doc.data() as Map<String, dynamic>;
-      // The database provides the student's identifier (email)
-      final email = (data['student_id'] ?? '').toString().trim().toLowerCase();
-      if (email.isEmpty) continue;
-
-      // Map the database email to the local UI seat index
-      // This allows us to highlight the correct box in the grid
-      if (_emailToSeatIndex.containsKey(email)) {
-        newIndices.add(_emailToSeatIndex[email]!);
-      }
-    }
-
-    if (mounted) {
-      setState(() {
-        _presentSeatIndices = newIndices;
-        _presentCount = newIndices.length;
-      });
-
-      // v6.4: AUTO-EXIT on Full Attendance
-      if (_presentCount >= widget.capacity && !_isSessionEnding) {
-        Log.i('✅ [Attendance] Full capacity reached ($_presentCount/${widget.capacity}). Auto-completing session.');
-        WidgetsBinding.instance.addPostFrameCallback((_) => _handleEndAttendance());
-      }
-    }
-  }
 
   void _startCountdown() {
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -197,88 +223,197 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     });
   }
 
+  void _startEndSessionCooldown() {
+    _endSessionCooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_endSessionCountdown > 0) {
+        if (mounted) setState(() => _endSessionCountdown--);
+      } else {
+        timer.cancel();
+        if (mounted) setState(() => _canEndSession = true);
+      }
+    });
+  }
+
   String _formatTime(int seconds) {
     final mins = (seconds / 60).floor().toString().padLeft(2, '0');
     final secs = (seconds % 60).toString().padLeft(2, '0');
     return "$mins:$secs";
   }
 
-  /// Listens to the attendees subcollection via Firebase .snapshots().
-  /// This is the CORE real-time attendance driver — when a student scans
-  /// the QR, the server verifies and writes to this collection, which
-  /// pushes the update here immediately. Billed only on document changes.
-  void _listenForAttendees() {
-    if (Firebase.apps.isEmpty) {
-      Log.w('[Attendance] Firebase not initialized — attendance tracking unavailable.');
-      return;
-    }
+  /// Secret kill switch: hold Ctrl+Shift and press J three times
+  /// within 3 seconds to trigger emergency exit from absoluteLocked mode.
+  void _onKillSwitchKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return;
 
-    _attendeesSubscription?.cancel();
-    _attendeesSubscription = FirebaseFirestore.instance
-        .collection('ActiveSessions')
-        .doc(widget.sessionId)
-        .collection('attendees')
-        .orderBy('timestamp', descending: true)
-        .snapshots()
-        .listen((snapshot) {
-      if (!mounted) return;
-      _attendeesLastSnapshot = DateTime.now();
-      final attendeeDocs = snapshot.docs;
-      _updateAttendanceFromDatabase(attendeeDocs);
-    }, onError: (e) {
-      Log.e('❌ [Attendance] Attendees stream error: $e — listener stays alive.');
-    }, onDone: () {
-      Log.w('⚠️ [Attendance] Attendees stream closed — reconnecting...');
-      _attendeesSubscription = null;
-      if (mounted) _listenForAttendees();
-    }, cancelOnError: false);
-  }
+    final ctrl = HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.controlLeft) ||
+                 HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.controlRight);
+    final shift = HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.shiftLeft) ||
+                  HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.shiftRight);
+    final isJ = event.logicalKey == LogicalKeyboardKey.keyJ;
 
-  void _listenForSessionEnd() {
-    if (Firebase.apps.isEmpty) {
-      Log.w('[Attendance] Firebase not initialized — session end monitoring unavailable.');
-      return;
-    }
-    _sessionStatusSubscription?.cancel();
-    _sessionStatusSubscription = FirebaseFirestore.instance
-        .collection('ActiveSessions')
-        .doc(widget.sessionId)
-        .snapshots()
-        .listen((snapshot) {
-      if (!mounted) return;
-      _sessionStatusLastSnapshot = DateTime.now();
-      final data = snapshot.data();
-      if (data?['status'] == 'ended' && !_isSessionEnding) {
-        _handleSessionEnd();
+    if (!ctrl || !shift || !isJ) {
+      // If user releases modifiers or presses wrong key, reset counter
+      if (_killSwitchJCount > 0) {
+        _killSwitchJCount = 0;
+        _killSwitchJTimer?.cancel();
       }
-    }, onError: (e) {
-      Log.e('❌ [Attendance] Session status stream error: $e — listener stays alive.');
-    }, onDone: () {
-      Log.w('⚠️ [Attendance] Session status stream closed — reconnecting...');
-      _sessionStatusSubscription = null;
-      if (mounted) _listenForSessionEnd();
-    }, cancelOnError: false);
+      return;
+    }
+
+    // Ctrl+Shift+J detected
+    _killSwitchJCount++;
+    _killSwitchJTimer?.cancel();
+
+    if (_killSwitchJCount >= 3) {
+      _killSwitchJCount = 0;
+      _showKillSwitchConfirmation();
+      return;
+    }
+
+    // Reset counter if next J doesn't come within 3 seconds
+    _killSwitchJTimer = Timer(const Duration(seconds: 3), () {
+      _killSwitchJCount = 0;
+    });
   }
 
-  void _handleSessionEnd() {
+  void _showKillSwitchConfirmation() {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '',
+      barrierColor: Colors.black.withValues(alpha: 0.7),
+      transitionDuration: const Duration(milliseconds: 300),
+      pageBuilder: (context, anim1, anim2) => const SizedBox(),
+      transitionBuilder: (context, anim1, anim2, child) {
+        return Transform.scale(
+          scale: anim1.value,
+          child: Opacity(
+            opacity: anim1.value,
+            child: Center(
+              child: Material(
+                color: Colors.transparent,
+                child: GlassContainer(
+                  width: 420,
+                  padding: const EdgeInsets.all(32),
+                  borderRadius: 24,
+                  color: Colors.black.withValues(alpha: 0.9),
+                  borderColor: AppColors.error.withValues(alpha: 0.5),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: AppColors.error.withValues(alpha: 0.15),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.warning_amber_rounded, color: AppColors.error, size: 40),
+                      ),
+                      const SizedBox(height: 24),
+                      const Text(
+                        'EMERGENCY EXIT',
+                        style: TextStyle(color: AppColors.error, fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: 2),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'This will immediately terminate the current session\nand exit the locked kiosk mode.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.white70, fontSize: 14),
+                      ),
+                      const SizedBox(height: 32),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              child: const Text('CANCEL', style: TextStyle(color: Colors.white60, fontWeight: FontWeight.bold, letterSpacing: 1)),
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            flex: 2,
+                            child: ElevatedButton(
+                              onPressed: () {
+                                Navigator.of(context).pop();
+                                _handleKillSwitch();
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.error,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 16),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                elevation: 0,
+                              ),
+                              child: const Text('EMERGENCY EXIT', style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Emergency kill switch: terminates everything immediately and returns to
+  /// BootScreen (which re-initializes and routes to IdleScreen or Registration).
+  Future<void> _handleKillSwitch() async {
     if (_isSessionEnding) return;
     _isSessionEnding = true;
-    _qrRotationTimer?.cancel();
+
+    Log.w('🚨 [KillSwitch] Emergency exit triggered by secret tap pattern.');
+
+    _countdownTimer?.cancel();
+    _endSessionCooldownTimer?.cancel();
+    _totpEngine.stop();
+    _progressController.stop();
+    await KioskService.setMode(KioskMode.fullscreen);
+
+    try {
+      await SessionManager.clearSession(widget.sessionId);
+    } catch (_) {}
+    try {
+      await SecureStorageService.deleteSessionSecret(widget.sessionId);
+    } catch (_) {}
+    try {
+      await ApiService.terminateSession(widget.sessionId);
+    } catch (e) {
+      HeartbeatService.enqueuePendingTermination(widget.sessionId);
+    }
+
+    if (!mounted) return;
+    navigatorKey.currentState?.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (context) => const BootScreen()),
+      (route) => false,
+    );
+  }
+
+  // ignore: unused_element — reserved for WebSocket reconnection
+  Future<void> _handleSessionEnd() async {
+    if (_isSessionEnding) return;
+    _isSessionEnding = true;
     _countdownTimer?.cancel();
     _totpEngine.stop();
     _progressController.stop();
-    // LOGIC-3 FIX: Server-pushed session end must also restore kiosk to fullscreen.
     KioskService.setMode(KioskMode.fullscreen);
-    if (mounted) {
-      SessionManager.clearSession(widget.sessionId);
-      globalDeviceRepository.getRegistration().then((registration) {
-        if (mounted && registration != null) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (context) => IdleScreen(registration: registration)),
-          );
-        }
-      });
-    }
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => SummaryScreen(
+          sessionId: widget.sessionId,
+          presentCount: _presentCount,
+          totalCapacity: widget.capacity,
+          courseName: widget.courseName,
+          facultyName: widget.facultyName,
+          slotId: widget.slotId,
+        ),
+      ),
+    );
   }
 
   void _handlePhysicalTapEnd() {
@@ -364,40 +499,21 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     );
   }
 
-  void _startListenerHealthMonitor() {
-    _listenerHealthTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-      final now = DateTime.now();
-      final staleThreshold = const Duration(minutes: 3);
 
-      if (_attendeesLastSnapshot != null &&
-          now.difference(_attendeesLastSnapshot!) > staleThreshold) {
-        Log.w('⚠️ [Attendance] Attendees stream stale — reconnecting...');
-        _attendeesSubscription?.cancel();
-        _attendeesSubscription = null;
-        if (mounted) _listenForAttendees();
-      }
-      if (_sessionStatusLastSnapshot != null &&
-          now.difference(_sessionStatusLastSnapshot!) > staleThreshold) {
-        Log.w('⚠️ [Attendance] Session status stream stale — reconnecting...');
-        _sessionStatusSubscription?.cancel();
-        _sessionStatusSubscription = null;
-        if (mounted) _listenForSessionEnd();
-      }
-    });
-  }
 
   @override
   void dispose() {
-    _listenerHealthTimer?.cancel();
-    _qrRotationTimer?.cancel();
+    _wsAttendanceSubscription?.cancel();
+    _wsSyncSubscription?.cancel();
+    _wsSessionEndedSubscription?.cancel();
+    _wsService.disconnect();
+
+    _killSwitchJTimer?.cancel();
+    _killSwitchFocusNode.dispose();
     _countdownTimer?.cancel();
-    _attendeesSubscription?.cancel();
-    _sessionStatusSubscription?.cancel();
+    _endSessionCooldownTimer?.cancel();
     _totpEngine.stop();
     _progressController.dispose();
-    // BUG-3 FIX: Do NOT call async KioskService.setMode() here — the Future would
-    // be abandoned and the call is unreliable during dispose. Kiosk is already
-    // restored to soft mode inside _handleEndAttendance() and _handleSessionEnd().
     super.dispose();
   }
 
@@ -405,32 +521,42 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     if (_isSessionEnding) return;
     _isSessionEnding = true;
 
-    // v6.4: Revert to Fullscreen Mode (restores brightness, allows minimize)
+    _countdownTimer?.cancel();
+    _totpEngine.stop();
+    _progressController.stop();
     KioskService.setMode(KioskMode.fullscreen);
 
-    // Navigate immediately to the idle screen for a responsive feel
-    final registration = await globalDeviceRepository.getRegistration();
-    if (mounted && registration != null) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (context) => IdleScreen(registration: registration)),
-      );
+    try {
+      await ApiService.terminateSession(widget.sessionId);
+    } catch (e) {
+      Log.e('[Attendance] Error ending session: $e');
+      HeartbeatService.enqueuePendingTermination(widget.sessionId);
     }
 
-    try {
-      // Fire and forget the termination call in the background
-      ApiService.terminateSession(widget.sessionId);
-      SessionManager.clearSession(widget.sessionId);
-    } catch (e) {
-      Log.e('❌ Error ending session: $e');
-    }
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => SummaryScreen(
+          sessionId: widget.sessionId,
+          presentCount: _presentCount,
+          totalCapacity: widget.capacity,
+          courseName: widget.courseName,
+          facultyName: widget.facultyName,
+          slotId: widget.slotId,
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final size = MediaQuery.of(context).size;
-
-    return Scaffold(
+    return KeyboardListener(
+      focusNode: _killSwitchFocusNode,
+      autofocus: true,
+      onKeyEvent: _onKillSwitchKeyEvent,
+      child: Scaffold(
       backgroundColor: isDark ? AppColors.bgDark : AppColors.bgLight,
       body: Stack(
         children: [
@@ -450,13 +576,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
           Expanded(
             child: Row(
               children: [
-                // LEFT: Seating Grid (40%)
                 Expanded(
                   flex: 4,
                   child: _buildSeatingSection(isDark),
                 ),
-
-                // RIGHT: QR & Timer (60%)
                 Expanded(
                   flex: 6,
                   child: _buildQrArena(isDark, size),
@@ -469,6 +592,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
           ),
         ],
       ),
+    ),
     );
   }
 
@@ -515,7 +639,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                   const SizedBox(width: 16),
                   Icon(Icons.meeting_room_outlined, size: 14, color: isDark ? Colors.white38 : Colors.black38),
                   const SizedBox(width: 4),
-                  Text('Room 402', style: TextStyle(fontSize: 12, color: isDark ? Colors.white38 : Colors.black38)),
+                  Text(widget.roomName, style: TextStyle(fontSize: 12, color: isDark ? Colors.white38 : Colors.black38)),
                 ],
               ),
             ],
@@ -527,21 +651,24 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
               IconButton(onPressed: () {}, icon: const Icon(Icons.help_outline, size: 20)),
               const SizedBox(width: 16),
               ElevatedButton(
-                onPressed: _handlePhysicalTapEnd,
+                onPressed: _canEndSession ? _handlePhysicalTapEnd : null,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryTeal,
+                  backgroundColor: _canEndSession ? AppColors.primaryTeal : Colors.grey,
                   foregroundColor: Colors.white,
                   minimumSize: const Size(120, 44),
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
-                child: const Text('End Session', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                child: Text(
+                  _canEndSession ? 'End Session' : 'End Session (${_endSessionCountdown}s)',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
               ),
               const SizedBox(width: 16),
               CircleAvatar(
                 radius: 18,
                 backgroundColor: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
-                backgroundImage: const NetworkImage('https://lh3.googleusercontent.com/aida/ADBb0uiwHbFIJUsrGmJZjxX_QjiBzSRetE_oM9UggtEHQXa16Ph4BQhn8ZxMDBmStf_ETGbAy_SgSSNnJeFuVN13QYFO54EuukewgpMY3ItXI4vr0UWy1jZTjrqaPCzWhou76wYfQ9KyZolcxZtDw8aOU1YGQu7SV0StQ9gFPaoz6EDhXar_4Yj8ajMGUZUoz-hNK6FahApnXBQzbkfRe6ah1WO_GtY78ie_iykJ3w9xH74GmCV_9Ub-JFyhi0lvFoxMTjq3CBvoes14KA'),
+                child: Icon(Icons.person, size: 20, color: isDark ? Colors.white54 : Colors.black54),
               ),
             ],
           ),
@@ -551,6 +678,33 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   }
 
   Widget _buildSeatingSection(bool isDark) {
+    if (!_isRosterLoaded) {
+      return Container(
+        padding: const EdgeInsets.all(32),
+        decoration: BoxDecoration(
+          color: isDark ? Colors.black.withValues(alpha: 0.2) : Colors.white.withValues(alpha: 0.5),
+          border: Border(right: BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const SizedBox(
+              width: 40, height: 40,
+              child: CircularProgressIndicator(strokeWidth: 3),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Fetching Class Roster...',
+              style: TextStyle(
+                fontSize: 14,
+                color: isDark ? Colors.white54 : Colors.black54,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.all(32),
       decoration: BoxDecoration(
@@ -692,12 +846,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
           ),
           const SizedBox(height: 48),
           
-          // Pulsing QR Arena
+          // Pulsing QR Arena with white quiet zone for optimal scanning
           AnimatedBuilder(
             animation: _progressController,
             builder: (context, child) {
               return Container(
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.all(48),
                 decoration: BoxDecoration(
                   color: isDark ? Colors.black.withValues(alpha: 0.3) : Colors.white,
                   borderRadius: BorderRadius.circular(32),
@@ -717,24 +871,18 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
               );
             },
             child: Container(
-              padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [AppColors.primaryTeal, Color(0xFF0D9488)],
-                ),
+                color: Colors.white,
                 borderRadius: BorderRadius.circular(20),
               ),
+              padding: const EdgeInsets.all(24),
               child: _currentQrData.isNotEmpty
-                  ? QrImageView(
+                  ? FluidQrView(
                       data: _currentQrData,
-                      version: QrVersions.auto,
                       size: 320,
-                      eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: Colors.white),
-                      dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: Colors.white),
+                      color: Colors.black,
                     )
-                  : const CircularProgressIndicator(color: Colors.white),
+                  : const CircularProgressIndicator(color: Colors.black54),
             ),
           ),
           
@@ -803,7 +951,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
             children: [
               _buildAvatarStack(),
               const SizedBox(width: 12),
-              const Text('142 Students Present', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Colors.grey)),
+              Text('$_presentCount Students Present', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Colors.grey)),
             ],
           ),
         ],
@@ -812,12 +960,15 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   }
 
   Widget _buildAvatarStack() {
+    final displayed = _students.take(3).toList();
+    final remaining = _students.length > 3 ? _students.length - 3 : 0;
+
     return SizedBox(
       width: 120,
       height: 32,
       child: Stack(
         children: [
-          for (var i = 0; i < 3; i++)
+          for (var i = 0; i < displayed.length; i++)
             Positioned(
               left: i * 20.0,
               child: Container(
@@ -825,27 +976,45 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                 decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
                 child: CircleAvatar(
                   radius: 14,
-                  backgroundImage: NetworkImage('https://i.pravatar.cc/150?u=${i + 40}'),
+                  backgroundColor: _avatarColor(i),
+                  child: Text(
+                    _initials(displayed[i].name),
+                    style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                  ),
                 ),
               ),
             ),
-          Positioned(
-            left: 3 * 20.0,
-            child: Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: AppColors.primaryTeal,
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 2),
-              ),
-              child: const Center(
-                child: Text('+29', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+          if (remaining > 0)
+            Positioned(
+              left: 3 * 20.0,
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: AppColors.primaryTeal,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 2),
+                ),
+                child: Center(
+                  child: Text('+$remaining', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
+  }
+
+  Color _avatarColor(int index) {
+    const colors = [Color(0xFF4CAF50), Color(0xFF2196F3), Color(0xFFFF9800)];
+    return colors[index % colors.length];
+  }
+
+  String _initials(String name) {
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.length >= 2) {
+      return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
+    }
+    return name.isNotEmpty ? name[0].toUpperCase() : '?';
   }
 }

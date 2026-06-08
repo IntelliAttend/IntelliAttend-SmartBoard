@@ -25,7 +25,7 @@ class SessionService:
     @staticmethod
     async def create_session(
         course_data: dict,
-        db: firestore.client
+        db: firestore.AsyncClient
     ) -> dict:
         slot_id = course_data.get("slot_id")
         if slot_id:
@@ -50,7 +50,7 @@ class SessionService:
         }
 
         if db:
-            db.collection("Sessions").document(session_id).set(doc_data)
+            await db.collection("Sessions").document(session_id).set(doc_data)
 
         # Store OTP mapping in ephemeral cache only
         await CacheService.set_json(
@@ -63,12 +63,16 @@ class SessionService:
             "session_id": session_id,
             "otp": otp,
             "session_secret_half1": half1,
+            "course_name": doc_data["course_name"],
+            "faculty_name": doc_data["faculty_name"],
+            "roster_count": doc_data["roster_count"],
+            "section_id": doc_data["section_id"],
         }
 
     @staticmethod
     async def find_session_by_otp(
         otp: str,
-        db: firestore.client,
+        db: firestore.AsyncClient,
     ) -> Optional[dict]:
         # Zero Storage OTP: look up OTP in ephemeral cache, NOT Firestore
         cached = await CacheService.get_json(SessionService._otp_cache_key(otp))
@@ -79,7 +83,7 @@ class SessionService:
         if not session_id or not db:
             return None
 
-        session_doc = db.collection("Sessions").document(session_id).get()
+        session_doc = await db.collection("Sessions").document(session_id).get()
         if not session_doc.exists:
             return None
 
@@ -92,7 +96,7 @@ class SessionService:
     @staticmethod
     async def ignite_session_atomic(
         session_id: str,
-        db: firestore.client,
+        db: firestore.AsyncClient,
     ) -> None:
         """v6.2 Atomic Ignition: Activate session — NO secret written to Firestore.
         
@@ -104,13 +108,13 @@ class SessionService:
             return
 
         # 1. Activate master session record
-        db.collection("Sessions").document(session_id).update({
+        await db.collection("Sessions").document(session_id).update({
             "status": "active",
             "activated_at": firestore.SERVER_TIMESTAMP
         })
         
         # 2. Sync status to ActiveSessions for SmartBoard listeners
-        db.collection("ActiveSessions").document(session_id).update({
+        await db.collection("ActiveSessions").document(session_id).update({
             "status": "active",
             "activated_at": firestore.SERVER_TIMESTAMP
         })

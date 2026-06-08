@@ -8,6 +8,7 @@ import '../../core/security/firebase_rest_auth.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../core/utils/logger.dart';
 import '../../models/isar_schemas.dart';
+import '../../services/time_sync_service.dart';
 
 abstract class IAuthRepository {
   Future<Map<String, dynamic>?> login(String boardId, String password);
@@ -85,16 +86,15 @@ class AuthRepository implements IAuthRepository {
       String boardId, String password) async {
     try {
       final idToken = await FirebaseRestAuth.getIdToken();
-      if (idToken == null) {
-        Log.e(
-            '[AuthRepository] initiateRegistration: no ID token — login() did not complete.');
-        return null;
-      }
-
+      
       final response = await apiClient.dio.post(
         '/api/v1/device/register/login',
-        options: Options(headers: {'Authorization': 'Bearer $idToken'}),
-        // No body — server identifies the board from the ID token.
+        options: Options(
+          headers: idToken != null ? {'Authorization': 'Bearer $idToken'} : null,
+        ),
+        data: {
+          'smart_board_id': boardId,
+        },
       );
 
       if (response.statusCode == 200) {
@@ -104,10 +104,6 @@ class AuthRepository implements IAuthRepository {
     } on DioException catch (e) {
       final status = e.response?.statusCode ?? 0;
       if (status >= 500) {
-        // 5xx: infrastructure error (e.g. Cloudflare 502). The origin server
-        // most likely processed the request and sent the OTP before the
-        // response was lost. Re-throw so the provider can show the OTP
-        // entry screen.
         Log.w(
             '[AuthRepository] initiateRegistration got $status — OTP may have been sent. Re-throwing.');
         rethrow;
@@ -143,7 +139,7 @@ class AuthRepository implements IAuthRepository {
     }
   }
 
-  // ─── Registration step 3: hardware bind + custom-token sign-in ─────────
+  // ─── Registration step 3: hardware bind + JWT persistence ───────────────
 
   @override
   Future<Map<String, dynamic>?> completeRegistration(
@@ -152,61 +148,41 @@ class AuthRepository implements IAuthRepository {
     String verificationToken,
   ) async {
     try {
-      // Collect hardware metadata while we fetch the ID token in parallel.
-      final results = await Future.wait([
-        HardwareFingerprintService.getHardwareMetadata(),
-        FirebaseRestAuth.getIdToken(),
-      ]);
-
-      final metadata = results[0] as Map<String, dynamic>;
-      final idToken = results[1] as String?;
+      final idToken = await FirebaseRestAuth.getIdToken();
 
       final response = await apiClient.dio.post(
         '/api/v1/device/register/complete',
         options: Options(
-          headers: idToken != null
-              ? {'Authorization': 'Bearer $idToken'}
-              : null,
+          headers: idToken != null ? {'Authorization': 'Bearer $idToken'} : null,
         ),
         data: {
           'smart_board_id': boardId,
           'hardware_id': hardwareId,
           'verification_token': verificationToken,
-          'metadata': metadata,
         },
       );
 
       if (response.statusCode == 200) {
         final data = response.data as Map<String, dynamic>;
 
-        // Exchange the server-issued custom token (carries the role:smartboard
-        // claim) for a normal ID + refresh token pair via REST. This replaces
-        // the original `_auth.signInWithCustomToken()` plugin call.
-        //
-        // The custom token may occasionally come back stale from server-side
-        // caching of a prior 502'd attempt. In that case we keep the existing
-        // email/password session (already persisted by the login() step) so
-        // the device can still operate; the missing role claim is surfaced
-        // to the server on the next call and IT can re-issue manually.
-        final customToken = data['custom_token']?.toString();
-        if (customToken != null && customToken.isNotEmpty) {
-          try {
-            await FirebaseRestAuth.signInWithCustomToken(customToken);
-            Log.i(
-                '[AuthRepository] signInWithCustomToken (REST) succeeded — role:smartboard claims active.');
-          } catch (tokenError) {
-            Log.w(
-                '[AuthRepository] signInWithCustomToken (REST) failed ($tokenError). '
-                'Email/password session retained as fallback.');
-          }
-        } else {
-          Log.w(
-              '[AuthRepository] Server did not return a custom_token — using email/password session.');
-        }
+        // v5.4 JWT Strategy: The backend now returns access_token and refresh_token
+        // directly. We persist these to SecureStorage for use by the AuthInterceptor.
+        final accessToken = data['access_token']?.toString();
+        final refreshToken = data['refresh_token']?.toString();
+        final expiresIn = data['expires_in'] as int? ?? 3600;
 
-        // Store hardwareId as the long-lived API key for heartbeat / telemetry
-        // identification. SecureStorage is DPAPI-encrypted on Windows.
-        await SecureStorageService.storeApiKey(hardwareId);
+        if (accessToken != null && refreshToken != null) {
+          final expiryMs = TimeSyncService.timeNow.millisecondsSinceEpoch + (expiresIn * 1000);
+          await SecureStorageService.storeAccessToken(accessToken, expiryMs);
+          await SecureStorageService.storeRefreshToken(refreshToken);
+          
+          // Also store hardwareId as the long-lived API key for secondary verification
+          await SecureStorageService.storeApiKey(hardwareId);
+          
+          Log.i('[AuthRepository] Registration complete. v5.4 JWTs persisted.');
+        } else {
+          Log.w('[AuthRepository] Server did not return tokens — fallback to legacy might be needed.');
+        }
 
         return data;
       }
@@ -234,7 +210,7 @@ class AuthRepository implements IAuthRepository {
       ..department = profile['department'] ?? 'Unknown'
       ..capacity = profile['capacity'] ?? 60
       ..hardwareId = resolvedHardwareId
-      ..registrationDate = DateTime.now();
+      ..registrationDate = TimeSyncService.timeNow;
 
     await isar.writeTxn(() async {
       await isar.deviceRegistrations.put(reg);

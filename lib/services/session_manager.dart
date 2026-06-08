@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import '../models/isar_schemas.dart';
 import '../core/security/secure_storage_service.dart';
 import '../core/utils/logger.dart';
+import 'time_sync_service.dart';
 
 class SessionManager {
   static Isar? _isar;
@@ -26,6 +27,7 @@ class SessionManager {
       QueuedScanSchema,
       DeviceRegistrationSchema,
       TimetableEntrySchema,
+      CompletedSessionSchema,
     ];
 
     try {
@@ -56,8 +58,6 @@ class SessionManager {
         rethrow;
       }
     }
-
-    await _backupDeviceRegistration();
   }
 
   /// Generates or retrieves the AES-256 Isar encryption key.
@@ -82,35 +82,6 @@ class SessionManager {
     } catch (e) {
       Log.w('⚠️ [SessionManager] Encryption key setup failed, proceeding without encryption: $e');
       return null;
-    }
-  }
-
-  /// Exports [DeviceRegistration] from Isar as JSON to a backup directory.
-  static Future<void> _backupDeviceRegistration() async {
-    try {
-      final registration = await _isar!.deviceRegistrations.where().findFirst();
-      if (registration == null) return;
-
-      final backupDir = Directory(
-        '${Platform.environment['APPDATA'] ?? Platform.environment['HOME'] ?? '.'}/IntelliAttend/backups',
-      );
-      await backupDir.create(recursive: true);
-
-      final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
-      final backupFile = File('${backupDir.path}/device_registration_$timestamp.json');
-      await backupFile.writeAsString(jsonEncode({
-        'smartBoardId': registration.smartBoardId,
-        'classroomId': registration.classroomId,
-        'hardwareId': registration.hardwareId,
-        'roomName': registration.roomName,
-        'building': registration.building,
-        'department': registration.department,
-        'capacity': registration.capacity,
-        'registrationDate': registration.registrationDate.toIso8601String(),
-      }));
-      Log.i('📦 [SessionManager] DeviceRegistration backup saved to ${backupFile.path}');
-    } catch (e) {
-      Log.w('⚠️ [SessionManager] DeviceRegistration backup failed: $e');
     }
   }
 
@@ -171,7 +142,7 @@ class SessionManager {
 
   /// Check if there's an active session that hasn't expired
   static Future<ActiveSession?> getResumeableSession() async {
-    final now = DateTime.now();
+    final now = TimeSyncService.timeNow;
     final session = await _isar!.activeSessions
         .filter()
         .scheduledEndTimeGreaterThan(now)
@@ -216,5 +187,61 @@ class SessionManager {
           .deleteAll();
     });
     Log.i('[SessionManager] Session $sessionId wiped from Isar.');
+  }
+
+  static Future<void> recordCompletedSession({
+    required String slotId,
+    required String sessionId,
+    required String courseName,
+    required String facultyName,
+    required int attendeeCount,
+  }) async {
+    final completed = CompletedSession()
+      ..slotId = slotId
+      ..sessionId = sessionId
+      ..completedAt = TimeSyncService.timeNow
+      ..courseName = courseName
+      ..facultyName = facultyName
+      ..attendeeCount = attendeeCount;
+
+    await _isar!.writeTxn(() async {
+      final existing = await _isar!.completedSessions
+          .filter()
+          .slotIdEqualTo(slotId)
+          .findFirst();
+      if (existing != null) {
+        completed.id = existing.id;
+      }
+      await _isar!.completedSessions.put(completed);
+    });
+
+    Log.i(
+        '✅ [SessionManager] Slot $slotId marked as completed: $courseName ($attendeeCount attendees)');
+  }
+
+  static Future<bool> isSlotCompleted(String slotId) async {
+    final completed = await _isar!.completedSessions
+        .filter()
+        .slotIdEqualTo(slotId)
+        .findFirst();
+    return completed != null;
+  }
+
+  static Future<Set<String>> getCompletedSlotIds() async {
+    final all = await _isar!.completedSessions.where().findAll();
+    return all.map((c) => c.slotId).toSet();
+  }
+
+  static Future<void> clearCompletedSessionsForDay(int dayOfWeek) async {
+    final allCompleted = await _isar!.completedSessions.where().findAll();
+    if (allCompleted.isNotEmpty) {
+      await _isar!.writeTxn(() async {
+        for (final c in allCompleted) {
+          await _isar!.completedSessions.delete(c.id);
+        }
+      });
+      Log.i(
+          '🧹 [SessionManager] Cleaned ${allCompleted.length} completed-session records for new day.');
+    }
   }
 }

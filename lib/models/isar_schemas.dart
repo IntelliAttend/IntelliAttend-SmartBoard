@@ -74,3 +74,17 @@ class TimetableEntry {
   late String sectionId;
   String slotId = '';      // Document ID from Firestore
 }
+
+@collection
+class CompletedSession {
+  Id id = Isar.autoIncrement;
+
+  @Index(unique: true)
+  late String slotId;
+
+  late String sessionId;
+  late DateTime completedAt;
+  late String courseName;
+  late String facultyName;
+  late int attendeeCount;
+}

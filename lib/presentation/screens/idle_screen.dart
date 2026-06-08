@@ -33,19 +33,30 @@ import '../../services/timetable_cache.dart';
 import 'package:video_player/video_player.dart';
 import '../../services/pre_flight_service.dart';
 import '../../services/totp_engine.dart';
+import '../../services/websocket_service.dart';
 import '../../core/platform/kiosk_service.dart';
 
 enum PreFlightStatus { none, connecting, ready }
 
 class IdleScreen extends StatefulWidget {
   final DeviceRegistration registration;
-  const IdleScreen({super.key, required this.registration});
+  /// When true, the idle screen waits 3 seconds then minimizes automatically.
+  /// Used after attendance completion to return to the OS desktop gracefully.
+  final bool completedSession;
+  const IdleScreen({super.key, required this.registration, this.completedSession = false});
   
   @override
   State<IdleScreen> createState() => _IdleScreenState();
 }
 
 class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateMixin {
+  /// Threshold (in minutes) for detecting midnight wraparound in time-diff
+  /// calculations. If a gap between two slots is less than -1200 (i.e. more
+  /// than 20 hours negative), it means `nextStart` belongs to the next
+  /// calendar day and we add 1440 to get the real positive gap.
+  static const int _midnightWrapThreshold = -1200;
+  static const int _minutesPerDay = 1440;
+
   TimetableEntry? _bedrockEntry;
   List<TimetableEntry> _todayTimeline = [];
   bool _isLoading = false;
@@ -53,14 +64,16 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   Timer? _preClassTimer;
   TimetableEntry? _upcomingSlot;
   bool _showStartingSoon = false;
-  bool _isKeypadVisible = false;
   Timer? _inactivityTimer;
   final TextEditingController _otpController = TextEditingController();
-  final int _presentCount = 0;
+
   VideoPlayerController? _videoController;
   bool _isVideoInitialized = false;
   String _idleTheme = 'auto'; // 'auto', 'white', or 'dark'
   bool _forceShowCard = false; // For starting session in advance via lock icon tap
+  Set<String> _completedSlotIds = {}; // Slots that have already had a session completed
+  final Set<String> _failedSlotIds = {};    // Subset of completed slots where the session failed
+  bool _isKeypadExpanded = false; // Controls OTP keypad expansion state
 
   // Session ID received from the preflight API response (_triggerWarmUp).
   // Stored here in RAM so OTP submission (_handleVerifyOtp) can use it
@@ -76,6 +89,12 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   /// PENDING → WARMING UP... → PENDING → WARMING UP... every 10 seconds.
   String? _warmUpTriggeredSlotId;
   StreamSubscription<dynamic>? _preFlightSessionSubscription; // cleanup handle for warm-up
+
+  // Tracks which slots have already triggered a Kiosk restore at T-0 so the
+  // 10s timer does not spam KioskService.setMode on every tick.
+  final Set<String> _t0RestoredSlots = {};
+
+  bool _isUpcomingClassCheckRunning = false;
 
   // Listens to the global TimetableCache — every Firestore snapshot update
   // triggers _onTimetableCacheChanged which re-reads today's entries from RAM
@@ -146,6 +165,14 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       if (AppConfig.enableVideoBreaks) {
         _initVideoBackground();
       }
+
+      // 4. If returning from a completed attendance session, show COMPLETED
+      //    status for 3 seconds then auto-minimize to the OS desktop.
+      if (widget.completedSession) {
+        await Future.delayed(const Duration(seconds: 3));
+        if (!mounted) return;
+        await KioskService.setMode(KioskMode.suspended);
+      }
     });
   }
 
@@ -175,8 +202,8 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
 
       // Automatic logic
       if (_breakStartedAt == null) {
-        _breakStartedAt = DateTime.now();
-        _cinematicController.reverse(); // Start at White (0.0)
+        _breakStartedAt = TimeSyncService.timeNow;
+        _cinematicController.reverse();
       }
 
       // After 3 minutes (Production Logic), transition to Dark (1.0)
@@ -204,9 +231,8 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   }
 
   void _initVideoBackground() {
-    // Verified macOS compatible testing URL for verification
     _videoController = VideoPlayerController.networkUrl(
-      Uri.parse('https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4'),
+      Uri.parse(AppConfig.ambientVideoUrl),
     )..initialize().then((_) {
         if (mounted) {
           setState(() {
@@ -247,7 +273,7 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       final prevEnd = _toMinutes(sorted[i].endTime);
       final nextStart = _toMinutes(sorted[i + 1].startTime);
       int gap = nextStart - prevEnd;
-      if (gap < -1200) gap += 1440;
+      if (gap < _midnightWrapThreshold) gap += _minutesPerDay;
       if (gap >= 5 && nowMinutes >= prevEnd && nowMinutes < nextStart) return gap;
     }
     return 0;
@@ -272,7 +298,7 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     if (parts.length != 2) return false;
     int firstStart = int.parse(parts[0]) * 60 + int.parse(parts[1]);
     int diff = firstStart - currentMinutes;
-    if (diff < -1200) diff += 1440;
+    if (diff < _midnightWrapThreshold) diff += _minutesPerDay;
     return diff > 0 && diff <= 10;
   }
 
@@ -312,6 +338,14 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
         _bedrockEntry = TimetableCache().currentSlot;
       });
     }
+    _loadCompletedSlots();
+  }
+
+  Future<void> _loadCompletedSlots() async {
+    final completed = await SessionManager.getCompletedSlotIds();
+    if (mounted) {
+      setState(() => _completedSlotIds = completed);
+    }
   }
 
   @override
@@ -330,9 +364,10 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   void _resetInactivityTimer() {
     _inactivityTimer?.cancel();
     _inactivityTimer = Timer(const Duration(minutes: 5), () {
-      if (mounted && _forceShowCard) {
+      if (mounted && _forceShowCard && _bedrockEntry == null) {
         setState(() {
           _forceShowCard = false;
+          _isKeypadExpanded = false;
           _otpController.clear();
         });
       }
@@ -355,54 +390,40 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   }
 
   /// Checks the local Isar vault + SecureStorage for a resumable session.
-  /// If one exists (e.g. the board crashed mid-session), navigates straight
-  /// to AttendanceScreen — no OTP re-entry needed.
-  /// This is the sole crash-recovery path — no Firestore listeners needed.
+  /// If one exists (e.g. the board crashed mid-session), clears it to prevent
+  /// auto-navigation to locked mode without OTP entry. The faculty member
+  /// must enter the OTP fresh to start a new session.
   Future<void> _checkCrashRecovery() async {
     try {
       final session = await SessionManager.getResumeableSession();
       if (session == null) return;
 
-      final secret =
-          await SecureStorageService.getSessionSecret(session.sessionId);
-      if (secret == null || secret.isEmpty) return;
-
-      Log.i(
-          '[Idle] Crash recovery: resuming session ${session.sessionId}');
-      if (mounted) {
-        final engine = TotpEngine(
-          sessionId: session.sessionId,
-          sessionSecret: secret,
-        );
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => AttendanceScreen(
-              sessionId: session.sessionId,
-              totpEngine: engine,
-              capacity: widget.registration.capacity,
-              courseName: session.courseName,
-              facultyName: session.facultyName,
-              sectionId: session.sectionId,
-              roomName: widget.registration.roomName,
-            ),
-          ),
-        );
-      }
+      Log.w('[Idle] Found stale session ${session.sessionId} — clearing to prevent auto-lock without OTP.');
+      await SessionManager.clearSession(session.sessionId);
+      try {
+        await SecureStorageService.deleteSessionSecret(session.sessionId);
+      } catch (_) {}
+      Log.i('[Idle] Stale session cleared safely.');
     } catch (e) {
-      Log.w('⚠️ [Idle] Crash recovery check failed: $e');
+      Log.w('⚠️ [Idle] Crash recovery cleanup failed: $e');
     }
   }
   /// Helper to derive the final secret using the hardware fingerprint (Atomic Logic)
   Future<String?> _deriveSecret(Map<String, dynamic> data) async {
-    final half1 = data['session_secret_half1']?.toString();
-    if (half1 == null) return null;
+    try {
+      final half1 = data['session_secret_half1']?.toString();
+      if (half1 == null) return null;
 
-    final deviceId = await HardwareFingerprintService.getDeviceId();
-    final half2 = Hmac(sha256, utf8.encode(deviceId))
-        .convert(utf8.encode(half1))
-        .toString()
-        .substring(0, 16);
-    return '$half1$half2';
+      final deviceId = await HardwareFingerprintService.getDeviceId();
+      final half2 = Hmac(sha256, utf8.encode(deviceId))
+          .convert(utf8.encode(half1))
+          .toString()
+          .substring(0, 16);
+      return '$half1$half2';
+    } catch (e) {
+      Log.e('[Idle] Secret derivation failed: $e');
+      return null;
+    }
   }
 
   void _startPreClassTimer() {
@@ -412,8 +433,15 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
           _bedrockEntry = TimetableCache().currentSlot;
         });
       }
-      Log.i('[IdleTimer] tick: bedrockEntry.slotId=${_bedrockEntry?.slotId}  timelineCount=${TimetableCache().todayTimeline.length}  now=${TimeSyncService.timeNow.hour}:${TimeSyncService.timeNow.minute}');
-      _checkUpcomingClass();
+      Log.iThrottled('idle_timer_tick', '[IdleTimer] tick: bedrockEntry.slotId=${_bedrockEntry?.slotId}  timelineCount=${TimetableCache().todayTimeline.length}  now=${TimeSyncService.timeNow.hour}:${TimeSyncService.timeNow.minute}');
+      if (!_isUpcomingClassCheckRunning) {
+        _isUpcomingClassCheckRunning = true;
+        try {
+          _checkUpcomingClass();
+        } finally {
+          _isUpcomingClassCheckRunning = false;
+        }
+      }
       _checkDayChange();
     });
     _checkUpcomingClass();
@@ -425,7 +453,15 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     if (_lastQueryDay != null && _lastQueryDay != today) {
       Log.i('📅 [Idle] Day changed from $_lastQueryDay to $today. Refreshing from cache...');
       _lastQueryDay = today;
+      _t0RestoredSlots.clear();
+      _preAllocatedSessionId = null;
+      _currentSlotWarmUpSlotId = null;
+      _warmUpTriggeredSlotId = null;
+      _preFlightStatus = PreFlightStatus.none;
+      _preFlightForceAttempted = false;
       _refreshTimetable();
+      SessionManager.clearCompletedSessionsForDay(_lastQueryDay!);
+      _loadCompletedSlots();
     }
     _lastQueryDay ??= today;
   }
@@ -447,8 +483,8 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       int diff = entryMinutes - currentMinutes;
       
       // Handle wraparound (e.g. current 23:50, next 00:50)
-      if (diff < -1200) { // If entry is more than 20 hours in the "past", it's likely tomorrow early morning
-        diff += 1440; // 24 hours
+      if (diff < _midnightWrapThreshold) {
+        diff += _minutesPerDay;
       }
       
       if (diff > 0 && diff < minDiff) {
@@ -458,17 +494,25 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     }
 
     if (nextEntry != null && minDiff <= 3) {
+      final isCompleted = _completedSlotIds.contains(nextEntry.slotId);
       if (mounted) {
         setState(() {
           _upcomingSlot = nextEntry;
-          _showStartingSoon = true;
+          _showStartingSoon = !isCompleted;
         });
+
+        if (isCompleted) {
+          Log.iOnce('completed_${nextEntry.slotId}', '[Idle] Slot ${nextEntry.slotId} already completed — skipping warm-up and OTP.');
+          return;
+        }
         
         // Trigger Per-Session Warm-Up — only ONCE per slot so the timer does
         // NOT re-trigger after a failed API call every 10 seconds (which would
         // cause the UI to cycle through PENDING → WARMING UP... → PENDING).
+        // Also skip if warm-up retries were already exhausted.
         if (_preFlightStatus == PreFlightStatus.none &&
-            _warmUpTriggeredSlotId != nextEntry.slotId) {
+            _warmUpTriggeredSlotId != nextEntry.slotId &&
+            !PreFlightService().isWarmUpExhausted) {
           _warmUpTriggeredSlotId = nextEntry.slotId;
           _triggerWarmUp(nextEntry.slotId);
         }
@@ -477,17 +521,6 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
         if (minDiff == 1 && !_isReadyCheckDone) {
           _isReadyCheckDone = true;
           ApiService.syncReadyCheck().catchError((e) => Log.w('⚠️ Ready check failed: $e'));
-        }
-
-        // v6.1 Fallback: Force a fresh preflight attempt at T-0
-        if (minDiff == 0 && _preFlightStatus != PreFlightStatus.ready) {
-          if (_upcomingSlot != null && !_preFlightForceAttempted) {
-            _preFlightForceAttempted = true;
-            _triggerWarmUp(_upcomingSlot!.slotId, force: true);
-          }
-          setState(() {
-            _errorMessage = 'System sync delayed. Enter PIN to proceed.';
-          });
         }
       }
     } else {
@@ -504,15 +537,16 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       if (mounted && _showStartingSoon && minDiff > 5) {
         setState(() {
           _showStartingSoon = false;
+          _isKeypadExpanded = false;
           _upcomingSlot = null;
-          _forceShowCard = false;
+          // Do NOT clear _forceShowCard here — if a class is currently active
+          // (_bedrockEntry != null) the block below re-sets it, causing a
+          // visible flicker at T-0 as the OTP card disappears then reappears.
           _preFlightStatus = PreFlightStatus.none;
           _preFlightForceAttempted = false;
           _warmUpTriggeredSlotId = null;
           _preFlightSessionSubscription?.cancel();
-          // Clear stale pre-allocated ID — a new one will arrive from the
-          // next preflight API call when the following slot's T-3 window opens.
-          _preAllocatedSessionId = null;
+          _preAllocatedSessionId = null; // Clear stale session ID
         });
       }
 
@@ -520,14 +554,55 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       // Does NOT require nextEntry == null — the current slot might be LIVE
       // even when there are later classes today. The _preAllocatedSessionId
       // guard prevents redundant triggers.
-      if (_bedrockEntry != null && _preAllocatedSessionId == null) {
+      if (_bedrockEntry != null) {
         final currentSlotId = _bedrockEntry!.slotId;
-        if (_currentSlotWarmUpSlotId != currentSlotId) {
-          _currentSlotWarmUpSlotId = currentSlotId;
-          Log.i('[Idle] Current class $currentSlotId in progress — triggering warm-up.');
-          _triggerWarmUp(currentSlotId);
+        final isBedrockCompleted = _completedSlotIds.contains(currentSlotId);
+        if (isBedrockCompleted) {
+          Log.iOnce('completed_$currentSlotId', '[Idle] Current slot $currentSlotId already completed — skipping auto-show and warm-up.');
+          _currentSlotWarmUpSlotId = null;
+          _preAllocatedSessionId = null; // Clear if completed
+          _preFlightStatus = PreFlightStatus.none;
+        } else {
+          // Auto-show OTP card during active class
+          if (!_forceShowCard && mounted) {
+            setState(() { _forceShowCard = true; });
+          }
+
+          // T-0: restore window from minimized state (idempotent — no-op if
+          // already fullscreen). Only once per slot to avoid spamming calls.
+          if (!_t0RestoredSlots.contains(currentSlotId)) {
+            _t0RestoredSlots.add(currentSlotId);
+            KioskService.setMode(KioskMode.fullscreen);
+            Log.i('[Idle] T-0 restore: slot $currentSlotId — window brought to foreground.');
+          }
+
+          // T-0: forced warm-up retry if pre-flight failed at T-3
+          if (_preFlightStatus != PreFlightStatus.ready &&
+              !_preFlightForceAttempted &&
+              _upcomingSlot != null &&
+              _upcomingSlot!.slotId == currentSlotId) {
+            _preFlightForceAttempted = true;
+            _triggerWarmUp(currentSlotId, force: true);
+          }
+
+          // T-0: show sync-delay error if still not ready
+          if (_preFlightStatus != PreFlightStatus.ready &&
+              (_errorMessage == null || !_errorMessage!.contains('Enter PIN'))) {
+            setState(() {
+              _errorMessage = 'System sync delayed. Enter PIN to proceed.';
+            });
+          }
+
+          if (_preAllocatedSessionId == null &&
+              !PreFlightService().isWarmUpExhausted) {
+            if (_currentSlotWarmUpSlotId != currentSlotId) {
+              _currentSlotWarmUpSlotId = currentSlotId;
+              Log.i('[Idle] Current class $currentSlotId in progress — triggering warm-up.');
+              _triggerWarmUp(currentSlotId);
+            }
+          }
         }
-      } else if (_bedrockEntry == null) {
+      } else {
         _currentSlotWarmUpSlotId = null;
       }
     }
@@ -546,6 +621,16 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       // "ready" when a delayed retry finally succeeds.
       void onWarmUpSuccess(Map<String, dynamic> result) {
         if (!mounted) return;
+        
+        // v6.5 FIX: Only accept this success if it's for the currently active slot.
+        // If the user swiped or a new class started while a background retry was
+        // in-flight, the old Session ID must be ignored.
+        final activeSlotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
+        if (slotId != activeSlotId) {
+          Log.w('⚠️ [Idle] Ignoring stale warm-up success for $slotId (active is $activeSlotId)');
+          return;
+        }
+
         if (result['pre_allocated_session_id'] != null) {
           final pid = result['pre_allocated_session_id']?.toString();
           setState(() {
@@ -554,19 +639,43 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
             _errorMessage = null;
           });
           Log.i('✅ [Idle] Board ARMED. SessionID in RAM: $pid.');
+        } else {
+          // Failure within PreFlightService (e.g. server offline)
+          setState(() {
+            _preAllocatedSessionId = null;
+            // The onStatusChange callback handles the specific 'none'/'pending' state
+          });
         }
+      }
+
+      // v6.4: Handle transition between WARMING UP and PENDING during retry cycle
+      void onStatusChange(String status) {
+        if (!mounted) return;
+        
+        // v6.5 FIX: Only accept status changes for the currently active slot.
+        final activeSlotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
+        if (slotId != activeSlotId) return;
+
+        setState(() {
+          if (status == 'connecting') {
+            _preFlightStatus = PreFlightStatus.connecting;
+          } else if (status == 'none') {
+            _preFlightStatus = PreFlightStatus.none;
+          }
+        });
       }
 
       final result = force
           ? await PreFlightService().forceWarmUp(slotId,
-              onSuccess: onWarmUpSuccess)
+              onSuccess: onWarmUpSuccess,
+              onStatusChange: onStatusChange)
           : await PreFlightService().runPerSessionWarmUp(slotId,
-              onSuccess: onWarmUpSuccess);
+              onSuccess: onWarmUpSuccess,
+              onStatusChange: onStatusChange);
 
       if (result == null && mounted) {
-        // Initial attempt failed — the onSuccess callback will still fire
-        // later if a PreFlightService retry eventually succeeds.
-        setState(() => _preFlightStatus = PreFlightStatus.none);
+        // Initial attempt failed — the onSuccess/onStatusChange callbacks
+        // will still fire later if a PreFlightService retry eventually succeeds.
       }
     } catch (e) {
       if (mounted) {
@@ -653,16 +762,21 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
           sessionId: sessionId,
           sessionSecret: sessionSecret,
         );
+        final slotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
+        final wsService = WebsocketService(AppConfig.baseUrl);
+        // WebSocket kept as a parameter for future use — not actively connecting.
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (context) => AttendanceScreen(
               sessionId: sessionId,
               totpEngine: engine,
+              websocketService: wsService,
               capacity: widget.registration.capacity,
               courseName: courseName,
               facultyName: facultyName,
               sectionId: sectionId,
               roomName: widget.registration.roomName,
+              slotId: slotId,
             ),
           ),
         );
@@ -847,6 +961,13 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       ),
       child: Row(
         children: [
+          Image.asset(
+            'assets/logo_square.png',
+            width: 36,
+            height: 36,
+            fit: BoxFit.contain,
+          ),
+          const SizedBox(width: 12),
           Text(
             'IntelliAttend SmartBoard',
             style: TextStyle(
@@ -961,8 +1082,8 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
     final isLunch = _isLunchBreak();
     final hasBreak = isBio || isLunch;
     
-    var course = _bedrockEntry?.courseName ?? 'NO ACTIVE SESSION';
-    var faculty = _bedrockEntry?.facultyName ?? 'SYSTEM READY';
+    var course = _bedrockEntry?.courseName ?? '';
+    var faculty = _bedrockEntry?.facultyName ?? '';
     
     if (isSunday && _bedrockEntry == null) {
       course = 'SUNDAY FUNDAY';
@@ -978,6 +1099,13 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
       faculty = 'HAVE A GREAT DAY';
     } else if (_bedrockEntry == null && _isPreBootPhase()) {
       course = 'GOOD MORNING';
+      faculty = 'SYSTEM READY';
+    } else if (_bedrockEntry == null && _upcomingSlot != null) {
+      // Between classes: show the next class info instead of "NO ACTIVE SESSION"
+      course = 'UP NEXT: ${_upcomingSlot!.courseName}';
+      faculty = _upcomingSlot!.facultyName;
+    } else if (_bedrockEntry == null) {
+      course = 'NO ACTIVE SESSION';
       faculty = 'SYSTEM READY';
     }
 
@@ -1108,10 +1236,16 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
           ),
           const SizedBox(height: 32),
           GestureDetector(
-            onTap: () => setState(() => _isKeypadVisible = !_isKeypadVisible),
+            onTap: () {
+              setState(() => _isKeypadExpanded = !_isKeypadExpanded);
+              _resetInactivityTimer();
+            },
             child: MouseRegion(
               cursor: SystemMouseCursors.click,
-              child: PinInput(value: _otpController.text),
+              child: PinInput(
+                value: _otpController.text,
+                obscureText: true,
+              ),
             ),
           ),
           AnimatedCrossFade(
@@ -1120,7 +1254,7 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
               padding: const EdgeInsets.only(top: 24),
               child: _buildNumericKeypad(primaryColor == Colors.white, isVideoActive),
             ),
-            crossFadeState: _isKeypadVisible ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+            crossFadeState: _isKeypadExpanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
             duration: const Duration(milliseconds: 400),
           ),
           if (_errorMessage != null)
@@ -1224,31 +1358,30 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
         children: [
           // Timeline
           Expanded(
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: _todayTimeline.isEmpty ? 1 : _todayTimeline.length,
-              itemBuilder: (context, index) {
-                if (_todayTimeline.isEmpty) {
-                  if (index > 0) return const SizedBox.shrink();
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 40),
-                    child: Center(
-                      child: Text(
-                        TimeSyncService.timeNow.weekday == DateTime.sunday ? 'SUNDAY FUNDAY' : 'NO CLASSES SCHEDULED TODAY',
-                        style: const TextStyle(color: AppColors.textSecondaryDark, fontWeight: FontWeight.bold, letterSpacing: 2),
-                      ),
+            child: _todayTimeline.isEmpty
+                ? Center(
+                    child: Text(
+                      TimeSyncService.timeNow.weekday == DateTime.sunday ? 'SUNDAY FUNDAY' : 'NO CLASSES SCHEDULED TODAY',
+                      style: const TextStyle(color: AppColors.textSecondaryDark, fontWeight: FontWeight.bold, letterSpacing: 2),
                     ),
-                  );
-                }
-                final entry = _todayTimeline[index];
-                final live = entry.slotId == _bedrockEntry?.slotId;
-                Log.i('[TimelineStrip] idx=$index slot=${entry.slotId} bedrock.slot=${_bedrockEntry?.slotId} isLive=$live');
-                return TimelineSlot(
-                  entry: entry,
-                  isLive: live,
-                );
-              },
-            ),
+                  )
+                : Row(
+                    children: List.generate(_todayTimeline.length, (index) {
+                      final entry = _todayTimeline[index];
+                      final live = entry.slotId == _bedrockEntry?.slotId;
+                      Log.iOnChange('timeline_strip_$index', live, '[TimelineStrip] idx=$index slot=${entry.slotId} bedrock.slot=${_bedrockEntry?.slotId} isLive=$live');
+                      final isCompleted = _completedSlotIds.contains(entry.slotId);
+                      final isFailed = _failedSlotIds.contains(entry.slotId);
+                      return Expanded(
+                        child: TimelineSlot(
+                          entry: entry,
+                          isLive: live,
+                          isCompleted: isCompleted,
+                          isFailed: isFailed,
+                        ),
+                      );
+                    }),
+                  ),
           ),
           const SizedBox(width: 40),
           // Clock & Students
@@ -1268,16 +1401,16 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
         
         return Row(
           children: [
-            Column(
+                Column(
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
-                    const Icon(Icons.group_outlined, size: 16, color: AppColors.primaryTeal),
+                    const Icon(Icons.meeting_room_outlined, size: 16, color: AppColors.primaryTeal),
                     const SizedBox(width: 8),
                     Text(
-                      '$_presentCount Students Present',
+                      widget.registration.roomName,
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
@@ -1286,25 +1419,12 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                Container(
-                  width: 120,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: secondaryColor.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                  child: FractionallySizedBox(
-                    alignment: Alignment.centerLeft,
-                    widthFactor: widget.registration.capacity > 0 
-                        ? (_presentCount / widget.registration.capacity).clamp(0.0, 1.0)
-                        : 0.0,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryTeal,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
+                const SizedBox(height: 4),
+                Text(
+                  'Capacity: ${widget.registration.capacity}',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: secondaryColor.withValues(alpha: 0.6),
                   ),
                 ),
               ],
@@ -1379,7 +1499,19 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
   }
 
   Widget _buildHangingLock(Color color) {
-    final isUnlocked = _showStartingSoon || _bedrockEntry != null;
+    final activeSlotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
+    final isSlotCompleted = activeSlotId != null && _completedSlotIds.contains(activeSlotId);
+    final isUnlocked = _showStartingSoon && !isSlotCompleted;
+
+    String label;
+    if (isSlotCompleted) {
+      label = 'COMPLETED';
+    } else if (isUnlocked) {
+      label = 'TAP TO START';
+    } else {
+      label = 'SESSION LOCKED';
+    }
+
     return InkWell(
       onTap: isUnlocked
           ? () {
@@ -1401,27 +1533,43 @@ class _IdleScreenState extends State<IdleScreen> with SingleTickerProviderStateM
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: isUnlocked
-                  ? AppColors.successLime.withValues(alpha: 0.15)
-                  : color.withValues(alpha: 0.05),
+              color: isSlotCompleted
+                  ? AppColors.warningAmber.withValues(alpha: 0.15)
+                  : isUnlocked
+                      ? AppColors.successLime.withValues(alpha: 0.15)
+                      : color.withValues(alpha: 0.05),
               shape: BoxShape.circle,
               border: Border.all(
-                color: isUnlocked
-                    ? AppColors.successLime.withValues(alpha: 0.3)
-                    : color.withValues(alpha: 0.1),
+                color: isSlotCompleted
+                    ? AppColors.warningAmber.withValues(alpha: 0.3)
+                    : isUnlocked
+                        ? AppColors.successLime.withValues(alpha: 0.3)
+                        : color.withValues(alpha: 0.1),
               ),
             ),
             child: Icon(
-              isUnlocked ? Icons.lock_open_outlined : Icons.lock_outline,
-              color: isUnlocked ? AppColors.successLime : color.withValues(alpha: 0.5),
+              isSlotCompleted
+                  ? Icons.check_circle_outline
+                  : isUnlocked
+                      ? Icons.lock_open_outlined
+                      : Icons.lock_outline,
+              color: isSlotCompleted
+                  ? AppColors.warningAmber
+                  : isUnlocked
+                      ? AppColors.successLime
+                      : color.withValues(alpha: 0.5),
               size: 32,
             ),
           ),
           const SizedBox(height: 12),
           Text(
-            isUnlocked ? 'TAP TO START' : 'SESSION LOCKED',
+            label,
             style: TextStyle(
-              color: isUnlocked ? AppColors.successLime : color.withValues(alpha: 0.3),
+              color: isSlotCompleted
+                  ? AppColors.warningAmber
+                  : isUnlocked
+                      ? AppColors.successLime
+                      : color.withValues(alpha: 0.3),
               fontSize: 10,
               fontWeight: FontWeight.bold,
               letterSpacing: 2,

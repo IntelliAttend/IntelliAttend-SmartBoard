@@ -5918,3 +5918,1335 @@ extension TimetableEntryQueryProperty
     });
   }
 }
+
+// coverage:ignore-file
+// ignore_for_file: duplicate_ignore, non_constant_identifier_names, constant_identifier_names, invalid_use_of_protected_member, unnecessary_cast, prefer_const_constructors, lines_longer_than_80_chars, require_trailing_commas, inference_failure_on_function_invocation, unnecessary_parenthesis, unnecessary_raw_strings, unnecessary_null_checks, join_return_with_assignment, prefer_final_locals, avoid_js_rounded_ints, avoid_positional_boolean_parameters, always_specify_types
+
+extension GetCompletedSessionCollection on Isar {
+  IsarCollection<CompletedSession> get completedSessions => this.collection();
+}
+
+const CompletedSessionSchema = CollectionSchema(
+  name: r'CompletedSession',
+  id: 777898689076140995,
+  properties: {
+    r'attendeeCount': PropertySchema(
+      id: 0,
+      name: r'attendeeCount',
+      type: IsarType.long,
+    ),
+    r'completedAt': PropertySchema(
+      id: 1,
+      name: r'completedAt',
+      type: IsarType.dateTime,
+    ),
+    r'courseName': PropertySchema(
+      id: 2,
+      name: r'courseName',
+      type: IsarType.string,
+    ),
+    r'facultyName': PropertySchema(
+      id: 3,
+      name: r'facultyName',
+      type: IsarType.string,
+    ),
+    r'sessionId': PropertySchema(
+      id: 4,
+      name: r'sessionId',
+      type: IsarType.string,
+    ),
+    r'slotId': PropertySchema(
+      id: 5,
+      name: r'slotId',
+      type: IsarType.string,
+    )
+  },
+  estimateSize: _completedSessionEstimateSize,
+  serialize: _completedSessionSerialize,
+  deserialize: _completedSessionDeserialize,
+  deserializeProp: _completedSessionDeserializeProp,
+  idName: r'id',
+  indexes: {
+    r'slotId': IndexSchema(
+      id: -665048265905431799,
+      name: r'slotId',
+      unique: true,
+      replace: false,
+      properties: [
+        IndexPropertySchema(
+          name: r'slotId',
+          type: IndexType.hash,
+          caseSensitive: true,
+        )
+      ],
+    )
+  },
+  links: {},
+  embeddedSchemas: {},
+  getId: _completedSessionGetId,
+  getLinks: _completedSessionGetLinks,
+  attach: _completedSessionAttach,
+  version: '3.1.0+1',
+);
+
+int _completedSessionEstimateSize(
+  CompletedSession object,
+  List<int> offsets,
+  Map<Type, List<int>> allOffsets,
+) {
+  var bytesCount = offsets.last;
+  bytesCount += 3 + object.courseName.length * 3;
+  bytesCount += 3 + object.facultyName.length * 3;
+  bytesCount += 3 + object.sessionId.length * 3;
+  bytesCount += 3 + object.slotId.length * 3;
+  return bytesCount;
+}
+
+void _completedSessionSerialize(
+  CompletedSession object,
+  IsarWriter writer,
+  List<int> offsets,
+  Map<Type, List<int>> allOffsets,
+) {
+  writer.writeLong(offsets[0], object.attendeeCount);
+  writer.writeDateTime(offsets[1], object.completedAt);
+  writer.writeString(offsets[2], object.courseName);
+  writer.writeString(offsets[3], object.facultyName);
+  writer.writeString(offsets[4], object.sessionId);
+  writer.writeString(offsets[5], object.slotId);
+}
+
+CompletedSession _completedSessionDeserialize(
+  Id id,
+  IsarReader reader,
+  List<int> offsets,
+  Map<Type, List<int>> allOffsets,
+) {
+  final object = CompletedSession();
+  object.attendeeCount = reader.readLong(offsets[0]);
+  object.completedAt = reader.readDateTime(offsets[1]);
+  object.courseName = reader.readString(offsets[2]);
+  object.facultyName = reader.readString(offsets[3]);
+  object.id = id;
+  object.sessionId = reader.readString(offsets[4]);
+  object.slotId = reader.readString(offsets[5]);
+  return object;
+}
+
+P _completedSessionDeserializeProp<P>(
+  IsarReader reader,
+  int propertyId,
+  int offset,
+  Map<Type, List<int>> allOffsets,
+) {
+  switch (propertyId) {
+    case 0:
+      return (reader.readLong(offset)) as P;
+    case 1:
+      return (reader.readDateTime(offset)) as P;
+    case 2:
+      return (reader.readString(offset)) as P;
+    case 3:
+      return (reader.readString(offset)) as P;
+    case 4:
+      return (reader.readString(offset)) as P;
+    case 5:
+      return (reader.readString(offset)) as P;
+    default:
+      throw IsarError('Unknown property with id $propertyId');
+  }
+}
+
+Id _completedSessionGetId(CompletedSession object) {
+  return object.id;
+}
+
+List<IsarLinkBase<dynamic>> _completedSessionGetLinks(CompletedSession object) {
+  return [];
+}
+
+void _completedSessionAttach(
+    IsarCollection<dynamic> col, Id id, CompletedSession object) {
+  object.id = id;
+}
+
+extension CompletedSessionByIndex on IsarCollection<CompletedSession> {
+  Future<CompletedSession?> getBySlotId(String slotId) {
+    return getByIndex(r'slotId', [slotId]);
+  }
+
+  CompletedSession? getBySlotIdSync(String slotId) {
+    return getByIndexSync(r'slotId', [slotId]);
+  }
+
+  Future<bool> deleteBySlotId(String slotId) {
+    return deleteByIndex(r'slotId', [slotId]);
+  }
+
+  bool deleteBySlotIdSync(String slotId) {
+    return deleteByIndexSync(r'slotId', [slotId]);
+  }
+
+  Future<List<CompletedSession?>> getAllBySlotId(List<String> slotIdValues) {
+    final values = slotIdValues.map((e) => [e]).toList();
+    return getAllByIndex(r'slotId', values);
+  }
+
+  List<CompletedSession?> getAllBySlotIdSync(List<String> slotIdValues) {
+    final values = slotIdValues.map((e) => [e]).toList();
+    return getAllByIndexSync(r'slotId', values);
+  }
+
+  Future<int> deleteAllBySlotId(List<String> slotIdValues) {
+    final values = slotIdValues.map((e) => [e]).toList();
+    return deleteAllByIndex(r'slotId', values);
+  }
+
+  int deleteAllBySlotIdSync(List<String> slotIdValues) {
+    final values = slotIdValues.map((e) => [e]).toList();
+    return deleteAllByIndexSync(r'slotId', values);
+  }
+
+  Future<Id> putBySlotId(CompletedSession object) {
+    return putByIndex(r'slotId', object);
+  }
+
+  Id putBySlotIdSync(CompletedSession object, {bool saveLinks = true}) {
+    return putByIndexSync(r'slotId', object, saveLinks: saveLinks);
+  }
+
+  Future<List<Id>> putAllBySlotId(List<CompletedSession> objects) {
+    return putAllByIndex(r'slotId', objects);
+  }
+
+  List<Id> putAllBySlotIdSync(List<CompletedSession> objects,
+      {bool saveLinks = true}) {
+    return putAllByIndexSync(r'slotId', objects, saveLinks: saveLinks);
+  }
+}
+
+extension CompletedSessionQueryWhereSort
+    on QueryBuilder<CompletedSession, CompletedSession, QWhere> {
+  QueryBuilder<CompletedSession, CompletedSession, QAfterWhere> anyId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(const IdWhereClause.any());
+    });
+  }
+}
+
+extension CompletedSessionQueryWhere
+    on QueryBuilder<CompletedSession, CompletedSession, QWhereClause> {
+  QueryBuilder<CompletedSession, CompletedSession, QAfterWhereClause> idEqualTo(
+      Id id) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IdWhereClause.between(
+        lower: id,
+        upper: id,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterWhereClause>
+      idNotEqualTo(Id id) {
+    return QueryBuilder.apply(this, (query) {
+      if (query.whereSort == Sort.asc) {
+        return query
+            .addWhereClause(
+              IdWhereClause.lessThan(upper: id, includeUpper: false),
+            )
+            .addWhereClause(
+              IdWhereClause.greaterThan(lower: id, includeLower: false),
+            );
+      } else {
+        return query
+            .addWhereClause(
+              IdWhereClause.greaterThan(lower: id, includeLower: false),
+            )
+            .addWhereClause(
+              IdWhereClause.lessThan(upper: id, includeUpper: false),
+            );
+      }
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterWhereClause>
+      idGreaterThan(Id id, {bool include = false}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(
+        IdWhereClause.greaterThan(lower: id, includeLower: include),
+      );
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterWhereClause>
+      idLessThan(Id id, {bool include = false}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(
+        IdWhereClause.lessThan(upper: id, includeUpper: include),
+      );
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterWhereClause> idBetween(
+    Id lowerId,
+    Id upperId, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IdWhereClause.between(
+        lower: lowerId,
+        includeLower: includeLower,
+        upper: upperId,
+        includeUpper: includeUpper,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterWhereClause>
+      slotIdEqualTo(String slotId) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.equalTo(
+        indexName: r'slotId',
+        value: [slotId],
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterWhereClause>
+      slotIdNotEqualTo(String slotId) {
+    return QueryBuilder.apply(this, (query) {
+      if (query.whereSort == Sort.asc) {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'slotId',
+              lower: [],
+              upper: [slotId],
+              includeUpper: false,
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'slotId',
+              lower: [slotId],
+              includeLower: false,
+              upper: [],
+            ));
+      } else {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'slotId',
+              lower: [slotId],
+              includeLower: false,
+              upper: [],
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'slotId',
+              lower: [],
+              upper: [slotId],
+              includeUpper: false,
+            ));
+      }
+    });
+  }
+}
+
+extension CompletedSessionQueryFilter
+    on QueryBuilder<CompletedSession, CompletedSession, QFilterCondition> {
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      attendeeCountEqualTo(int value) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'attendeeCount',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      attendeeCountGreaterThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'attendeeCount',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      attendeeCountLessThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'attendeeCount',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      attendeeCountBetween(
+    int lower,
+    int upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'attendeeCount',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      completedAtEqualTo(DateTime value) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'completedAt',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      completedAtGreaterThan(
+    DateTime value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'completedAt',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      completedAtLessThan(
+    DateTime value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'completedAt',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      completedAtBetween(
+    DateTime lower,
+    DateTime upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'completedAt',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      courseNameEqualTo(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'courseName',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      courseNameGreaterThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'courseName',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      courseNameLessThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'courseName',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      courseNameBetween(
+    String lower,
+    String upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'courseName',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      courseNameStartsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.startsWith(
+        property: r'courseName',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      courseNameEndsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.endsWith(
+        property: r'courseName',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      courseNameContains(String value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.contains(
+        property: r'courseName',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      courseNameMatches(String pattern, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.matches(
+        property: r'courseName',
+        wildcard: pattern,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      courseNameIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'courseName',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      courseNameIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        property: r'courseName',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      facultyNameEqualTo(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'facultyName',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      facultyNameGreaterThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'facultyName',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      facultyNameLessThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'facultyName',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      facultyNameBetween(
+    String lower,
+    String upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'facultyName',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      facultyNameStartsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.startsWith(
+        property: r'facultyName',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      facultyNameEndsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.endsWith(
+        property: r'facultyName',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      facultyNameContains(String value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.contains(
+        property: r'facultyName',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      facultyNameMatches(String pattern, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.matches(
+        property: r'facultyName',
+        wildcard: pattern,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      facultyNameIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'facultyName',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      facultyNameIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        property: r'facultyName',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      idEqualTo(Id value) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'id',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      idGreaterThan(
+    Id value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'id',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      idLessThan(
+    Id value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'id',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      idBetween(
+    Id lower,
+    Id upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'id',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      sessionIdEqualTo(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'sessionId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      sessionIdGreaterThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'sessionId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      sessionIdLessThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'sessionId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      sessionIdBetween(
+    String lower,
+    String upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'sessionId',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      sessionIdStartsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.startsWith(
+        property: r'sessionId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      sessionIdEndsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.endsWith(
+        property: r'sessionId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      sessionIdContains(String value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.contains(
+        property: r'sessionId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      sessionIdMatches(String pattern, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.matches(
+        property: r'sessionId',
+        wildcard: pattern,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      sessionIdIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'sessionId',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      sessionIdIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        property: r'sessionId',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      slotIdEqualTo(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      slotIdGreaterThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      slotIdLessThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      slotIdBetween(
+    String lower,
+    String upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'slotId',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      slotIdStartsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.startsWith(
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      slotIdEndsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.endsWith(
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      slotIdContains(String value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.contains(
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      slotIdMatches(String pattern, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.matches(
+        property: r'slotId',
+        wildcard: pattern,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      slotIdIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'slotId',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterFilterCondition>
+      slotIdIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        property: r'slotId',
+        value: '',
+      ));
+    });
+  }
+}
+
+extension CompletedSessionQueryObject
+    on QueryBuilder<CompletedSession, CompletedSession, QFilterCondition> {}
+
+extension CompletedSessionQueryLinks
+    on QueryBuilder<CompletedSession, CompletedSession, QFilterCondition> {}
+
+extension CompletedSessionQuerySortBy
+    on QueryBuilder<CompletedSession, CompletedSession, QSortBy> {
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      sortByAttendeeCount() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'attendeeCount', Sort.asc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      sortByAttendeeCountDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'attendeeCount', Sort.desc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      sortByCompletedAt() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'completedAt', Sort.asc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      sortByCompletedAtDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'completedAt', Sort.desc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      sortByCourseName() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'courseName', Sort.asc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      sortByCourseNameDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'courseName', Sort.desc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      sortByFacultyName() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'facultyName', Sort.asc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      sortByFacultyNameDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'facultyName', Sort.desc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      sortBySessionId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'sessionId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      sortBySessionIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'sessionId', Sort.desc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      sortBySlotId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'slotId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      sortBySlotIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'slotId', Sort.desc);
+    });
+  }
+}
+
+extension CompletedSessionQuerySortThenBy
+    on QueryBuilder<CompletedSession, CompletedSession, QSortThenBy> {
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      thenByAttendeeCount() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'attendeeCount', Sort.asc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      thenByAttendeeCountDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'attendeeCount', Sort.desc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      thenByCompletedAt() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'completedAt', Sort.asc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      thenByCompletedAtDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'completedAt', Sort.desc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      thenByCourseName() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'courseName', Sort.asc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      thenByCourseNameDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'courseName', Sort.desc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      thenByFacultyName() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'facultyName', Sort.asc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      thenByFacultyNameDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'facultyName', Sort.desc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy> thenById() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'id', Sort.asc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      thenByIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'id', Sort.desc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      thenBySessionId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'sessionId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      thenBySessionIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'sessionId', Sort.desc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      thenBySlotId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'slotId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QAfterSortBy>
+      thenBySlotIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'slotId', Sort.desc);
+    });
+  }
+}
+
+extension CompletedSessionQueryWhereDistinct
+    on QueryBuilder<CompletedSession, CompletedSession, QDistinct> {
+  QueryBuilder<CompletedSession, CompletedSession, QDistinct>
+      distinctByAttendeeCount() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'attendeeCount');
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QDistinct>
+      distinctByCompletedAt() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'completedAt');
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QDistinct>
+      distinctByCourseName({bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'courseName', caseSensitive: caseSensitive);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QDistinct>
+      distinctByFacultyName({bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'facultyName', caseSensitive: caseSensitive);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QDistinct>
+      distinctBySessionId({bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'sessionId', caseSensitive: caseSensitive);
+    });
+  }
+
+  QueryBuilder<CompletedSession, CompletedSession, QDistinct> distinctBySlotId(
+      {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'slotId', caseSensitive: caseSensitive);
+    });
+  }
+}
+
+extension CompletedSessionQueryProperty
+    on QueryBuilder<CompletedSession, CompletedSession, QQueryProperty> {
+  QueryBuilder<CompletedSession, int, QQueryOperations> idProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'id');
+    });
+  }
+
+  QueryBuilder<CompletedSession, int, QQueryOperations>
+      attendeeCountProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'attendeeCount');
+    });
+  }
+
+  QueryBuilder<CompletedSession, DateTime, QQueryOperations>
+      completedAtProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'completedAt');
+    });
+  }
+
+  QueryBuilder<CompletedSession, String, QQueryOperations>
+      courseNameProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'courseName');
+    });
+  }
+
+  QueryBuilder<CompletedSession, String, QQueryOperations>
+      facultyNameProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'facultyName');
+    });
+  }
+
+  QueryBuilder<CompletedSession, String, QQueryOperations> sessionIdProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'sessionId');
+    });
+  }
+
+  QueryBuilder<CompletedSession, String, QQueryOperations> slotIdProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'slotId');
+    });
+  }
+}

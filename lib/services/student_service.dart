@@ -1,3 +1,4 @@
+import '../core/config/firestore_schema.dart';
 import 'firestore_rest_client.dart';
 import '../core/utils/logger.dart';
 
@@ -60,22 +61,22 @@ class StudentService {
     try {
       Log.d('[StudentService] Fetching students for section: $sectionId');
       final docs = await FirestoreRestClient.runQuery(
-        collection: 'students',
+        collection: FirestoreSchema.students,
         where: {
-          'section_id': sectionId,
-          'status': 'active',
+          FirestoreSchema.fieldSectionId: sectionId,
+          FirestoreSchema.fieldStatus: FirestoreSchema.statusActive,
         },
       );
 
       final students = docs.map((doc) {
-        final rollNumber = doc['__id']?.toString() ??
-            doc['roll_number']?.toString() ??
+        final rollNumber = doc[FirestoreSchema.fieldDocId]?.toString() ??
+            doc[FirestoreSchema.fieldRollNumber]?.toString() ??
             '';
-        final name = doc['name']?.toString() ?? 'Unknown';
-        final email = doc['email']?.toString() ?? '';
-        final docSectionId = doc['section_id']?.toString() ?? sectionId;
-        final classId = doc['class_id']?.toString() ?? '';
-        final status = doc['status']?.toString() ?? 'active';
+        final name = doc[FirestoreSchema.fieldName]?.toString() ?? 'Unknown';
+        final email = doc[FirestoreSchema.fieldEmail]?.toString() ?? '';
+        final docSectionId = doc[FirestoreSchema.fieldSectionId]?.toString() ?? sectionId;
+        final classId = doc[FirestoreSchema.fieldClassId]?.toString() ?? '';
+        final status = doc[FirestoreSchema.fieldStatus]?.toString() ?? FirestoreSchema.statusActive;
 
         return StudentInfo(
           rollNumber: rollNumber,
@@ -105,23 +106,23 @@ class StudentService {
     try {
       Log.d('[StudentService] Fetching students for class: $classId');
       final docs = await FirestoreRestClient.runQuery(
-        collection: 'students',
+        collection: FirestoreSchema.students,
         where: {
-          'class_id': classId,
-          'status': 'active',
+          FirestoreSchema.fieldClassId: classId,
+          FirestoreSchema.fieldStatus: FirestoreSchema.statusActive,
         },
       );
 
       return docs.map((doc) {
         return StudentInfo(
-          rollNumber: doc['__id']?.toString() ??
-              doc['roll_number']?.toString() ??
+          rollNumber: doc[FirestoreSchema.fieldDocId]?.toString() ??
+              doc[FirestoreSchema.fieldRollNumber]?.toString() ??
               '',
-          name: doc['name']?.toString() ?? 'Unknown',
-          email: doc['email']?.toString() ?? '',
-          sectionId: doc['section_id']?.toString() ?? '',
-          classId: doc['class_id']?.toString() ?? classId,
-          status: doc['status']?.toString() ?? 'active',
+          name: doc[FirestoreSchema.fieldName]?.toString() ?? 'Unknown',
+          email: doc[FirestoreSchema.fieldEmail]?.toString() ?? '',
+          sectionId: doc[FirestoreSchema.fieldSectionId]?.toString() ?? '',
+          classId: doc[FirestoreSchema.fieldClassId]?.toString() ?? classId,
+          status: doc[FirestoreSchema.fieldStatus]?.toString() ?? FirestoreSchema.statusActive,
         );
       }).toList();
     } catch (e) {

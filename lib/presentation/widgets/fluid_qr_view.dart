@@ -130,18 +130,10 @@ class FluidQrPainter extends CustomPainter {
       
       canvas.drawPath(path, paint);
 
-      // Inner solid circle/rounded rect
-      final centerDotSize = 3 * cellSize;
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(
-            x + (s - centerDotSize) / 2,
-            y + (s - centerDotSize) / 2,
-            centerDotSize,
-            centerDotSize,
-          ),
-          Radius.circular(cellSize),
-        ),
+      // Inner solid circle (matching React code exactly)
+      canvas.drawCircle(
+        Offset(x + s / 2, y + s / 2),
+        1.5 * cellSize,
         paint,
       );
     }

@@ -7,8 +7,6 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'core/config/app_config.dart';
 import 'core/theme/app_theme.dart';
@@ -28,12 +26,82 @@ import 'services/sync_manager.dart';
 import 'services/timetable_cache.dart';
 import 'services/timetable_listener_service.dart';
 import 'services/time_sync_service.dart';
+import 'services/notification_listener_service.dart';
 import 'package:provider/provider.dart';
 import 'data/repositories/auth_repository.dart';
 import 'data/repositories/device_repository.dart';
 import 'core/network/api_client.dart';
 import 'presentation/providers/registration_provider.dart';
 import 'firebase_options.dart';
+
+/// Global kill switch: tracks Ctrl+Shift+JJJ sequence from any screen.
+/// When triggered, releases kiosk mode and navigates to BootScreen.
+class GlobalKillSwitch extends StatefulWidget {
+  final Widget child;
+  const GlobalKillSwitch({super.key, required this.child});
+
+  @override
+  State<GlobalKillSwitch> createState() => _GlobalKillSwitchState();
+}
+
+class _GlobalKillSwitchState extends State<GlobalKillSwitch> {
+  final FocusNode _focusNode = FocusNode();
+  int _jCount = 0;
+  Timer? _resetTimer;
+
+  void _onKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return;
+
+    final ctrl = HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.controlLeft) ||
+                 HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.controlRight);
+    final shift = HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.shiftLeft) ||
+                  HardwareKeyboard.instance.isLogicalKeyPressed(LogicalKeyboardKey.shiftRight);
+    final isJ = event.logicalKey == LogicalKeyboardKey.keyJ;
+
+    if (!ctrl || !shift || !isJ) {
+      if (_jCount > 0) {
+        _jCount = 0;
+        _resetTimer?.cancel();
+      }
+      return;
+    }
+
+    _jCount++;
+    _resetTimer?.cancel();
+
+    if (_jCount >= 3) {
+      _jCount = 0;
+      Log.w('🚨 [GlobalKillSwitch] Emergency exit triggered by keyboard (Ctrl+Shift+JJJ).');
+      KioskService.setMode(KioskMode.fullscreen);
+      navigatorKey.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (context) => const BootScreen()),
+        (route) => false,
+      );
+      return;
+    }
+
+    _resetTimer = Timer(const Duration(seconds: 3), () {
+      _jCount = 0;
+    });
+  }
+
+  @override
+  void dispose() {
+    _resetTimer?.cancel();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return KeyboardListener(
+      focusNode: _focusNode,
+      autofocus: true,
+      onKeyEvent: _onKeyEvent,
+      child: widget.child,
+    );
+  }
+}
 
 class InitStatus {
   final bool firebase;
@@ -81,12 +149,36 @@ void main() {
 
     // ─── TIER 1: Blocking (must pass or app can't run) ──────────────────────
     await _initWindow();
-    KioskService.enable();
+    // NOTE: Kiosk fullscreen is intentionally deferred until AFTER Tier-1
+    // plugin initialization succeeds. If a native C++ exception is thrown
+    // during plugin init (e.g. cloud_firestore C++ SDK on Windows), exiting
+    // the process while the window is already in fullscreen popup mode leaves
+    // DWM in a broken state — taskbar hidden, no visible window, system frozen.
+    // By keeping the window in normal mode during init, any crash during
+    // plugin loading allows DWM to recover naturally.
     final status = await _initTier1();
 
     if (status.isFatal) {
       runApp(InitFailureScreen(message: status.message));
       return;
+    }
+
+    // NOTE: Kiosk fullscreen is intentionally deferred until AFTER Tier-2
+    // and Integrity checks succeed. If a native C++ exception is thrown
+    // during plugin init or a fatal error occurs early, exiting the process
+    // while the window is already in fullscreen popup mode leaves DWM in
+    // a broken state — taskbar hidden, no visible window, system frozen.
+    // By keeping the window in normal mode during early boot, any crash
+    // allows DWM to recover naturally.
+
+    // Register Windows auto-start immediately (before Tier 2) so the
+    // registry key is written even if a later step (e.g. Firebase C++
+    // SDK init) crashes the process.  Previously this ran in Tier 3
+    // (fire-and-forget) and was silently skipped when the app crashed.
+    if (!kIsWeb && Platform.isWindows) {
+      unawaited(StartupService.register().catchError((e) {
+        Log.e('❌ [Startup] Registration failed: $e');
+      }));
     }
 
     // ─── Set app version for structured logging ──────────────────────────────
@@ -121,6 +213,10 @@ void main() {
       return;
     }
 
+    // Integrity and Tiers 1-2 passed — safe to enter fullscreen kiosk mode now.
+    KioskService.enable();
+    await KioskService.setMode(KioskMode.fullscreen, force: true);
+
     // ─── Create repositories & mount app ────────────────────────────────────
     final apiClient = ApiClient();
     globalAuthRepository = AuthRepository(apiClient);
@@ -129,15 +225,17 @@ void main() {
     unawaited(globalDeviceRepository.performMigrationBridge());
 
     runApp(
-      MultiProvider(
-        providers: [
-          Provider<IDeviceRepository>.value(value: globalDeviceRepository),
-          Provider<IAuthRepository>.value(value: globalAuthRepository),
-          ChangeNotifierProvider(
-              create: (_) => RegistrationProvider(
-                  globalAuthRepository, globalDeviceRepository)),
-        ],
-        child: const IntelliAttendApp(),
+      GlobalKillSwitch(
+        child: MultiProvider(
+          providers: [
+            Provider<IDeviceRepository>.value(value: globalDeviceRepository),
+            Provider<IAuthRepository>.value(value: globalAuthRepository),
+            ChangeNotifierProvider(
+                create: (_) => RegistrationProvider(
+                    globalAuthRepository, globalDeviceRepository)),
+          ],
+          child: const IntelliAttendApp(),
+        ),
       ),
     );
 
@@ -164,10 +262,16 @@ Future<void> _acquireSingleInstanceLock() async {
 
   Future<RandomAccessFile?> tryAcquire() async {
     try {
-      final raf = await lockFile.open(mode: FileMode.write);
+      // Use append mode (not write) to avoid truncating the file before
+      // acquiring the lock. If we truncated first and then failed to lock,
+      // the running instance's PID would be destroyed, making the stale-
+      // lock check read an empty file and incorrectly assume the lock is
+      // stale — allowing a second instance to start.
+      final raf = await lockFile.open(mode: FileMode.append);
       try {
         await raf.lock(FileLock.exclusive);
-        // Write our PID so the next launch can verify liveness.
+        // Lock acquired — file is ours. Clear any leftover content and
+        // write our PID so the next launch can verify liveness.
         await raf.setPosition(0);
         await raf.truncate(0);
         await raf.writeString('$pid\n');
@@ -250,21 +354,19 @@ Future<void> _initWindow() async {
       await windowManager.ensureInitialized();
       final windowReady = Completer<void>();
       windowManager.waitUntilReadyToShow(
-        // Start hidden so the window is never briefly visible in windowed state.
-        // We apply fullscreen first, then show — the user only ever sees the
-        // fully-maximised kiosk frame.
+        // Create as a normal windowed frame — fullscreen kiosk mode is
+        // applied later by KioskService.setMode() AFTER Tier-1 plugin
+        // init succeeds (see main() above). This ordering ensures that
+        // if a native C++ exception is thrown during plugin init, the
+        // window exits cleanly and DWM recovers naturally instead of
+        // leaving the desktop frozen with a hidden taskbar and no visible
+        // window.
         const WindowOptions(
           titleBarStyle: TitleBarStyle.hidden,
           skipTaskbar: false,
         ),
         () async {
           try {
-            // Order matters: configure BEFORE show() so the first visible
-            // frame is already fullscreen. show() after setFullScreen() works
-            // reliably on Windows; the reverse order causes a brief windowed flash.
-            await windowManager.setResizable(false);
-            await windowManager.setAlwaysOnTop(true);
-            await windowManager.setFullScreen(true);
             await windowManager.show();
             await windowManager.focus();
           } finally {
@@ -333,38 +435,17 @@ void _initTier3() {
     Log.e('❌ [Tier3] Heartbeat start failed: $e');
   }));
 
-  // Re-register Windows auto-start on every launch so the registry key always
-  // points to the current executable path (e.g. after a clean build or if the
-  // app directory moves).
-  if (!kIsWeb && Platform.isWindows) {
-    unawaited(StartupService.register().catchError((e) {
-      Log.e('❌ [Tier3] Startup registration failed: $e');
-    }));
-  }
-
-  // Background protocols (SyncManager, WindowOrchestrator, PreFlight) used to
-  // start here. They are now started from IdleScreen's post-frame callback so
-  // they cannot race against window_manager initialisation. See
-  // startBackgroundProtocols() above for the full rationale.
+  // Background protocols (timetable/notification listeners, window orchestrator,
+  // pre-flight, time sync) are started from IdleScreen's post-frame callback
+  // to avoid window_manager platform-channel races during startup.
 }
 
-/// IdleScreen calls this from a post-frame callback after its first frame is
-/// rendered. We deliberately do NOT start any of these at app launch:
-///
-///   - SyncManager opens a Firestore listener which triggers a Firebase Auth
-///     token fetch. On Windows the auth callback arrives on a non-platform
-///     thread; if it races with window_manager native calls during startup,
-///     the Flutter engine crashes silently ("Lost connection to device").
-///
-///   - WindowOrchestratorService.start() calls _tick() immediately, which can
-///     call windowManager methods (setMode locked, isMinimized) — racing
-///     against IdleScreen's own setMode(soft).
-///
-/// By serialising everything behind IdleScreen's first frame, we guarantee:
-///   1. Window manager is fully initialised and stable before any service
-///      touches it.
-///   2. Firebase auth callbacks land after the rendering pipeline has
-///      committed at least one frame to the OS.
+/// IdleScreen calls this from a post-frame callback so background protocols
+/// start after the first frame is rendered, not during app launch. This avoids
+/// window_manager platform-channel races: WindowOrchestratorService._tick()
+/// calls windowManager methods (setMode, isMinimized, etc.) on every cycle,
+/// and if multiple services touch native platform channels simultaneously
+/// during startup the Flutter engine can lose its connection.
 Future<void> startBackgroundProtocols() async {
   try {
     final registration = await globalDeviceRepository.getRegistration();
@@ -380,14 +461,14 @@ Future<void> startBackgroundProtocols() async {
         .updateAll(await globalDeviceRepository.getWeeklyTimeline());
 
     // Start real-time Firestore listener for timetable changes.
-    // Uses smartBoardId — timetable_slots documents are keyed on
-    // smart_board_id (physical board ID), not the logical classroomId.
-    // Passes a REST fallback so the health monitor can recover on staleness.
     TimetableListenerService().start(
       boardId,
       restFallback: () =>
           globalDeviceRepository.syncTimetable(fullSync: true),
     );
+
+    // Start real-time notifications listener for admin/faculty messages.
+    NotificationListenerService().start(boardId);
 
     PreFlightService().startCountdownWatcher();
     WindowOrchestratorService().start();
@@ -475,19 +556,25 @@ Future<bool> _verifyIntegrity() async {
   return tampered;
 }
 
-/// Firebase initialization — authenticates the plugin using stored
-/// board credentials so that `.snapshots()` streams work.
+/// Initialises Firebase with native `cloud_firestore` support.
 ///
-/// `.snapshots()` is the **most cost-effective** approach: Firestore only
-/// charges when documents actually change, not on every poll cycle.
-/// REST polling (the old approach) billed for every poll × every document,
-/// even when nothing changed — wasting money on a small team budget.
+/// **Why `.snapshots()` (native listeners):**
+/// Firestore bills 1 read per document *change*, not per poll cycle. REST
+/// polling at 30s would burn ~4,320 reads/board/day (13× over budget for
+/// 5 boards sharing 50,000 reads/month). Live listeners achieve ~92
+/// reads/board/day — the only approach within budget.
 ///
-/// Flow:
-///   1. Initialize Firebase with project options
-///   2. Read stored email/password from SecureStorage (set during registration)
-///   3. Sign into Firebase plugin with `signInWithEmailAndPassword()`
-///   4. Screens use `.snapshots()` for all real-time data
+/// **Why NOT `FirebaseFirestore.instance.settings = Settings(persistenceEnabled: false)`:**
+/// The Firestore C++ SDK on Windows throws an unhandled MSVC C++ exception
+/// (0xE06D7363) when `.snapshots()` callbacks fire after persistence has
+/// been explicitly disabled. Removing the setting lets the SDK use its
+/// default persistence behaviour, which works correctly on all platforms.
+///
+/// **Why `firebase_auth` is excluded:**
+/// The `firebase_auth` C++ plugin calls `abort()` on Windows when
+/// AuthStateListener / IdTokenListener callbacks fire on a worker thread.
+/// Auth is handled entirely via FirebaseRestAuth (Identity Toolkit +
+/// Secure Token API over HTTPS) — see `lib/core/security/firebase_rest_auth.dart`.
 Future<void> _initFirebase() async {
   try {
     final options = DefaultFirebaseOptions.fromConfig(
@@ -495,29 +582,12 @@ Future<void> _initFirebase() async {
       projectId: AppConfig.firebaseProjectId,
     );
     await Firebase.initializeApp(options: options);
-    FirebaseFirestore.instance.settings = const Settings(
-      persistenceEnabled: false,
-    );
 
-    // Sign into Firebase plugin using stored board credentials.
-    // These were saved during registration via SecureStorageService.storeBoardCredentials().
-    final email = await SecureStorageService.getBoardEmail();
-    final password = await SecureStorageService.getBoardPassword();
-
-    if (email != null && password != null && email.isNotEmpty && password.isNotEmpty) {
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-      Log.i('[Firebase] Plugin authenticated via stored credentials. .snapshots() ready.');
-    } else {
-      Log.w('[Firebase] No stored credentials — .snapshots() will be unavailable. '
-          'REST clients will be used as fallback.');
-    }
+    Log.i('[Firebase] Initialised. Native .snapshots() ready for real-time updates.');
   } catch (e) {
     Log.w('[Firebase] Plugin init failed (non-fatal): $e. REST clients will be used as fallback.');
-    // Don't rethrow — the app should still run even if Firebase plugin fails.
-    // REST-based clients (FirebaseRestAuth, FirestoreRestClient) operate independently.
+    // Don't rethrow — REST-based clients (FirebaseRestAuth, FirestoreRestClient)
+    // operate independently of the Firebase plugin.
   }
 }
 

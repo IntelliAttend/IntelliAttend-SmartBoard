@@ -137,29 +137,45 @@ void main() {
     });
   });
 
-  group('ApiService sendHeartbeat', () {
+  group('ApiService sendHeartbeatV2', () {
     test('does not throw on 200', () async {
-      await ApiService.sendHeartbeat(
+      await ApiService.sendHeartbeatV2(
         smartBoardId: 'IASB-TEST',
-        hardwareId: 'test-hardware-id',
         screenState: 'idle',
         uptimeSeconds: 100,
         appVersion: 'test',
       );
     });
 
-    test('does not throw on 500 (best-effort)', () async {
+    test('returns session data on 200', () async {
       _handler = (req) {
-        req.response.statusCode = 500;
+        req.response.statusCode = 200;
+        req.response.headers.set('X-Request-ID',
+            req.headers.value('X-Request-ID') ?? 'test');
+        req.response.write('{"status":"ok","session":{"session_id":"sess_test","status":"active"}}');
         req.response.close();
       };
-      await ApiService.sendHeartbeat(
+      final result = await ApiService.sendHeartbeatV2(
         smartBoardId: 'IASB-TEST',
-        hardwareId: 'test-hardware-id',
         screenState: 'idle',
         uptimeSeconds: 100,
         appVersion: 'test',
       );
+      expect(result['session']['session_id'], equals('sess_test'));
+    });
+
+    test('returns error data on 500', () async {
+      _handler = (req) {
+        req.response.statusCode = 500;
+        req.response.close();
+      };
+      final result = await ApiService.sendHeartbeatV2(
+        smartBoardId: 'IASB-TEST',
+        screenState: 'idle',
+        uptimeSeconds: 100,
+        appVersion: 'test',
+      );
+      expect(result['status'], equals('error'));
     });
   });
 
