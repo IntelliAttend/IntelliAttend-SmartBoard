@@ -42,11 +42,13 @@ class ApiService {
   static const Duration _cbCooldown = Duration(seconds: 60);
 
   static CircuitBreaker _breakerFor(String path) {
-    return _breakers.putIfAbsent(path, () => CircuitBreaker(
-      name: path,
-      failureThreshold: _cbFailureThreshold,
-      cooldown: _cbCooldown,
-    ));
+    return _breakers.putIfAbsent(
+        path,
+        () => CircuitBreaker(
+              name: path,
+              failureThreshold: _cbFailureThreshold,
+              cooldown: _cbCooldown,
+            ));
   }
 
   // ─── URL Resolution ───────────────────────────────────────────────────────
@@ -103,8 +105,7 @@ class ApiService {
     int maxRetries, {
     Map<String, String>? queryParameters,
   }) async {
-    final uri =
-        await _buildUri(path, queryParameters: queryParameters);
+    final uri = await _buildUri(path, queryParameters: queryParameters);
     const baseDelay = Duration(seconds: 1);
 
     http.Response? lastResponse;
@@ -118,7 +119,8 @@ class ApiService {
         mergedHeaders['X-Retry-Attempt'] = attempt.toString();
       }
 
-      Log.d('[API] $method $path attempt=${attempt + 1}/$maxRetries req=$reqId');
+      Log.d(
+          '[API] $method $path attempt=${attempt + 1}/$maxRetries req=$reqId');
 
       try {
         late http.Response response;
@@ -365,6 +367,20 @@ class ApiService {
       headers: await _authHeaders(),
     );
     if (response.statusCode != 200) throw _apiError('Ready check', response);
+  }
+
+  static Future<bool> boardReady() async {
+    try {
+      final response = await _request(
+        'GET',
+        'api/v1/board/ready',
+        headers: await _authHeaders(),
+        maxRetries: 1,
+      );
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<void> sendHardwareTelemetry(Map<String, dynamic> data) async {
