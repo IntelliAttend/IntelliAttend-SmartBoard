@@ -1,4 +1,5 @@
 import secrets
+import hashlib
 import logging
 import jwt
 import os
@@ -36,26 +37,43 @@ class AuthService:
         """
         Phase 2: Ignition Login.
         Verifies board is provisioned and sends OTP to the admin email.
+        Returns already_registered if board is already bound to hardware.
         """
         board_ref = db.collection("smart_boards").document(board_id)
         board_doc = await board_ref.get()
-        
+
         if not board_doc.exists:
             logger.warning(f"❌ [Ignition] Board {board_id} not provisioned in database.")
             return None
 
+        board_data = board_doc.to_dict()
+
+        # S5: Check if board is already registered — skip OTP
+        if board_data.get("is_registered") and board_data.get("status") == "ACTIVE":
+            logger.info(f"✅ [Ignition] Board {board_id} is already registered. Skipping OTP.")
+            return {
+                "status": "already_registered",
+                "smart_board_id": board_id,
+                "room_id": board_data.get("room_id"),
+                "room_name": board_data.get("room_name"),
+                "building": board_data.get("building"),
+                "department": board_data.get("department"),
+            }
+
         # Generate 6-digit OTP
         otp = str(secrets.randbelow(900000) + 100000)
-        
-        # Store OTP temporarily with expiry (10 mins)
+        otp_hash = hashlib.sha256(otp.encode()).hexdigest()
+
+        # Store OTP hash (not plaintext) temporarily with expiry (10 mins)
         await db.collection("pending_ignitions").document(board_id).set({
-            "otp": otp,
+            "otp_hash": otp_hash,
             "created_at": firestore.SERVER_TIMESTAMP,
             "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10)
         })
 
-        admin_email = board_doc.to_dict().get("admin_email", "IT Administrator")
-        logger.info(f"📩 [Ignition] OTP {otp} sent to {admin_email} for board {board_id}")
+        admin_email = board_data.get("admin_email", "IT Administrator")
+        logger.info(f"📩 [Ignition] OTP sent to {admin_email} for board {board_id}")
+        logger.debug(f"[Ignition] OTP {otp} for board {board_id} (debug only)")
 
         return {"status": "success", "admin_email": admin_email}
 
@@ -66,13 +84,26 @@ class AuthService:
         """
         ignition_ref = db.collection("pending_ignitions").document(board_id)
         ignition_doc = await ignition_ref.get()
-        
+
         if not ignition_doc.exists:
             logger.warning(f"❌ [Ignition] No pending ignition for board {board_id}")
             return None
-        
+
         ignition_data = ignition_doc.to_dict()
-        if ignition_data["otp"] != otp:
+
+        # Check OTP expiry (S2)
+        expires_at = ignition_data.get("expires_at")
+        if expires_at:
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > expires_at:
+                logger.warning(f"❌ [Ignition] OTP expired for board {board_id}")
+                await ignition_ref.delete()
+                return None
+
+        # Compare against stored hash (S1)
+        otp_hash = hashlib.sha256(otp.encode()).hexdigest()
+        if ignition_data.get("otp_hash") != otp_hash:
             logger.warning(f"❌ [Ignition] OTP Mismatch for board {board_id}")
             return None
 

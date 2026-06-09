@@ -3,6 +3,7 @@
 
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
+#include <flutter/method_channel.h>
 
 #include <memory>
 
@@ -28,6 +29,15 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // Platform channel for kiosk communication with Dart.
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> kiosk_channel_;
+
+  // When true, WM_SYSCOMMAND SC_CLOSE and SC_MAXIMIZE are absorbed
+  // (kiosk hardening active). When false, they pass through to
+  // DefWindowProc so the window_manager plugin's WM_CLOSE handler
+  // (setPreventClose) controls close behavior.
+  bool block_sys_commands_ = false;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

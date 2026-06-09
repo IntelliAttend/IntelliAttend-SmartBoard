@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:isar/isar.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../core/config/firestore_schema.dart';
@@ -7,6 +8,7 @@ import '../core/utils/logger.dart';
 import 'session_manager.dart';
 import 'timetable_cache.dart';
 import 'firestore_rest_client.dart';
+import 'time_sync_service.dart';
 
 class TimetableListenerService {
   static final TimetableListenerService _instance =
@@ -27,7 +29,7 @@ class TimetableListenerService {
   bool get isNative => _subscription != null;
   bool get isHealthy =>
       _lastSnapshotTime != null &&
-      DateTime.now().difference(_lastSnapshotTime!) < _staleThreshold;
+      TimeSyncService.timeNow.difference(_lastSnapshotTime!) < _staleThreshold;
 
   void start(String smartBoardId, {void Function()? restFallback}) {
     if (isListening && _currentBoardId == smartBoardId) return;
@@ -35,6 +37,13 @@ class TimetableListenerService {
     stop();
     _currentBoardId = smartBoardId;
     _restFallback = restFallback;
+
+    if (Platform.isWindows) {
+      Log.w(
+          '[TimetableListener] Native Firestore snapshots disabled on Windows; using REST sync only.');
+      _restFallback?.call();
+      return;
+    }
 
     try {
       _subscription = FirebaseFirestore.instance
@@ -68,10 +77,12 @@ class TimetableListenerService {
         where: {FirestoreSchema.fieldSmartBoardId: boardId},
       );
 
-      _lastSnapshotTime = DateTime.now();
+      _lastSnapshotTime = TimeSyncService.timeNow;
 
       if (docs.isEmpty) {
-        Log.w('[TimetableListener] forceSync returned 0 docs — preserving existing cache');
+        Log.w('[TimetableListener] forceSync returned 0 docs — clearing cache');
+        await _clearAllEntries();
+        TimetableCache().updateAll([]);
         return;
       }
 
@@ -85,7 +96,8 @@ class TimetableListenerService {
       final allEntries = await _reconcileAll(entries);
       TimetableCache().updateAll(allEntries);
 
-      Log.i('[TimetableListener] Updated ${entries.length} entries from force sync');
+      Log.i(
+          '[TimetableListener] Updated ${entries.length} entries from force sync');
     } catch (e) {
       Log.e('[TimetableListener] Force sync failed: $e');
     }
@@ -111,11 +123,13 @@ class TimetableListenerService {
 
     if (!isHealthy) {
       if (_lastSnapshotTime == null) {
-        Log.w('[TimetableListener] No snapshots received since startup — triggering REST fallback');
+        Log.w(
+            '[TimetableListener] No snapshots received since startup — triggering REST fallback');
       } else {
         final minutesSince =
-            DateTime.now().difference(_lastSnapshotTime!).inMinutes;
-        Log.w('[TimetableListener] No snapshot in $minutesSince min — triggering REST fallback');
+            TimeSyncService.timeNow.difference(_lastSnapshotTime!).inMinutes;
+        Log.w(
+            '[TimetableListener] No snapshot in $minutesSince min — triggering REST fallback');
       }
       _restFallback?.call();
     }
@@ -123,7 +137,8 @@ class TimetableListenerService {
 
   void _onSnapshotDone() {
     Log.w('[TimetableListener] Stream closed unexpectedly.');
-    Log.w('[TimetableListener] Call forceSync() to re-sync timetable manually.');
+    Log.w(
+        '[TimetableListener] Call forceSync() to re-sync timetable manually.');
     _lastSnapshotTime = null;
     _healthTimer?.cancel();
   }
@@ -131,7 +146,8 @@ class TimetableListenerService {
   void _onSnapshotError(Object error) {
     Log.e('[TimetableListener] Snapshot error: $error');
     _lastSnapshotTime = null;
-    Log.w('[TimetableListener] Native snapshots unavailable — use forceSync() for manual sync.');
+    Log.w(
+        '[TimetableListener] Native snapshots unavailable — use forceSync() for manual sync.');
   }
 
   /// Processes a Firestore snapshot using docChanges for granular
@@ -139,7 +155,7 @@ class TimetableListenerService {
   /// collection — individual upserts keep existing data intact when the
   /// stream delivers an empty or error state (offline, token expired, etc.).
   void _onTimetableChanged(QuerySnapshot snapshot) async {
-    _lastSnapshotTime = DateTime.now();
+    _lastSnapshotTime = TimeSyncService.timeNow;
 
     try {
       if (snapshot.docChanges.isEmpty && snapshot.docs.isEmpty) {
@@ -154,8 +170,7 @@ class TimetableListenerService {
         // Read all existing entries once for O(1) slotId lookups.
         // (~40-50 entries for a weekly timetable — negligible overhead.)
         final allExisting = await isar.timetableEntrys.where().findAll();
-        final existingBySlotId =
-            {for (final e in allExisting) e.slotId: e};
+        final existingBySlotId = {for (final e in allExisting) e.slotId: e};
 
         await isar.writeTxn(() async {
           for (final change in snapshot.docChanges) {
@@ -201,8 +216,7 @@ class TimetableListenerService {
         if (entries.isEmpty) return;
 
         final allExisting = await isar.timetableEntrys.where().findAll();
-        final existingBySlotId =
-            {for (final e in allExisting) e.slotId: e};
+        final existingBySlotId = {for (final e in allExisting) e.slotId: e};
 
         await isar.writeTxn(() async {
           for (final entry in entries) {
@@ -231,7 +245,8 @@ class TimetableListenerService {
           .findAll();
       TimetableCache().updateAll(allEntries);
 
-      Log.i('[TimetableListener] Incremental update applied (${snapshot.docChanges.length} changes)');
+      Log.i(
+          '[TimetableListener] Incremental update applied (${snapshot.docChanges.length} changes)');
     } catch (e) {
       Log.e('[TimetableListener] Failed to process update: $e');
     }
@@ -240,6 +255,13 @@ class TimetableListenerService {
   /// Upserts [incoming] entries into Isar by slotId, then deletes any
   /// entries that are no longer in the synced set.  Never clears the
   /// collection — empty results are already rejected by the caller.
+  Future<void> _clearAllEntries() async {
+    final isar = SessionManager.isar;
+    await isar.writeTxn(() async {
+      await isar.timetableEntrys.clear();
+    });
+  }
+
   Future<List<TimetableEntry>> _reconcileAll(
       List<TimetableEntry> incoming) async {
     final isar = SessionManager.isar;
@@ -280,25 +302,35 @@ class TimetableListenerService {
 
   TimetableEntry _docToEntry(String docId, Map<String, dynamic> data) {
     final facultyEmail = data[FirestoreSchema.fieldFacultyId]?.toString() ??
-        (data[FirestoreSchema.fieldFacultyEmails] as List?)?.firstOrNull?.toString() ?? '';
+        (data[FirestoreSchema.fieldFacultyEmails] as List?)
+            ?.firstOrNull
+            ?.toString() ??
+        '';
 
     return TimetableEntry()
       ..slotId = docId
-      ..dayOfWeek = _dayNumber(data[FirestoreSchema.fieldDayOfWeek]?.toString() ?? '')
+      ..dayOfWeek =
+          _dayNumber(data[FirestoreSchema.fieldDayOfWeek]?.toString() ?? '')
       ..startTime = data[FirestoreSchema.fieldStartTime]?.toString() ?? ''
       ..endTime = data[FirestoreSchema.fieldEndTime]?.toString() ?? ''
-      ..courseName = data[FirestoreSchema.fieldSubjectName]?.toString() ?? 'Class'
+      ..courseName =
+          data[FirestoreSchema.fieldSubjectName]?.toString() ?? 'Class'
       ..facultyName = facultyEmail
       ..sectionId = data[FirestoreSchema.fieldSectionId]?.toString() ?? 'N/A';
   }
 
   int _dayNumber(String dayName) {
     const days = [
-      'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday',
-      'Saturday', 'Sunday',
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
     ];
     final idx =
         days.indexWhere((d) => d.toLowerCase() == dayName.toLowerCase());
-    return idx != -1 ? idx + 1 : DateTime.now().weekday;
+    return idx != -1 ? idx + 1 : TimeSyncService.timeNow.weekday;
   }
 }

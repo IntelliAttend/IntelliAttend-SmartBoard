@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import '../utils/logger.dart';
 import 'hardware_fingerprint_service.dart';
@@ -28,6 +29,13 @@ enum KioskMode {
 }
 
 class KioskService {
+  /// Platform channel to the C++ runner.  Tells the native side whether
+  /// to absorb WM_SYSCOMMAND SC_CLOSE/SC_MAXIMIZE in the message pump.
+  /// When kiosk hardening is active these are blocked; when not active
+  /// (boot, suspended, or force-released) they pass through so the user
+  /// can close the window via Alt+F4 or the taskbar.
+  static const _kioskChannel = MethodChannel('com.intelliattend/kiosk');
+
   static bool _enabled = false;
   static bool _screenCaptureFailed = false;
 
@@ -223,10 +231,37 @@ class KioskService {
       }
 
       _currentMode = mode;
+
+      // Sync the C++ WM_SYSCOMMAND blocking state with the current mode.
+      // When hardening is active (fullscreen/locked/absoluteLocked), Alt+F4
+      // and the close button are absorbed at the native message-pump level.
+      // When not active (suspended), they pass through to DefWindowProc so
+      // the window_manager plugin's WM_CLOSE handler controls close behavior.
+      if (Platform.isWindows) {
+        switch (mode) {
+          case KioskMode.fullscreen:
+          case KioskMode.locked:
+          case KioskMode.absoluteLocked:
+            await _setBlockSysCommands(true);
+            break;
+          case KioskMode.suspended:
+            await _setBlockSysCommands(false);
+            break;
+        }
+      }
     } catch (e) {
       Log.e('❌ [Kiosk] setMode($mode) failed: $e');
     } finally {
       _isApplyingMode = false;
+    }
+  }
+
+  /// Tells the C++ runner whether to absorb WM_SYSCOMMAND SC_CLOSE/SC_MAXIMIZE.
+  static Future<void> _setBlockSysCommands(bool block) async {
+    try {
+      await _kioskChannel.invokeMethod('setBlockSysCommands', block);
+    } catch (e) {
+      Log.d('[Kiosk] setBlockSysCommands($block) failed: $e');
     }
   }
 
@@ -267,6 +302,29 @@ class KioskService {
       Log.i('🛡️ [Kiosk] Screen capture restored (WDA_NONE).');
     } catch (e) {
       Log.w('⚠️ [Kiosk] Screen capture restore failed: $e');
+    }
+  }
+
+  /// Force-releases all kiosk constraints, making the window a normal
+  /// closable window with a visible taskbar icon. This is the emergency
+  /// kill switch — call it when the app freezes or the user needs to
+  /// close the window.
+  static Future<void> forceRelease() async {
+    Log.w('🛑 [Kiosk] FORCE RELEASE');
+    _enabled = false;
+    _currentMode = null;
+    try {
+      await windowManager.setSkipTaskbar(false);
+      await windowManager.setPreventClose(false);
+      await windowManager.setAlwaysOnTop(false);
+      await windowManager.setFullScreen(false);
+      await windowManager.setResizable(true);
+      await windowManager.show();
+      if (Platform.isWindows) {
+        await _setBlockSysCommands(false);
+      }
+    } catch (e) {
+      Log.e('❌ [Kiosk] forceRelease error: $e');
     }
   }
 

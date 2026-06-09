@@ -1,6 +1,9 @@
+import logging
 import os
 import json
 from typing import Optional
+
+logger = logging.getLogger("IntelliAttend.Cache")
 
 try:
     import redis.asyncio as aioredis
@@ -11,6 +14,7 @@ except ImportError:
 class CacheService:
     _client = None
     _local_fallback: dict = {}
+    _warned = False
 
     @classmethod
     async def get_client(cls):
@@ -20,7 +24,10 @@ class CacheService:
                 try:
                     cls._client = aioredis.from_url(url, decode_responses=True)
                     await cls._client.ping()
-                except Exception:
+                except Exception as e:
+                    if not cls._warned:
+                        logger.warning(f"Redis unavailable ({e}). Using in-memory fallback — data will be lost on restart.")
+                        cls._warned = True
                     cls._client = None
         return cls._client
 
@@ -43,6 +50,9 @@ class CacheService:
                 return
             except Exception:
                 pass
+        if not cls._warned:
+            logger.warning("Redis unavailable — caching in memory only. Data will be lost on restart.")
+            cls._warned = True
         cls._local_fallback[key] = value
 
     @classmethod

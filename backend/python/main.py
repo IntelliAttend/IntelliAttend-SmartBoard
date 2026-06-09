@@ -509,6 +509,40 @@ async def sync_vault(
 # --- Registration API Router (api/v1/device/register) ---
 auth_router = APIRouter(prefix="/api/v1/device/register")
 
+# OTP rate limiting state (S3): per board_id, in-memory
+_otp_attempts: dict[str, dict] = {}
+_OTP_MAX_ATTEMPTS = 10
+_OTP_LOCKOUT_MINUTES = 15
+
+def _check_otp_rate_limit(board_id: str):
+    """Raises 429 if board has exceeded max OTP attempts."""
+    now = datetime.now(timezone.utc)
+    state = _otp_attempts.get(board_id)
+    if state:
+        lockout_until = state.get("lockout_until")
+        if lockout_until and now < lockout_until:
+            remaining = int((lockout_until - now).total_seconds())
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many OTP attempts. Try again in {remaining} seconds."
+            )
+        # Reset if lockout expired
+        if lockout_until and now >= lockout_until:
+            _otp_attempts.pop(board_id, None)
+
+def _record_otp_attempt(board_id: str, success: bool):
+    """Record a successful or failed OTP attempt."""
+    now = datetime.now(timezone.utc)
+    state = _otp_attempts.get(board_id, {"count": 0, "lockout_until": None})
+    if success:
+        _otp_attempts.pop(board_id, None)
+        return
+    state["count"] += 1
+    if state["count"] >= _OTP_MAX_ATTEMPTS:
+        state["lockout_until"] = now + timedelta(minutes=_OTP_LOCKOUT_MINUTES)
+        logger.warning(f"🔒 [RateLimit] Board {board_id} locked out for {_OTP_LOCKOUT_MINUTES} min after {state['count']} failed OTP attempts")
+    _otp_attempts[board_id] = state
+
 def _extract_bearer_token(request: Request) -> Optional[str]:
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
@@ -532,11 +566,16 @@ async def verify_device_registration(request: DeviceRegisterVerifyRequest):
     """Phase 2.5: OTP Verification"""
     if not db:
         return {"status": "error", "message": "Database not initialized"}
-    
+
+    # Check OTP rate limit before processing (S3)
+    _check_otp_rate_limit(request.smart_board_id)
+
     result = await AuthService.verify_otp(request.smart_board_id, request.otp, db)
     if not result:
+        _record_otp_attempt(request.smart_board_id, success=False)
         raise HTTPException(status_code=400, detail="Invalid OTP or Session Expired")
-        
+
+    _record_otp_attempt(request.smart_board_id, success=True)
     return result
 
 @auth_router.post("/complete")

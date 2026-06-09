@@ -3,6 +3,7 @@
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "flutter/standard_method_codec.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -36,6 +37,27 @@ bool FlutterWindow::OnCreate() {
   // window is shown. It is a no-op if the first frame hasn't completed yet.
   flutter_controller_->ForceRedraw();
 
+  // ── Register kiosk platform channel ─────────────────────────────────────
+  // Listens for setBlockSysCommands from Dart so WM_SYSCOMMAND SC_CLOSE
+  // absorption can be toggled based on kiosk hardening state.
+  kiosk_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(),
+      "com.intelliattend/kiosk",
+      &flutter::StandardMethodCodec::GetInstance());
+
+  kiosk_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+        if (call.method_name() == "setBlockSysCommands") {
+          if (call.arguments() && std::holds_alternative<bool>(*call.arguments())) {
+            block_sys_commands_ = std::get<bool>(*call.arguments());
+          }
+          result->Success();
+        } else {
+          result->NotImplemented();
+        }
+      });
+
   return true;
 }
 
@@ -66,16 +88,20 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
 
-    // ── Kiosk: block window-close system commands ─────────────────────────
-    // Without WS_SYSMENU (removed for security), DefWindowProc bypasses the
-    // normal WM_CLOSE path and calls DestroyWindow directly when Alt+F4 or
-    // the close button is used. We intercept SC_CLOSE here so the window
-    // never closes unintentionally. The Dart-side exit button on the
-    // registration screen uses DestroyWindow() directly and is unaffected.
+    // ── Kiosk: conditionally block window-close system commands ────────────
+    // When kiosk hardening is active (block_sys_commands_ == true), we
+    // intercept SC_CLOSE and SC_MAXIMIZE so Alt+F4 / the close button /
+    // maximize cannot be used.  When not active (boot phase, suspended, or
+    // force-released), these pass through to DefWindowProc so the
+    // window_manager plugin's WM_CLOSE handler (setPreventClose) controls
+    // close behaviour — keeping the taskbar "Close" option and Alt+F4
+    // available when the user needs to close the app.
     case WM_SYSCOMMAND: {
-      const auto cmd = wparam & 0xFFF0;
-      if (cmd == SC_CLOSE || cmd == SC_MAXIMIZE) {
-        return 0; // Absorb — do not forward to DefWindowProc.
+      if (block_sys_commands_) {
+        const auto cmd = wparam & 0xFFF0;
+        if (cmd == SC_CLOSE || cmd == SC_MAXIMIZE) {
+          return 0; // Absorb — do not forward to DefWindowProc.
+        }
       }
       break;
     }

@@ -20,7 +20,6 @@ class SessionCreateRequest(BaseModel):
 
 class DeviceRegisterInitiateRequest(BaseModel):
     smart_board_id: str
-    password: str
 
 class DeviceRegisterVerifyRequest(BaseModel):
     smart_board_id: str

@@ -53,21 +53,26 @@ try {
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     }
 
-    Write-Host "2. Copying build files..." -ForegroundColor Green
+    Write-Host "2. Cleaning previous app binaries..." -ForegroundColor Green
+    Get-ChildItem -Path $InstallDir -Force |
+        Where-Object { $_.Name -ne "data" } |
+        Remove-Item -Recurse -Force
+
+    Write-Host "3. Copying build files..." -ForegroundColor Green
     Copy-Item -Path "$BuildPath\*" -Destination $InstallDir -Recurse -Force
     Write-Host "   Copied all files to $InstallDir"
 
-    Write-Host "3. Setting up auto-start registry key..." -ForegroundColor Green
+    Write-Host "4. Setting up auto-start registry key..." -ForegroundColor Green
     $exePath = "$InstallDir\intelliattend_smartboard.exe"
     $regKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($RegistryPath.Replace("HKCU:\", ""), $true)
     if (-not $regKey) {
         $regKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($RegistryPath.Replace("HKCU:\", ""))
     }
-    $regKey.SetValue($AppName, "`"$exePath`"")
+    $regKey.SetValue($AppName, "`"$exePath`" --intelliattend-autostart")
     $regKey.Close()
-    Write-Host "   Registry key set: $RegistryPath\$AppName = `"$exePath`""
+    Write-Host "   Registry key set: $RegistryPath\$AppName = `"$exePath`" --intelliattend-autostart"
 
-    Write-Host "4. Creating Start Menu shortcut..." -ForegroundColor Green
+    Write-Host "5. Creating Start Menu shortcut..." -ForegroundColor Green
     $WScriptShell = New-Object -ComObject WScript.Shell
     $shortcutPath = "$([Environment]::GetFolderPath('StartMenu'))\Programs\$AppName.lnk"
     $shortcut = $WScriptShell.CreateShortcut($shortcutPath)

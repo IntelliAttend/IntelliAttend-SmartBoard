@@ -28,31 +28,43 @@ void main() {
     channelCalls = [];
     channelArgs = [];
 
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(
-        MethodChannel('window_manager'),
-        (MethodCall methodCall) async {
-          channelCalls.add(methodCall.method);
-          channelArgs.add(methodCall.arguments);
-          switch (methodCall.method) {
-            case 'getBounds':
-              return [0.0, 0.0, 1920.0, 1080.0];
-            case 'isMinimized':
-              return false;
-            case 'isFullScreen':
-              return false;
-            case 'getId':
-              return 12345; // Mock HWND
-            default:
-              return true;
-          }
-        },
-      );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      MethodChannel('window_manager'),
+      (MethodCall methodCall) async {
+        channelCalls.add(methodCall.method);
+        channelArgs.add(methodCall.arguments);
+        switch (methodCall.method) {
+          case 'getBounds':
+            return [0.0, 0.0, 1920.0, 1080.0];
+          case 'isMinimized':
+            return false;
+          case 'isFullScreen':
+            return false;
+          case 'getId':
+            return 12345; // Mock HWND
+          default:
+            return true;
+        }
+      },
+    );
+
+    // Mock the kiosk platform channel so setMode can call
+    // _setBlockSysCommands without throwing MissingPluginException.
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      MethodChannel('com.intelliattend/kiosk'),
+      (MethodCall methodCall) async {
+        return null;
+      },
+    );
   });
 
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(MethodChannel('window_manager'), null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(MethodChannel('com.intelliattend/kiosk'), null);
   });
 
   // ---------------------------------------------------------------------------
@@ -217,13 +229,23 @@ void main() {
       channelArgs.clear();
     });
 
+    // Force-release after each window-listener test to reset KioskService
+    // static state so subsequent tests start with a clean slate.
+    tearDown(() async {
+      await KioskService.forceRelease();
+      channelCalls.clear();
+      channelArgs.clear();
+    });
+
     // ── onWindowRestore ───────────────────────────────────────────────────
     group('onWindowRestore', () {
       test('restores pre-suspend mode when suspended', () async {
         await KioskService.setMode(KioskMode.fullscreen);
         channelCalls.clear();
+        channelArgs.clear();
         await KioskService.setMode(KioskMode.suspended);
         channelCalls.clear();
+        channelArgs.clear();
 
         createListener().onWindowRestore();
         await drainAsync();
@@ -299,23 +321,12 @@ void main() {
       test('blocks minimize during absoluteLocked', () async {
         await KioskService.setMode(KioskMode.absoluteLocked);
         channelCalls.clear();
+        channelArgs.clear();
 
         createListener().onWindowMinimize();
         await drainAsync();
 
-        // Debug: print actual channel state
-        // ignore: avoid_print
-        print('DEBUG channelCalls: $channelCalls');
-        // ignore: avoid_print
-        print('DEBUG channelArgs: $channelArgs');
         final last = channelCalls.lastIndexOf('setFullScreen');
-        // ignore: avoid_print
-        print('DEBUG last: $last');
-        if (last >= 0 && last < channelArgs.length) {
-          // ignore: avoid_print
-          print('DEBUG channelArgs[$last]: ${channelArgs[last]} (${channelArgs[last].runtimeType})');
-        }
-
         expect(channelCalls, containsAllInOrder([
           'setResizable',
           'setAlwaysOnTop',

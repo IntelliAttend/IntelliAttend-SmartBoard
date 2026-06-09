@@ -16,8 +16,9 @@ enum RegistrationStep { idle, otpSent, verifying, completed, error }
 
 class RegistrationProvider extends ChangeNotifier {
   final IAuthRepository _authRepository;
+  final IDeviceRepository _deviceRepository;
 
-  RegistrationProvider(this._authRepository, IDeviceRepository deviceRepository) {
+  RegistrationProvider(this._authRepository, this._deviceRepository) {
     _loadPersistedToken();
   }
 
@@ -89,19 +90,10 @@ class RegistrationProvider extends ChangeNotifier {
       final data = await _authRepository.login(boardId, password);
       if (data != null) {
         _adminEmail = data['admin_email'];
-        final bool isRegistered = data['is_registered'] ?? false;
 
-        if (isRegistered) {
-          if (data['profile'] != null) {
-            await _authRepository.saveRegistration(
-                data['profile'], SessionManager.isar);
-          }
-          _step = RegistrationStep.completed;
-          unawaited(StartupService.register());
-          unawaited(startBackgroundProtocols());
-          Log.i(
-              '[RegistrationProvider] Login successful. Device is already registered.');
-        } else {
+        // Registration state is resolved server-side during initiateRegistration.
+        // Always proceed to initiate — the server will return already_registered
+        // if the board is already bound.  (S5)
           // Trigger OTP Initiation for the newly logged-in board.
           // We handle three outcomes:
           //   • 200 OK      — OTP confirmed sent; show OTP screen
@@ -114,6 +106,23 @@ class RegistrationProvider extends ChangeNotifier {
                 await _authRepository.initiateRegistration(boardId, password);
 
             if (initResult != null) {
+              // S5: Server says board is already registered — skip OTP
+              if (initResult['status'] == 'already_registered') {
+                final profile = Map<String, dynamic>.from(initResult);
+                profile['smart_board_id'] = initResult['smart_board_id'];
+                await _authRepository.saveRegistration(
+                    profile, SessionManager.isar);
+                // Load existing hardware binding from local storage
+                final reg = await _deviceRepository.getRegistration();
+                if (reg != null) {
+                  _step = RegistrationStep.completed;
+                  unawaited(StartupService.register());
+                  unawaited(startBackgroundProtocols());
+                  Log.i(
+                      '[RegistrationProvider] Board already registered. Skipping OTP.');
+                  return;
+                }
+              }
               _step = RegistrationStep.otpSent;
               _startOtpTimer();
               Log.i('[RegistrationProvider] Login successful. OTP sent to $_adminEmail');
@@ -148,7 +157,6 @@ class RegistrationProvider extends ChangeNotifier {
               Log.w('[RegistrationProvider] Metadata pre-warm failed (will retry at bond step): $e');
             }));
           }
-        }
       } else {
         _errorMessage = 'Invalid Board ID or Password.';
       }

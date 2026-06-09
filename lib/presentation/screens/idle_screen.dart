@@ -95,6 +95,14 @@ class _IdleScreenState extends State<IdleScreen>
   /// that already failed. Without this guard, the UI cycles through
   /// PENDING → WARMING UP... → PENDING → WARMING UP... every 10 seconds.
   String? _warmUpTriggeredSlotId;
+
+  /// Holds the pre-allocated session ID received from a T-3 warm-up for the
+  /// UPCOMING class. Kept separate from [_preAllocatedSessionId] so that a
+  /// background warm-up for the upcoming class does not overwrite the current
+  /// class's armed state. Used by [_handleVerifyOtp] when the upcoming class
+  /// becomes the active target.
+  String? _upcomingAllocatedSessionId;
+
   StreamSubscription<dynamic>?
       _preFlightSessionSubscription; // cleanup handle for warm-up
 
@@ -485,6 +493,7 @@ class _IdleScreenState extends State<IdleScreen>
       _t0RestoredSlots.clear();
       _preFlightForceAttemptedSlots.clear();
       _preAllocatedSessionId = null;
+      _upcomingAllocatedSessionId = null;
       _currentSlotWarmUpSlotId = null;
       _warmUpTriggeredSlotId = null;
       _preFlightStatus = PreFlightStatus.none;
@@ -517,6 +526,7 @@ class _IdleScreenState extends State<IdleScreen>
       _preFlightForceAttempted = false;
       _preFlightStatus = PreFlightStatus.none;
       _preAllocatedSessionId = null;
+      _upcomingAllocatedSessionId = null;
       _currentSlotWarmUpSlotId = null;
       _isReadyCheckDone = false;
     }
@@ -545,6 +555,69 @@ class _IdleScreenState extends State<IdleScreen>
       }
     }
 
+    // ── Current Class Warm-Up (always runs, independent of T-3 window) ──────
+    // v6.6 FIX: Moved outside the if/else block so the current active class
+    // gets a warm-up attempt even when a next class is within the T-3 window.
+    // Previously the _bedrockEntry logic was only accessible from the else
+    // branch, so when nextEntry != null && minDiff <= 3 the current class's
+    // warm-up was completely starved, causing it to show PENDING instead of
+    // WARMING UP... / READY.
+    if (_bedrockEntry != null) {
+      final currentSlotId = _bedrockEntry!.slotId;
+      final isBedrockCompleted = _completedSlotIds.contains(currentSlotId);
+      if (isBedrockCompleted) {
+        Log.iOnce('completed_$currentSlotId',
+            '[Idle] Current slot $currentSlotId already completed — skipping auto-show and warm-up.');
+        setState(() {
+          _currentSlotWarmUpSlotId = null;
+          _preAllocatedSessionId = null;
+          _preFlightStatus = PreFlightStatus.none;
+          _forceShowCard = false;
+        });
+      } else {
+        if (!_forceShowCard && mounted) {
+          setState(() {
+            _forceShowCard = true;
+          });
+        }
+
+        if (!_t0RestoredSlots.contains(currentSlotId)) {
+          _t0RestoredSlots.add(currentSlotId);
+          KioskService.setMode(KioskMode.fullscreen);
+          Log.i(
+              '[Idle] T-0 restore: slot $currentSlotId — window brought to foreground.');
+        }
+
+        if (_preFlightStatus != PreFlightStatus.ready &&
+            !_preFlightForceAttemptedSlots.contains(currentSlotId)) {
+          _preFlightForceAttemptedSlots.add(currentSlotId);
+          Log.i('[Idle] T-0 forced warm-up for slot: $currentSlotId');
+          _triggerWarmUp(currentSlotId, force: true);
+        }
+
+        if (_preFlightStatus != PreFlightStatus.ready &&
+            (_errorMessage == null ||
+                !_errorMessage!.contains('Enter PIN'))) {
+          setState(() {
+            _errorMessage = 'System sync delayed. Enter PIN to proceed.';
+          });
+        }
+
+        if (_preAllocatedSessionId == null &&
+            !PreFlightService().isWarmUpExhausted(currentSlotId)) {
+          if (_currentSlotWarmUpSlotId != currentSlotId) {
+            _currentSlotWarmUpSlotId = currentSlotId;
+            Log.i(
+                '[Idle] Current class $currentSlotId in progress — triggering warm-up.');
+            _triggerWarmUp(currentSlotId);
+          }
+        }
+      }
+    } else {
+      _currentSlotWarmUpSlotId = null;
+    }
+
+    // ── Upcoming Class (T-3 window) ─────────────────────────────────────────
     if (nextEntry != null && minDiff <= 3) {
       final isCompleted = _completedSlotIds.contains(nextEntry.slotId);
       if (mounted) {
@@ -559,18 +632,12 @@ class _IdleScreenState extends State<IdleScreen>
           return;
         }
 
-        // Trigger Per-Session Warm-Up — only ONCE per slot so the timer does
-        // NOT re-trigger after a failed API call every 10 seconds (which would
-        // cause the UI to cycle through PENDING → WARMING UP... → PENDING).
-        // Also skip if warm-up retries were already exhausted.
-        if (_preFlightStatus == PreFlightStatus.none &&
-            _warmUpTriggeredSlotId != nextEntry.slotId &&
+        if (_warmUpTriggeredSlotId != nextEntry.slotId &&
             !PreFlightService().isWarmUpExhausted(nextEntry.slotId)) {
           _warmUpTriggeredSlotId = nextEntry.slotId;
           _triggerWarmUp(nextEntry.slotId);
         }
 
-        // v6.1 Phase 3: Silent Health Check at T-1m
         if (minDiff == 1 && !_isReadyCheckDone) {
           _isReadyCheckDone = true;
           ApiService.syncReadyCheck()
@@ -579,8 +646,7 @@ class _IdleScreenState extends State<IdleScreen>
       }
     } else {
       _isReadyCheckDone = false;
-      // Check for Daily Boot (10 min before first class)
-      // Since _todayTimeline is already sorted by academic day in DeviceService, we just check the first item
+
       if (nextEntry != null && minDiff <= 10) {
         final bool isFirstClass = _todayTimeline.isNotEmpty &&
             _todayTimeline.first.slotId == nextEntry.slotId;
@@ -594,137 +660,86 @@ class _IdleScreenState extends State<IdleScreen>
           _showStartingSoon = false;
           _isKeypadExpanded = false;
           _upcomingSlot = null;
-          // Do NOT clear _forceShowCard here — if a class is currently active
-          // (_bedrockEntry != null) the block below re-sets it, causing a
-          // visible flicker at T-0 as the OTP card disappears then reappears.
           _preFlightStatus = PreFlightStatus.none;
           _preFlightForceAttemptedSlots.clear();
           _warmUpTriggeredSlotId = null;
           _preFlightSessionSubscription?.cancel();
-          _preAllocatedSessionId = null; // Clear stale session ID
+          _preAllocatedSessionId = null;
+          _upcomingAllocatedSessionId = null;
         });
-      }
-
-      // Fallback: current class in progress with no session yet.
-      // Does NOT require nextEntry == null — the current slot might be LIVE
-      // even when there are later classes today. The _preAllocatedSessionId
-      // guard prevents redundant triggers.
-      if (_bedrockEntry != null) {
-        final currentSlotId = _bedrockEntry!.slotId;
-        final isBedrockCompleted = _completedSlotIds.contains(currentSlotId);
-        if (isBedrockCompleted) {
-          Log.iOnce('completed_$currentSlotId',
-              '[Idle] Current slot $currentSlotId already completed — skipping auto-show and warm-up.');
-          _currentSlotWarmUpSlotId = null;
-          _preAllocatedSessionId = null; // Clear if completed
-          _preFlightStatus = PreFlightStatus.none;
-        } else {
-          // Auto-show OTP card during active class
-          if (!_forceShowCard && mounted) {
-            setState(() {
-              _forceShowCard = true;
-            });
-          }
-
-          // T-0: restore window from minimized state (idempotent — no-op if
-          // already fullscreen). Only once per slot to avoid spamming calls.
-          if (!_t0RestoredSlots.contains(currentSlotId)) {
-            _t0RestoredSlots.add(currentSlotId);
-            KioskService.setMode(KioskMode.fullscreen);
-            Log.i(
-                '[Idle] T-0 restore: slot $currentSlotId — window brought to foreground.');
-          }
-
-          // T-0: forced warm-up retry if pre-flight failed at T-3
-          // Uses _bedrockEntry directly (not _upcomingSlot) so it fires even
-          // when the reset block has cleared _upcomingSlot.
-          if (_preFlightStatus != PreFlightStatus.ready &&
-              !_preFlightForceAttemptedSlots.contains(currentSlotId)) {
-            _preFlightForceAttemptedSlots.add(currentSlotId);
-            Log.i('[Idle] T-0 forced warm-up for slot: $currentSlotId');
-            _triggerWarmUp(currentSlotId, force: true);
-          }
-
-          // T-0: show sync-delay error if still not ready
-          if (_preFlightStatus != PreFlightStatus.ready &&
-              (_errorMessage == null ||
-                  !_errorMessage!.contains('Enter PIN'))) {
-            setState(() {
-              _errorMessage = 'System sync delayed. Enter PIN to proceed.';
-            });
-          }
-
-          if (_preAllocatedSessionId == null &&
-              !PreFlightService().isWarmUpExhausted(currentSlotId)) {
-            if (_currentSlotWarmUpSlotId != currentSlotId) {
-              _currentSlotWarmUpSlotId = currentSlotId;
-              Log.i(
-                  '[Idle] Current class $currentSlotId in progress — triggering warm-up.');
-              _triggerWarmUp(currentSlotId);
-            }
-          }
-        }
-      } else {
-        _currentSlotWarmUpSlotId = null;
       }
     }
   }
 
   void _triggerWarmUp(String slotId, {bool force = false}) async {
-    try {
-      setState(() {
-        _preFlightStatus = PreFlightStatus.connecting;
-        _errorMessage = null;
-      });
+    // Determine if this warm-up is for the UPCOMING class (T-3 background)
+    // vs the CURRENT class. When it's for the upcoming class, we must NOT
+    // overwrite _preFlightStatus / _preAllocatedSessionId because those
+    // belong to the current class's warm-up state (which may be armed).
+    // Instead the result is stored in _upcomingAllocatedSessionId so it
+    // can be consumed by _handleVerifyOtp when the upcoming class becomes
+    // the active target.
+    final isForUpcoming =
+        slotId == _upcomingSlot?.slotId && slotId != _bedrockEntry?.slotId;
+    final currentId = _bedrockEntry?.slotId;
+    final upcomingId = _upcomingSlot?.slotId;
 
-      // Callback that fires both on the initial call AND on every retry
-      // success inside PreFlightService. This ensures the UI updates to
-      // "ready" when a delayed retry finally succeeds.
+    try {
+      if (!isForUpcoming) {
+        setState(() {
+          _preFlightStatus = PreFlightStatus.connecting;
+          _errorMessage = null;
+        });
+      }
+
       void onWarmUpSuccess(Map<String, dynamic> result) {
         if (!mounted) return;
 
-        // v6.5 FIX: Only accept this success if it's for the currently active slot.
-        // If the user swiped or a new class started while a background retry was
-        // in-flight, the old Session ID must be ignored.
-        final activeSlotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
-        if (slotId != activeSlotId) {
+        if (slotId != currentId && slotId != upcomingId) {
           Log.w(
-              '⚠️ [Idle] Ignoring stale warm-up success for $slotId (active is $activeSlotId)');
+              '⚠️ [Idle] Ignoring stale warm-up success for $slotId (current=$currentId upcoming=$upcomingId)');
           return;
         }
 
         if (result['pre_allocated_session_id'] != null) {
           final pid = result['pre_allocated_session_id']?.toString();
-          setState(() {
-            _preFlightStatus = PreFlightStatus.ready;
-            _preAllocatedSessionId = pid;
-            _errorMessage = null;
-          });
-          Log.i('✅ [Idle] Board ARMED. SessionID in RAM: $pid.');
+          if (isForUpcoming) {
+            setState(() {
+              _upcomingAllocatedSessionId = pid;
+              _errorMessage = null;
+            });
+            Log.i('✅ [Idle] UPCOMING class armed. SessionID: $pid.');
+          } else {
+            setState(() {
+              _preFlightStatus = PreFlightStatus.ready;
+              _preAllocatedSessionId = pid;
+              _errorMessage = null;
+            });
+            Log.i('✅ [Idle] Board ARMED. SessionID in RAM: $pid.');
+          }
         } else {
-          // Failure within PreFlightService (e.g. server offline)
-          setState(() {
-            _preAllocatedSessionId = null;
-            // The onStatusChange callback handles the specific 'none'/'pending' state
-          });
+          if (!isForUpcoming) {
+            setState(() {
+              _preAllocatedSessionId = null;
+            });
+          }
         }
       }
 
-      // v6.4: Handle transition between WARMING UP and PENDING during retry cycle
       void onStatusChange(String status) {
         if (!mounted) return;
 
-        // v6.5 FIX: Only accept status changes for the currently active slot.
-        final activeSlotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
-        if (slotId != activeSlotId) return;
+        if (slotId != currentId && slotId != upcomingId) return;
 
-        setState(() {
-          if (status == 'connecting') {
-            _preFlightStatus = PreFlightStatus.connecting;
-          } else if (status == 'none') {
-            _preFlightStatus = PreFlightStatus.none;
-          }
-        });
+        if (!isForUpcoming) {
+          setState(() {
+            if (status == 'connecting') {
+              _preFlightStatus = PreFlightStatus.connecting;
+            } else if (status == 'none') {
+              _preFlightStatus = PreFlightStatus.none;
+            }
+          });
+        }
       }
 
       final result = force
@@ -750,10 +765,13 @@ class _IdleScreenState extends State<IdleScreen>
               (route) => false,
             );
           }
-        } else {
+        } else if (!isForUpcoming) {
           setState(() => _preFlightStatus = PreFlightStatus.none);
           Log.w(
               '⚠️ [Idle] Pre-flight failed. Faculty may still proceed manually: $e');
+        } else {
+          Log.w(
+              '⚠️ [Idle] Upcoming class warm-up failed. Will retry: $e');
         }
       }
     }
@@ -768,11 +786,12 @@ class _IdleScreenState extends State<IdleScreen>
 
     // Try pre-flight warm-up once if session ID is missing. If retries
     // exhausted, fall back to the session ID from the initiateSession API.
-    if (_preAllocatedSessionId == null) {
+    if (_preAllocatedSessionId == null && _upcomingAllocatedSessionId == null) {
       if (_upcomingSlot != null) {
         _triggerWarmUp(_upcomingSlot!.slotId, force: true);
       }
-      if (_preAllocatedSessionId == null) {
+      if (_preAllocatedSessionId == null &&
+          _upcomingAllocatedSessionId == null) {
         Log.w(
             '[Idle] Pre-flight unavailable. Faculty may proceed with API-provided session ID.');
       }
@@ -799,8 +818,9 @@ class _IdleScreenState extends State<IdleScreen>
 
       // Pre-allocated session ID from warm-up is authoritative if available.
       // Fall back to the API response when retries were exhausted.
-      final sessionId =
-          _preAllocatedSessionId ?? data['session_id']?.toString();
+      final sessionId = _preAllocatedSessionId ??
+          _upcomingAllocatedSessionId ??
+          data['session_id']?.toString();
 
       final sessionSecret = await _deriveSecret(data);
 
@@ -818,6 +838,8 @@ class _IdleScreenState extends State<IdleScreen>
         return;
       }
 
+      final slotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
+
       await SessionManager.saveSession(
         sessionId: sessionId,
         rosterCount: rosterCount,
@@ -826,19 +848,36 @@ class _IdleScreenState extends State<IdleScreen>
         sectionId: sectionId,
         endTime: TimeSyncService.timeNow.add(const Duration(hours: 1)),
       );
+
+      // Persist a CompletedSession record immediately so the slot is marked
+      // as attended even if the app is killed mid-QR-rotation. Prevents a
+      // second OTP entry for the same slot on restart. The actual attendee
+      // count is updated when SummaryScreen._persistCompletedSession runs.
+      if (slotId != null) {
+        await SessionManager.recordCompletedSession(
+          slotId: slotId,
+          sessionId: sessionId,
+          courseName: courseName,
+          facultyName: facultyName,
+          attendeeCount: 0,
+        );
+      }
+
       MetricsCollector().recordSessionStart();
       await SecureStorageService.storeSessionSecret(sessionId, sessionSecret);
 
-      // Session is now live — clear the in-memory pre-allocated ID so it
+      // Session is now live — clear the in-memory pre-allocated IDs so they
       // cannot be accidentally reused if the board returns to IdleScreen.
-      if (mounted) setState(() => _preAllocatedSessionId = null);
+      if (mounted) setState(() {
+        _preAllocatedSessionId = null;
+        _upcomingAllocatedSessionId = null;
+      });
 
       if (mounted) {
         final engine = TotpEngine(
           sessionId: sessionId,
           sessionSecret: sessionSecret,
         );
-        final slotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
         final wsService = WebsocketService(AppConfig.baseUrl);
         // WebSocket kept as a parameter for future use — not actively connecting.
         Navigator.of(context).pushReplacement(

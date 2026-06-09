@@ -77,7 +77,7 @@ class _GlobalKillSwitchState extends State<GlobalKillSwitch> {
       _jCount = 0;
       Log.w(
           '🚨 [GlobalKillSwitch] Emergency exit triggered by keyboard (Ctrl+Shift+JJJ).');
-      KioskService.setMode(KioskMode.fullscreen);
+      KioskService.forceRelease();
       navigatorKey.currentState?.pushAndRemoveUntil(
         MaterialPageRoute(builder: (context) => const BootScreen()),
         (route) => false,
@@ -139,9 +139,20 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 late final IDeviceRepository globalDeviceRepository;
 late final IAuthRepository globalAuthRepository;
 
-void main() {
+void main(List<String> args) {
   runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
+    _traceStartup('main: widgets initialized args=$args');
+
+    final startupGuard = await StartupService.beginLaunch(args);
+    _traceStartup(
+        'startupGuard: crashLoop=${startupGuard.crashLoopDetected} autoStart=${startupGuard.isAutoStart} failures=${startupGuard.failedLaunches}');
+    if (startupGuard.crashLoopDetected) {
+      await _initWindow();
+      await KioskService.forceRelease();
+      runApp(InitFailureScreen(message: startupGuard.message));
+      return;
+    }
 
     // ─── SINGLE INSTANCE GUARD ──────────────────────────────────────────────
     // On Windows, prevent two copies of the board software running side-by-side
@@ -150,10 +161,12 @@ void main() {
     // the process exits, so no stale-lock problem on crash.
     if (!kIsWeb && Platform.isWindows) {
       await _acquireSingleInstanceLock();
+      _traceStartup('singleInstance: acquired');
     }
 
     // ─── TIER 1: Blocking (must pass or app can't run) ──────────────────────
     await _initWindow();
+    _traceStartup('window: initialized');
     // NOTE: Kiosk fullscreen is intentionally deferred until AFTER Tier-1
     // plugin initialization succeeds. If a native C++ exception is thrown
     // during plugin init (e.g. cloud_firestore C++ SDK on Windows), exiting
@@ -162,8 +175,11 @@ void main() {
     // By keeping the window in normal mode during init, any crash during
     // plugin loading allows DWM to recover naturally.
     final status = await _initTier1();
+    _traceStartup(
+        'tier1: firebase=${status.firebase} isar=${status.isar} secure=${status.secureStorage} dotenv=${status.dotenv} fatal=${status.isFatal} errors=${status.errors}');
 
     if (status.isFatal) {
+      await StartupService.markLaunchCompleted();
       runApp(InitFailureScreen(message: status.message));
       return;
     }
@@ -196,10 +212,13 @@ void main() {
 
     // ─── TIER 2: Timeout-aware (fail gracefully, flag degraded) ─────────────
     await _initTier2(status);
+    _traceStartup('tier2: completed');
 
     // ─── Runtime Integrity ──────────────────────────────────────────────────
     final tampered = await _verifyIntegrity();
+    _traceStartup('integrity: tampered=$tampered');
     if (tampered) {
+      await StartupService.markLaunchCompleted();
       runApp(MaterialApp(
         home: Scaffold(
           body: Center(
@@ -221,9 +240,14 @@ void main() {
       return;
     }
 
-    // Integrity and Tiers 1-2 passed — safe to enter fullscreen kiosk mode now.
+    // Integrity and Tiers 1-2 passed — enter soft kiosk mode.
+    // Full hardening (skipTaskbar, preventClose) is deferred to
+    // IdleScreen's post-frame callback AFTER the first frame renders
+    // and background protocols start successfully.  If the app crashes
+    // or freezes during BootScreen / IdleScreen init, the taskbar icon
+    // is still visible and Alt+F4 / right-click → Close works.
     KioskService.enable();
-    await KioskService.setMode(KioskMode.fullscreen, force: true);
+    _traceStartup('kiosk: enabled, fullscreen deferred');
 
     // ─── Create repositories & mount app ────────────────────────────────────
     final apiClient = ApiClient();
@@ -249,8 +273,51 @@ void main() {
 
     // ─── TIER 3: Fire-and-forget (don't block UI) ──────────────────────────
     _initTier3();
+    _traceStartup('tier3: started');
+
+    // ─── Startup watchdog ──────────────────────────────────────────────────
+    // If the app does not reach a stable state (startBackgroundProtocols
+    // completes) within 45 seconds, forcibly release all kiosk constraints
+    // so the user can close the window. This prevents the "frozen fullscreen
+    // with no taskbar icon" scenario even when the event loop is alive but
+    // startup is blocked (e.g. BootScreen stuck on network timeout).
+    _startStartupWatchdog();
   }, (Object error, StackTrace stack) {
     Log.e('🔥 Unhandled application error', error, stack);
+    unawaited(
+        StartupService.markLaunchFailed('Unhandled application error: $error'));
+    _traceStartup('zone error: $error\n$stack');
+    unawaited(KioskService.forceRelease());
+  });
+}
+
+void _traceStartup(String message) {
+  if (kIsWeb || !Platform.isWindows) return;
+  try {
+    final dir = File(Platform.resolvedExecutable).parent;
+    final file = File('${dir.path}\\startup_trace.log');
+    final now = DateTime.now().toIso8601String();
+    file.writeAsStringSync('[$now] $message\n', mode: FileMode.append);
+  } catch (_) {
+    // Startup tracing must never affect app launch.
+  }
+}
+
+/// Tracks whether startup has reached a stable state.  Set to true after
+/// [startBackgroundProtocols] completes.  Reset to false on each full restart.
+bool _startupCompleted = false;
+
+/// Starts a one-shot timer that force-releases kiosk constraints if
+/// [_startupCompleted] is not set within 45 seconds of app launch.
+void _startStartupWatchdog() {
+  Future.delayed(const Duration(seconds: 45), () async {
+    if (!_startupCompleted) {
+      Log.w('🚨 [Startup] Watchdog fired — startup not complete after 45s. '
+          'Releasing kiosk constraints.');
+      _traceStartup('watchdog: startup incomplete after 45s');
+      await StartupService.markLaunchFailed('Startup watchdog timed out.');
+      await KioskService.forceRelease();
+    }
   });
 }
 
@@ -494,6 +561,9 @@ Future<void> startBackgroundProtocols() async {
         '🚀 [Protocols] Background Synchronization, Countdown Watchers, Window Orchestrator, and Time Sync active.');
   } catch (e) {
     Log.e('❌ [Protocols] Background initialization failed: $e');
+  } finally {
+    _startupCompleted = true;
+    await StartupService.markLaunchCompleted();
   }
 }
 
@@ -593,6 +663,12 @@ Future<bool> _verifyIntegrity() async {
 /// Auth is handled entirely via FirebaseRestAuth (Identity Toolkit +
 /// Secure Token API over HTTPS) — see `lib/core/security/firebase_rest_auth.dart`.
 Future<void> _initFirebase() async {
+  if (!kIsWeb && Platform.isWindows) {
+    Log.w(
+        '[Firebase] Native Firebase disabled on Windows; using REST fallback.');
+    return;
+  }
+
   try {
     final options = DefaultFirebaseOptions.fromConfig(
       apiKey: AppConfig.firebaseApiKey,

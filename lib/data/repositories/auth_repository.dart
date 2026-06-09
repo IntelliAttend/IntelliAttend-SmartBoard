@@ -57,16 +57,12 @@ class AuthRepository implements IAuthRepository {
       // This enables .snapshots() streams (billed only on data changes).
       await SecureStorageService.storeBoardCredentials(email, password);
 
-      // We no longer read the `smart_boards` Firestore doc directly. Whether
-      // the device is already registered is now resolved server-side during
-      // `/api/v1/device/register/login` — that response contains the same
-      // profile fields the Firestore doc used to carry. RegistrationProvider
-      // calls initiateRegistration() right after login() and handles the
-      // "already registered" branch from the server response.
+      // Registration state is resolved server-side during
+      // `/api/v1/device/register/login` which returns `already_registered`
+      // if the board is already bound. RegistrationProvider handles this.
       return {
         'uid': uid,
         'email': returnedEmail,
-        'is_registered': false, // server is the source of truth from here on
         'admin_email': returnedEmail ?? 'IT Administrator',
         'profile': null,
       };

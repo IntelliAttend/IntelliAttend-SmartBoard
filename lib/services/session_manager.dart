@@ -113,6 +113,10 @@ class SessionManager {
     return _isar!;
   }
 
+  /// Test-only: inject an Isar instance without going through init().
+  /// Must NOT be used in production code.
+  static set isarOverride(Isar? isar) => _isar = isar;
+
   /// Persists a new active session to the local vault.
   /// Standardizes metadata across all screen callers.
   static Future<void> saveSession({
