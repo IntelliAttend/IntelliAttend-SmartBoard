@@ -184,6 +184,11 @@ class _IdleScreenState extends State<IdleScreen>
       await context.read<IDeviceRepository>().syncTimetable(fullSync: true);
       _refreshTimetable();
       _checkCrashRecovery();
+      // Load completed slots before starting the 10s timer so the first
+      // _checkUpcomingClass() tick sees accurate data. Without this, a
+      // release-build AOT race (debug JIT overhead hides it) leaves the
+      // set empty, causing warm-up + OTP card to show for completed slots.
+      await _loadCompletedSlots();
       _startPreClassTimer();
       _startCinematicMonitor();
       if (AppConfig.enableVideoBreaks) {
@@ -369,7 +374,7 @@ class _IdleScreenState extends State<IdleScreen>
         _bedrockEntry = TimetableCache().currentSlot;
       });
     }
-    _loadCompletedSlots();
+    await _loadCompletedSlots();
   }
 
   Future<void> _loadCompletedSlots() async {
