@@ -723,6 +723,7 @@ class _IdleScreenState extends State<IdleScreen>
           if (isForUpcoming) {
             setState(() {
               _upcomingAllocatedSessionId = pid;
+              _preFlightStatus = PreFlightStatus.ready;
               _errorMessage = null;
             });
             Log.i('✅ [Idle] UPCOMING class armed. SessionID: $pid.');
@@ -735,11 +736,13 @@ class _IdleScreenState extends State<IdleScreen>
             Log.i('✅ [Idle] Board ARMED. SessionID in RAM: $pid.');
           }
         } else {
-          if (!isForUpcoming) {
-            setState(() {
+          setState(() {
+            if (isForUpcoming) {
+              _upcomingAllocatedSessionId = null;
+            } else {
               _preAllocatedSessionId = null;
-            });
-          }
+            }
+          });
         }
       }
 

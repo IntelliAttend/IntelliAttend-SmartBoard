@@ -77,7 +77,7 @@ This runs within ~10 seconds of the class starting (when the *next* class is >5 
 
 **Bugs fixed:** Bug 1
 
-Removed `if (!isForUpcoming)` guards from three locations in `_triggerWarmUp()`.
+Removed `if (!isForUpcoming)` guards from four locations in `_triggerWarmUp()`.
 
 **Before:**
 ```dart
@@ -93,7 +93,36 @@ setState(() { _preFlightStatus = PreFlightStatus.connecting; });
 
 Also removed the guard from `onStatusChange()` callback and the catch block. Now the status correctly transitions **PENDING → WARMING UP... → READY** for both current-class and upcoming-class warm-ups.
 
-### Fix 2: Auto-Show Card at T-3
+### Fix 2: Set `_preFlightStatus` to `ready` on Upcoming Class Warm-Up Success
+
+**Bugs fixed:** Bug 1 (critical gap)
+
+The `onWarmUpSuccess` callback at line 723 had an `if (isForUpcoming)` branch that stored the session ID in `_upcomingAllocatedSessionId` but **never set `_preFlightStatus = PreFlightStatus.ready`**. This meant after the API succeeded, the status stayed on "WARMING UP..." forever (or reverted to "PENDING" on the next status change).
+
+**Before:**
+```dart
+if (isForUpcoming) {
+    setState(() {
+        _upcomingAllocatedSessionId = pid;
+        _errorMessage = null;
+    });
+}
+```
+
+**After:**
+```dart
+if (isForUpcoming) {
+    setState(() {
+        _upcomingAllocatedSessionId = pid;
+        _preFlightStatus = PreFlightStatus.ready;
+        _errorMessage = null;
+    });
+}
+```
+
+Also fixed the null-result `else` branch to clear `_upcomingAllocatedSessionId` for upcoming class (was only clearing `_preAllocatedSessionId` for current class).
+
+### Fix 3: Auto-Show Card at T-3
 
 **Bugs fixed:** Bug 2
 
@@ -109,7 +138,7 @@ final bool showCardContextually = _showStartingSoon || _forceShowCard;
 
 The OTP card now auto-appears when `_showStartingSoon` becomes `true` at T-3.
 
-### Fix 3: Prevent Inactivity Timer From Hiding Card During T-3
+### Fix 4: Prevent Inactivity Timer From Hiding Card During T-3
 
 **Bugs fixed:** Bug 3
 
@@ -125,7 +154,7 @@ if (mounted && _forceShowCard && _bedrockEntry == null && !_showStartingSoon)
 
 The inactivity timer no longer hides the OTP card when a class is starting soon.
 
-### Fix 4: Transfer T-3 Session to Current Class at T-0
+### Fix 5: Transfer T-3 Session to Current Class at T-0
 
 **Bugs fixed:** Edge case
 
@@ -144,7 +173,7 @@ if (_upcomingAllocatedSessionId != null &&
 
 When the upcoming class becomes the active class at T-0, the session ID moves from `_upcomingAllocatedSessionId` (which gets cleared by the cleanup) to `_preAllocatedSessionId` (which is preserved).
 
-### Fix 5: Guard Cleanup Against Active Class
+### Fix 6: Guard Cleanup Against Active Class
 
 **Bugs fixed:** Edge case
 
@@ -185,7 +214,7 @@ User ──→ enters OTP → _preAllocatedSessionId used → session starts
 
 | File | Changes |
 |------|---------|
-| `lib/presentation/screens/idle_screen.dart` | Fixes 1–5 applied (lines 692–696, 737–743, 769–773, 591–601, 677, 948) |
+| `lib/presentation/screens/idle_screen.dart` | Fixes 1–6 applied (lines 692–696, 723–727, 737–743, 769–773, 591–601, 677, 948) |
 
 ## Testing
 
