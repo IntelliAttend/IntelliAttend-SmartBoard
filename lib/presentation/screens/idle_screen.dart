@@ -87,7 +87,6 @@ class _IdleScreenState extends State<IdleScreen>
   String? _preAllocatedSessionId;
   PreFlightStatus _preFlightStatus = PreFlightStatus.none;
   bool _isReadyCheckDone = false;
-  bool _preFlightForceAttempted = false;
   String? _currentSlotWarmUpSlotId;
 
   /// Tracks which upcoming slot's warm-up has been initiated so the 10-second
@@ -502,7 +501,6 @@ class _IdleScreenState extends State<IdleScreen>
       _currentSlotWarmUpSlotId = null;
       _warmUpTriggeredSlotId = null;
       _preFlightStatus = PreFlightStatus.none;
-      _preFlightForceAttempted = false;
       _lastBedrockSlotId = null;
       _refreshTimetable();
       SessionManager.clearCompletedSessionsForDay(_lastQueryDay!);
@@ -528,7 +526,6 @@ class _IdleScreenState extends State<IdleScreen>
       PreFlightService().resetForSlot(bedrockSlotId);
       _lastBedrockSlotId = bedrockSlotId;
       _warmUpTriggeredSlotId = null;
-      _preFlightForceAttempted = false;
       _preFlightStatus = PreFlightStatus.none;
       _preAllocatedSessionId = null;
       _upcomingAllocatedSessionId = null;

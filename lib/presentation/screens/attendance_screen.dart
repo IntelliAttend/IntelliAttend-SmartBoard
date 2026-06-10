@@ -13,7 +13,6 @@ import '../../core/utils/roll_number_utils.dart';
 import '../../core/platform/kiosk_service.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../core/utils/logger.dart';
-import '../../core/config/app_config.dart';
 import '../../main.dart';
 import 'summary_screen.dart';
 import 'boot_screen.dart';
