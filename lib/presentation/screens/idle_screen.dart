@@ -400,7 +400,7 @@ class _IdleScreenState extends State<IdleScreen>
   void _resetInactivityTimer() {
     _inactivityTimer?.cancel();
     _inactivityTimer = Timer(const Duration(minutes: 5), () {
-      if (mounted && _forceShowCard && _bedrockEntry == null) {
+      if (mounted && _forceShowCard && _bedrockEntry == null && !_showStartingSoon) {
         setState(() {
           _forceShowCard = false;
           _isKeypadExpanded = false;
@@ -586,6 +586,20 @@ class _IdleScreenState extends State<IdleScreen>
           });
         }
 
+        // Transfer T-3 pre-allocated session to current class if the upcoming
+        // class (which was warmed up) is now the active class. This prevents
+        // the cleanup (minDiff > 5) from losing the session ID.
+        if (_upcomingAllocatedSessionId != null &&
+            _upcomingSlot?.slotId == currentSlotId) {
+          setState(() {
+            _preAllocatedSessionId = _upcomingAllocatedSessionId;
+            _upcomingAllocatedSessionId = null;
+            _preFlightStatus = PreFlightStatus.ready;
+          });
+          Log.i(
+              '[Idle] Transferred T-3 session to current class $currentSlotId');
+        }
+
         if (!_t0RestoredSlots.contains(currentSlotId)) {
           _t0RestoredSlots.add(currentSlotId);
           KioskService.setMode(KioskMode.fullscreen);
@@ -660,7 +674,7 @@ class _IdleScreenState extends State<IdleScreen>
         }
       }
 
-      if (mounted && _showStartingSoon && minDiff > 5) {
+      if (mounted && _showStartingSoon && minDiff > 5 && _bedrockEntry == null) {
         setState(() {
           _showStartingSoon = false;
           _isKeypadExpanded = false;
@@ -690,12 +704,10 @@ class _IdleScreenState extends State<IdleScreen>
     final upcomingId = _upcomingSlot?.slotId;
 
     try {
-      if (!isForUpcoming) {
-        setState(() {
-          _preFlightStatus = PreFlightStatus.connecting;
-          _errorMessage = null;
-        });
-      }
+      setState(() {
+        _preFlightStatus = PreFlightStatus.connecting;
+        _errorMessage = null;
+      });
 
       void onWarmUpSuccess(Map<String, dynamic> result) {
         if (!mounted) return;
@@ -736,15 +748,13 @@ class _IdleScreenState extends State<IdleScreen>
 
         if (slotId != currentId && slotId != upcomingId) return;
 
-        if (!isForUpcoming) {
-          setState(() {
-            if (status == 'connecting') {
-              _preFlightStatus = PreFlightStatus.connecting;
-            } else if (status == 'none') {
-              _preFlightStatus = PreFlightStatus.none;
-            }
-          });
-        }
+        setState(() {
+          if (status == 'connecting') {
+            _preFlightStatus = PreFlightStatus.connecting;
+          } else if (status == 'none') {
+            _preFlightStatus = PreFlightStatus.none;
+          }
+        });
       }
 
       final result = force
@@ -770,13 +780,10 @@ class _IdleScreenState extends State<IdleScreen>
               (route) => false,
             );
           }
-        } else if (!isForUpcoming) {
+        } else {
           setState(() => _preFlightStatus = PreFlightStatus.none);
           Log.w(
               '⚠️ [Idle] Pre-flight failed. Faculty may still proceed manually: $e');
-        } else {
-          Log.w(
-              '⚠️ [Idle] Upcoming class warm-up failed. Will retry: $e');
         }
       }
     }
@@ -950,9 +957,9 @@ class _IdleScreenState extends State<IdleScreen>
         AppColors.textSecondaryLight, AppColors.textSecondaryDark, morph)!;
 
     // Context-Aware Visibility:
-    // 1. OTP card only appears when user taps the unlocked lock icon (at T-3).
+    // 1. OTP card auto-appears at T-3 (class starting soon) or when user taps the lock.
     // 2. Otherwise, show the lock symbol (unlocked at T-3, locked otherwise).
-    final bool showCardContextually = _forceShowCard;
+    final bool showCardContextually = _showStartingSoon || _forceShowCard;
 
     final cardOpacity = showCardContextually ? 1.0 : 0.0;
 
@@ -1507,6 +1514,21 @@ class _IdleScreenState extends State<IdleScreen>
     );
   }
 
+  Widget _buildTimelineSlot(int index) {
+    final entry = _todayTimeline[index];
+    final live = entry.slotId == _bedrockEntry?.slotId;
+    Log.iOnChange('timeline_strip_$index', live,
+        '[TimelineStrip] idx=$index slot=${entry.slotId} bedrock.slot=${_bedrockEntry?.slotId} isLive=$live');
+    final isCompleted = _completedSlotIds.contains(entry.slotId);
+    final isFailed = _failedSlotIds.contains(entry.slotId);
+    return TimelineSlot(
+      entry: entry,
+      isLive: live,
+      isCompleted: isCompleted,
+      isFailed: isFailed,
+    );
+  }
+
   Widget _buildFooter(Color bgColor, Color primaryColor, Color secondaryColor,
       bool isVideoActive) {
     return Container(
@@ -1534,23 +1556,19 @@ class _IdleScreenState extends State<IdleScreen>
                     ),
                   )
                 : Row(
-                    children: List.generate(_todayTimeline.length, (index) {
-                      final entry = _todayTimeline[index];
-                      final live = entry.slotId == _bedrockEntry?.slotId;
-                      Log.iOnChange('timeline_strip_$index', live,
-                          '[TimelineStrip] idx=$index slot=${entry.slotId} bedrock.slot=${_bedrockEntry?.slotId} isLive=$live');
-                      final isCompleted =
-                          _completedSlotIds.contains(entry.slotId);
-                      final isFailed = _failedSlotIds.contains(entry.slotId);
-                      return Expanded(
-                        child: TimelineSlot(
-                          entry: entry,
-                          isLive: live,
-                          isCompleted: isCompleted,
-                          isFailed: isFailed,
+                    children: [
+                      for (int i = 0; i < _todayTimeline.length; i++) ...[
+                        if (i > 0)
+                          Container(
+                            width: 1,
+                            height: 30,
+                            color: secondaryColor.withValues(alpha: 0.1),
+                          ),
+                        Expanded(
+                          child: _buildTimelineSlot(i),
                         ),
-                      );
-                    }),
+                      ],
+                    ],
                   ),
           ),
           const SizedBox(width: 40),
