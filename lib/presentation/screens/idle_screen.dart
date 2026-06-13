@@ -35,8 +35,10 @@ import '../../services/pre_flight_service.dart';
 import '../../services/totp_engine.dart';
 import '../../services/websocket_service.dart';
 import '../../core/platform/kiosk_service.dart';
+import '../../core/platform/window_orchestrator_service.dart';
 
-enum PreFlightStatus { none, connecting, ready }
+enum PreFlightStatus { none, connecting, ready, pending }
+enum CooldownState { none, locked }
 
 class IdleScreen extends StatefulWidget {
   final DeviceRegistration registration;
@@ -127,10 +129,23 @@ class _IdleScreenState extends State<IdleScreen>
   /// Server time (epoch ms) captured from the last successful warm-up response.
   DateTime? _serverWarmUpTime;
 
+  /// 2-minute hard cooldown state machine between classes.
+  /// Prevents class-overlap data contamination and provides a clean boundary.
+  CooldownState _cooldownState = CooldownState.none;
+  int _cooldownSecondsRemaining = 120;
+  Timer? _cooldownTimer;
+
   // Listens to the global TimetableCache — every Firestore snapshot update
   // triggers _onTimetableCacheChanged which re-reads today's entries from RAM
   // and calls setState, keeping the entire idle UI in sync without polling.
+  DateTime? _lastCacheUpdate;
   void _onTimetableCacheChanged() {
+    final now = DateTime.now();
+    if (_lastCacheUpdate != null &&
+        now.difference(_lastCacheUpdate!).inMilliseconds < 1000) {
+      return;
+    }
+    _lastCacheUpdate = now;
     if (mounted) {
       setState(() {
         _todayTimeline = TimetableCache().todayTimeline;
@@ -156,7 +171,7 @@ class _IdleScreenState extends State<IdleScreen>
     _cinematicController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 10),
-    )..addListener(() => setState(() {}));
+    );
 
     // Load timetable from Isar + subscribe to in-memory cache for live updates.
     // The cache is the single source of truth for the current slot — the local
@@ -403,6 +418,7 @@ class _IdleScreenState extends State<IdleScreen>
     _otpController.dispose();
     _inactivityTimer?.cancel();
     _preClassTimer?.cancel();
+    _cooldownTimer?.cancel();
     _preFlightSessionSubscription?.cancel();
     _cinematicController.dispose();
     super.dispose();
@@ -538,36 +554,96 @@ class _IdleScreenState extends State<IdleScreen>
     if (bedrockSlotId != null && bedrockSlotId != _lastBedrockSlotId) {
       Log.i(
           '[Idle] Slot transition detected: $_lastBedrockSlotId → $bedrockSlotId');
+
+      // Step 1: Transfer any T-3 session to current class BEFORE clearing
+      // tracking registers. This prevents a successful T-3 warm-up from being
+      // dropped when the slot boundary crosses T-0.
+      if (_preAllocatedSessionId == null &&
+          _upcomingAllocatedSessionId != null &&
+          _upcomingSlot?.slotId == bedrockSlotId) {
+        _preAllocatedSessionId = _upcomingAllocatedSessionId;
+        _upcomingAllocatedSessionId = null;
+        _preFlightStatus = PreFlightStatus.ready;
+        _completedWarmUpSlots.add(bedrockSlotId);
+        Log.i('[Idle] Transferred T-3 session to current slot $bedrockSlotId during transition.');
+      }
+
+      // Step 2: Reset tracking registers for the NEXT upcoming class.
+      // This runs after the transfer so the guard at T-0 warm-up check sees
+      // _preAllocatedSessionId != null and does NOT re-trigger warm-up.
       PreFlightService().resetForSlot(bedrockSlotId);
       _lastBedrockSlotId = bedrockSlotId;
       _warmUpTriggeredSlotId = null;
       _completedWarmUpSlots.clear();
-      _preFlightStatus = PreFlightStatus.none;
       _preFlightError = null;
       _forceShowCard = false;
-      _preAllocatedSessionId = null;
-      _upcomingAllocatedSessionId = null;
       _isReadyCheckDone = false;
+
+      // Step 3: If no session was transferred, enter PENDING state so the
+      // OTP card shows "PENDING" instead of silently staying at none.
+      if (_preAllocatedSessionId == null) {
+        _upcomingAllocatedSessionId = null;
+        _preFlightStatus = PreFlightStatus.pending;
+      }
     }
     if (bedrockSlotId == null && _lastBedrockSlotId != null) {
-      Log.i('[Idle] Class ended: $_lastBedrockSlotId → (break) — cleaning up session state.');
+      Log.i('[Idle] Class ended: $_lastBedrockSlotId → (break).');
+
+      // Immediate cleanup: subscriptions + service state.
+      final endedSlotId = _lastBedrockSlotId!;
       PreFlightService().resetForSlot('');
       _lastBedrockSlotId = null;
-      _warmUpTriggeredSlotId = null;
-      _completedWarmUpSlots.clear();
-      _preFlightStatus = PreFlightStatus.none;
-      _preFlightError = null;
-      _forceShowCard = false;
-      _showStartingSoon = false;
-      _isKeypadExpanded = false;
-      _upcomingSlot = null;
-      _preAllocatedSessionId = null;
-      _upcomingAllocatedSessionId = null;
       _preFlightSessionSubscription?.cancel();
+
+      // Start 2-minute hard cooldown only if attendance was NOT taken.
+      // If attendance WAS taken, skip the freeze — the next 10s tick handles
+      // the transition naturally. The _cooldownState guard also prevents
+      // double-firing if T-5 already started the cooldown proactively.
+      if (!widget.completedSession && _cooldownState == CooldownState.none) {
+        if (!WindowOrchestratorService().hasTakenAttendance(endedSlotId)) {
+          _startCooldown();
+        }
+      }
     }
     if (bedrockSlotId == null) {
       _lastBedrockSlotId = null;
     }
+
+    // ── T-5 proactive cooldown ──────────────────────────────────────────────
+    // If the current class is within 5 minutes of its scheduled end time and
+    // attendance has NOT been taken locally, start the 2-minute hard cooldown
+    // immediately. This guarantees the freeze completes BEFORE the next class's
+    // T-3 window (e.g., 09:55-09:57 for a 10:00 class), eliminating the
+    // back-to-back overlap trap where the cooldown would otherwise block the
+    // incoming class's T-0.
+    //
+    // Guard: if _preAllocatedSessionId is non-null, the user may be mid-OTP-
+    // entry on the IdleScreen card. We skip the proactive cooldown and let the
+    // natural class-end handler (line 582) decide. The professor gets until the
+    // scheduled end time to submit; if they succeed, markAttendanceTaken is
+    // called and no cooldown fires at all.
+    if (_bedrockEntry != null &&
+        _cooldownState != CooldownState.locked &&
+        _preAllocatedSessionId == null) {
+      final endParts = _bedrockEntry!.endTime.split(':');
+      if (endParts.length == 2) {
+        final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+        final diffToEnd = endMinutes - currentMinutes;
+        if (diffToEnd <= 5 && diffToEnd > 0) {
+          final slotId = _bedrockEntry!.slotId;
+          if (!WindowOrchestratorService().hasTakenAttendance(slotId)) {
+            Log.w('[Idle] T-5 proactive cooldown for slot $slotId — attendance not taken.');
+            _startCooldown();
+            return;
+          }
+        }
+      }
+    }
+
+    // ── Cooldown guard ─────────────────────────────────────────────────────
+    // During the 2-minute hard freeze, all T-3/T-0 processing is skipped.
+    // After cooldown completes, _evaluateNextClass handles the next-link chain.
+    if (_cooldownState == CooldownState.locked) return;
 
     TimetableEntry? nextEntry;
     int minDiff = 9999;
@@ -693,7 +769,8 @@ class _IdleScreenState extends State<IdleScreen>
 
       if (mounted && minDiff > 5 && _bedrockEntry == null) {
         final shouldReset = _preFlightStatus != PreFlightStatus.ready &&
-            _preFlightStatus != PreFlightStatus.connecting;
+            _preFlightStatus != PreFlightStatus.connecting &&
+            _preFlightStatus != PreFlightStatus.pending;
         if (shouldReset) {
           setState(() {
             _showStartingSoon = false;
@@ -709,6 +786,99 @@ class _IdleScreenState extends State<IdleScreen>
           });
         }
       }
+    }
+  }
+
+  // ── 2-Minute Hard Cooldown ────────────────────────────────────────────────
+
+  /// Enters the locked cooldown state and starts a 120-second countdown.
+  /// The cooldown prevents class-overlap data contamination by deferring
+  /// the full cache cleanse to [_onCooldownComplete].
+  void _startCooldown() {
+    _cooldownState = CooldownState.locked;
+    _cooldownSecondsRemaining = 120;
+    _cooldownTimer?.cancel();
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _cooldownSecondsRemaining--;
+      if (_cooldownSecondsRemaining <= 0) {
+        _cooldownTimer?.cancel();
+        _onCooldownComplete();
+      }
+      if (mounted) setState(() {});
+    });
+    if (mounted) setState(() {});
+    Log.i('[Idle] 2-min cooldown started.');
+  }
+
+  /// Called when the 120-second cooldown expires.
+  /// Performs full cache cleanse then immediately evaluates the next class.
+  void _onCooldownComplete() {
+    _fullCleanup();
+    _evaluateNextClass();
+    if (mounted) setState(() {});
+    Log.i('[Idle] Cooldown complete. Cache cleansed, next-link evaluated.');
+  }
+
+  /// Full cache cleanse — wipes all warm-up state, session IDs, and tracking
+  /// registers so the next class starts with a clean slate.
+  void _fullCleanup() {
+    _warmUpTriggeredSlotId = null;
+    _completedWarmUpSlots.clear();
+    _preFlightStatus = PreFlightStatus.none;
+    _preFlightError = null;
+    _forceShowCard = false;
+    _showStartingSoon = false;
+    _isKeypadExpanded = false;
+    _upcomingSlot = null;
+    _preAllocatedSessionId = null;
+    _upcomingAllocatedSessionId = null;
+    _cooldownState = CooldownState.none;
+    _otpController.clear();
+  }
+
+  /// Evaluates the next upcoming class after cooldown and immediately enters
+  /// the T-3 window if within range (next-link chaining).
+  void _evaluateNextClass() {
+    if (_todayTimeline.isEmpty) return;
+    final now = TimeSyncService.timeNow;
+    final currentMinutes = now.hour * 60 + now.minute;
+
+    TimetableEntry? nextEntry;
+    int minDiff = 9999;
+
+    for (final entry in _todayTimeline) {
+      final parts = entry.startTime.split(':');
+      if (parts.length != 2) continue;
+      int entryMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
+      int diff = entryMinutes - currentMinutes;
+      if (diff < _midnightWrapThreshold) diff += _minutesPerDay;
+      if (diff > 0 && diff < minDiff) {
+        minDiff = diff;
+        nextEntry = entry;
+      }
+    }
+
+    if (nextEntry == null) return;
+    Log.i('[Idle] Next-link: next class "${nextEntry.courseName}" starts in $minDiff min.');
+
+    // T-10 daily boot (first class only)
+    if (minDiff <= 10) {
+      final bool isFirstClass = _todayTimeline.isNotEmpty &&
+          _todayTimeline.first.slotId == nextEntry.slotId;
+      if (isFirstClass) {
+        PreFlightService().runDailyBoot();
+      }
+    }
+
+    // T-3 window: set up upcoming slot and trigger warm-up immediately
+    if (minDiff <= 3 && !_completedSlotIds.contains(nextEntry.slotId)) {
+      _upcomingSlot = nextEntry;
+      _showStartingSoon = true;
+      if (!PreFlightService().isWarmUpExhausted(nextEntry.slotId)) {
+        _warmUpTriggeredSlotId = nextEntry.slotId;
+        _triggerWarmUp(nextEntry.slotId);
+      }
+      Log.i('[Idle] Next-link: entering T-3 window for slot ${nextEntry.slotId}.');
     }
   }
 
@@ -932,6 +1102,7 @@ class _IdleScreenState extends State<IdleScreen>
           facultyName: facultyName,
           attendeeCount: 0,
         );
+        WindowOrchestratorService().markAttendanceTaken(slotId);
       }
 
       MetricsCollector().recordSessionStart();
@@ -992,6 +1163,11 @@ class _IdleScreenState extends State<IdleScreen>
 
   @override
   Widget build(BuildContext context) {
+    // 2-minute hard cooldown overlay — no interactivity until it expires.
+    if (_cooldownState == CooldownState.locked) {
+      return _buildCooldownScreen();
+    }
+
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final size = MediaQuery.of(context).size;
     final isBreak = _isAnyBreak();
@@ -1001,135 +1177,137 @@ class _IdleScreenState extends State<IdleScreen>
     // Theme Calculation Logic:
     // If showVideo is false OR session is being initiated (forceShowCard), we are "Blindly White"
     final bool isBlindlyWhite = !showVideo || _forceShowCard;
-    final morph = isBlindlyWhite ? 0.0 : _cinematicController.value;
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: AnimatedBuilder(
+        animation: _cinematicController,
+        builder: (context, _) {
+          final morph = isBlindlyWhite ? 0.0 : _cinematicController.value;
 
-    final overlayColor = Color.lerp(Colors.white.withValues(alpha: 0.1),
-        Colors.black.withValues(alpha: 0.4), morph)!;
+          final overlayColor = Color.lerp(Colors.white.withValues(alpha: 0.1),
+              Colors.black.withValues(alpha: 0.4), morph)!;
 
-    final headerFooterColor =
-        Color.lerp(Colors.white, AppColors.bgDark, morph)!;
+          final headerFooterColor =
+              Color.lerp(Colors.white, AppColors.bgDark, morph)!;
 
-    final primaryTextColor =
-        Color.lerp(AppColors.textPrimaryLight, Colors.white, morph)!;
+          final primaryTextColor =
+              Color.lerp(AppColors.textPrimaryLight, Colors.white, morph)!;
 
-    final secondaryTextColor = Color.lerp(
-        AppColors.textSecondaryLight, AppColors.textSecondaryDark, morph)!;
+          final secondaryTextColor = Color.lerp(
+              AppColors.textSecondaryLight, AppColors.textSecondaryDark, morph)!;
 
-    // Context-Aware Visibility:
-    // 1. OTP card auto-appears at T-3 (class starting soon) or when user taps the lock.
-    // 2. Otherwise, show the lock symbol (unlocked at T-3, locked otherwise).
-    final bool showCardContextually = _showStartingSoon || _forceShowCard;
+          final bool showCardContextually = _forceShowCard || _bedrockEntry != null;
 
-    final cardOpacity = showCardContextually ? 1.0 : 0.0;
+          final cardOpacity = showCardContextually ? 1.0 : 0.0;
+          final lockOpacity = showCardContextually ? 0.0 : 1.0;
 
-    final lockOpacity = showCardContextually ? 0.0 : 1.0;
+          List<Widget> stackChildren = [];
 
-    List<Widget> stackChildren = [];
-
-    // 1. Background
-    if (showVideo) {
-      stackChildren.add(SizedBox.expand(
-        child: FittedBox(
-          fit: BoxFit.cover,
-          child: SizedBox(
-            width: _videoController!.value.size.width,
-            height: _videoController!.value.size.height,
-            child: VideoPlayer(_videoController!),
-          ),
-        ),
-      ));
-    } else {
-      stackChildren
-          .add(Container(color: isDark ? AppColors.bgDark : AppColors.bgLight));
-    }
-
-    // 2. Overlay
-    if (showVideo) {
-      stackChildren
-          .add(Container(decoration: BoxDecoration(color: overlayColor)));
-    }
-
-    // 3. Logo
-    if (!showVideo) {
-      stackChildren.add(Opacity(
-        opacity: isDark ? 0.05 : 0.03,
-        child: Center(
-          child: Image.asset(
-            'assets/background.png',
-            width: size.width * 0.6,
-            fit: BoxFit.contain,
-          ),
-        ),
-      ));
-    }
-
-    // 4. Main UI
-    stackChildren.add(Column(
-      children: [
-        _buildTopHeader(primaryTextColor, headerFooterColor, showVideo),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 80),
-            child: Row(
-              children: [
-                Expanded(
-                  flex: 6,
-                  child: _buildCourseInfo(
-                      primaryTextColor, secondaryTextColor, showVideo),
+          // 1. Background
+          if (showVideo) {
+            stackChildren.add(SizedBox.expand(
+              child: FittedBox(
+                fit: BoxFit.cover,
+                child: SizedBox(
+                  width: _videoController!.value.size.width,
+                  height: _videoController!.value.size.height,
+                  child: VideoPlayer(_videoController!),
                 ),
-                const SizedBox(width: 40),
-                Expanded(
-                  flex: 4,
-                  child: Stack(
-                    alignment: Alignment.centerRight,
+              ),
+            ));
+          } else {
+            stackChildren.add(
+                Container(color: isDark ? AppColors.bgDark : AppColors.bgLight));
+          }
+
+          // 2. Overlay
+          if (showVideo) {
+            stackChildren.add(
+                Container(decoration: BoxDecoration(color: overlayColor)));
+          }
+
+          // 3. Logo
+          if (!showVideo) {
+            stackChildren.add(Opacity(
+              opacity: isDark ? 0.05 : 0.03,
+              child: Center(
+                child: Image.asset(
+                  'assets/background.png',
+                  width: size.width * 0.6,
+                  fit: BoxFit.contain,
+                ),
+              ),
+            ));
+          }
+
+          // 4. Main UI
+          stackChildren.add(Column(
+            children: [
+              _buildTopHeader(primaryTextColor, headerFooterColor, showVideo),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 80),
+                  child: Row(
                     children: [
-                      Opacity(
-                        opacity: cardOpacity,
-                        child: IgnorePointer(
-                          ignoring: cardOpacity < 0.1,
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 320),
-                            child: _buildAuthCard(
-                                isBlindlyWhite
-                                    ? Colors.white
-                                    : headerFooterColor,
-                                isBlindlyWhite
-                                    ? AppColors.textPrimaryLight
-                                    : primaryTextColor,
-                                isBlindlyWhite
-                                    ? AppColors.textSecondaryLight
-                                    : secondaryTextColor,
-                                showVideo && !isBlindlyWhite),
-                          ),
-                        ),
+                      Expanded(
+                        flex: 6,
+                        child: _buildCourseInfo(
+                            primaryTextColor, secondaryTextColor, showVideo),
                       ),
-                      Opacity(
-                        opacity: lockOpacity,
-                        child: IgnorePointer(
-                          ignoring: lockOpacity < 0.1,
-                          child: _buildHangingLock(primaryTextColor),
+                      const SizedBox(width: 40),
+                      Expanded(
+                        flex: 4,
+                        child: Stack(
+                          alignment: Alignment.centerRight,
+                          children: [
+                            Opacity(
+                              opacity: cardOpacity,
+                              child: IgnorePointer(
+                                ignoring: cardOpacity < 0.1,
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 320),
+                                  child: _buildAuthCard(
+                                      isBlindlyWhite
+                                          ? Colors.white
+                                          : headerFooterColor,
+                                      isBlindlyWhite
+                                          ? AppColors.textPrimaryLight
+                                          : primaryTextColor,
+                                      isBlindlyWhite
+                                          ? AppColors.textSecondaryLight
+                                          : secondaryTextColor,
+                                      showVideo && !isBlindlyWhite),
+                                ),
+                              ),
+                            ),
+                            Opacity(
+                              opacity: lockOpacity,
+                              child: IgnorePointer(
+                                ignoring: lockOpacity < 0.1,
+                                child: _buildHangingLock(primaryTextColor),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
                 ),
-              ],
-            ),
-          ),
-        ),
-        _buildFooter(
-            headerFooterColor, primaryTextColor, secondaryTextColor, showVideo),
-      ],
-    ));
+              ),
+              _buildFooter(
+                  headerFooterColor, primaryTextColor, secondaryTextColor,
+                  showVideo),
+            ],
+          ));
 
-    // 5. Banner
-    if (_showStartingSoon && _upcomingSlot != null) {
-      stackChildren.add(_buildStartingSoonBanner());
-    }
+          // 5. Banner
+          if (_showStartingSoon && _upcomingSlot != null) {
+            stackChildren.add(_buildStartingSoonBanner());
+          }
 
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: Stack(children: stackChildren),
+          return Stack(children: stackChildren);
+        },
+      ),
     );
   }
 
@@ -1178,6 +1356,8 @@ class _IdleScreenState extends State<IdleScreen>
         return 'WARMING UP...';
       case PreFlightStatus.ready:
         return 'READY';
+      case PreFlightStatus.pending:
+        return 'PENDING';
     }
   }
 
@@ -1798,7 +1978,7 @@ class _IdleScreenState extends State<IdleScreen>
     final activeSlotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
     final isSlotCompleted =
         activeSlotId != null && _completedSlotIds.contains(activeSlotId);
-    final isUnlocked = _showStartingSoon && !isSlotCompleted;
+    final isUnlocked = _showStartingSoon && !isSlotCompleted && _upcomingAllocatedSessionId != null;
 
     String label;
     if (isSlotCompleted) {
@@ -1873,6 +2053,58 @@ class _IdleScreenState extends State<IdleScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Full-screen overlay shown during the 2-minute hard cooldown between
+  /// classes. Displays a countdown timer and a locked icon. No interactive
+  /// elements — all input is blocked until the cooldown expires.
+  Widget _buildCooldownScreen() {
+    final minutes = (_cooldownSecondsRemaining / 60).floor();
+    final seconds = _cooldownSecondsRemaining % 60;
+    return Scaffold(
+      backgroundColor: AppColors.bgDark,
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.05),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.lock_outline, size: 48, color: Colors.white38),
+            ),
+            const SizedBox(height: 32),
+            const Text(
+              'SESSION LOCKED',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 6,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'System reset in progress. Please wait...',
+              style: TextStyle(color: Colors.white24, fontSize: 14, letterSpacing: 1),
+            ),
+            const SizedBox(height: 48),
+            Text(
+              '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}',
+              style: GoogleFonts.robotoMono(
+                textStyle: const TextStyle(
+                  color: Colors.white38,
+                  fontSize: 64,
+                  fontWeight: FontWeight.w300,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -1,10 +1,8 @@
 import 'dart:async';
 import 'package:window_manager/window_manager.dart';
-import '../config/firestore_schema.dart';
 import 'kiosk_service.dart';
 import 'notification_service.dart';
 import '../../services/time_sync_service.dart';
-import '../../services/firestore_rest_client.dart';
 import '../utils/logger.dart';
 import '../../main.dart';
 
@@ -28,6 +26,21 @@ class WindowOrchestratorService {
   final Set<String> _t0FiredSlots = {};
   final Set<String> _backPressureFiredSlots = {};
   final Set<String> _endOfClassFiredSlots = {};
+
+  /// Tracks which slots have had attendance completed locally.
+  /// Replaces Firestore queries in the T-5 check — zero network cost.
+  final Set<String> _attendanceTakenSlots = {};
+
+  /// Called by IdleScreen when OTP submission succeeds.
+  /// Marks the slot as attended so the T-5 warning is suppressed.
+  void markAttendanceTaken(String slotId) {
+    _attendanceTakenSlots.add(slotId);
+    Log.i('[Orchestrator] Attendance marked for slot $slotId');
+  }
+
+  /// Returns true if attendance has been marked for the given slot.
+  /// Used by IdleScreen to decide whether to skip the 2-min cooldown.
+  bool hasTakenAttendance(String slotId) => _attendanceTakenSlots.contains(slotId);
 
   void start() {
     _monitorTimer?.cancel();
@@ -141,6 +154,7 @@ class WindowOrchestratorService {
       }
 
       // ── End-of-class check (T-5, no attendance taken) ────────────────────
+      // Uses local _attendanceTakenSlots set — zero Firestore queries.
       if (currentSlot != null) {
         final slotEnd = _parseTime(currentSlot.endTime, now);
         final diffSec = slotEnd.difference(now).inSeconds;
@@ -148,40 +162,15 @@ class WindowOrchestratorService {
 
         if (diffSec <= 300 && diffSec > 0 && !_endOfClassFiredSlots.contains(endKey)) {
           _endOfClassFiredSlots.add(endKey);
-          try {
-            final registration = await globalDeviceRepository.getRegistration();
-            if (registration != null) {
-              final boardId = registration.smartBoardId;
-              final activeSessions = await FirestoreRestClient.runQuery(
-                collection: FirestoreSchema.activeSessions,
-                where: {FirestoreSchema.fieldSmartBoardId: boardId, FirestoreSchema.fieldStatus: FirestoreSchema.statusActive},
-                limit: 1,
-              );
 
-              bool attendeeFound = false;
-              if (activeSessions.isNotEmpty) {
-                final sessionId = activeSessions.first[FirestoreSchema.fieldDocId]?.toString();
-                if (sessionId != null) {
-                  final attendees = await FirestoreRestClient.runQuery(
-                    collection: FirestoreSchema.attendees,
-                    where: {FirestoreSchema.fieldSessionId: sessionId},
-                    limit: 1,
-                  );
-                  attendeeFound = attendees.isNotEmpty;
-                }
-              }
-
-              if (!attendeeFound) {
-                Log.w('🚨 [Orchestrator] Class ending in ~${diffSec ~/ 60} min — No attendance taken. Restoring window.');
-                await KioskService.setMode(KioskMode.fullscreen);
-                await NotificationService.showWarning(
-                  'Attendance Required',
-                  '"${currentSlot.courseName}" ends in ~${diffSec ~/ 60} minutes. Please take attendance now.',
-                );
-              }
-            }
-          } catch (e) {
-            Log.w('[Orchestrator] End-of-class check failed: $e');
+          final attendanceTaken = _attendanceTakenSlots.contains(currentSlot.slotId);
+          if (!attendanceTaken) {
+            Log.w('🚨 [Orchestrator] Class ending in ~${diffSec ~/ 60} min — No attendance taken (local check). Restoring window.');
+            await KioskService.setMode(KioskMode.fullscreen);
+            await NotificationService.showWarning(
+              'Attendance Required',
+              '"${currentSlot.courseName}" ends in ~${diffSec ~/ 60} minutes. Please take attendance now.',
+            );
           }
         }
       }
