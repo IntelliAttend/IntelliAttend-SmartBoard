@@ -38,8 +38,9 @@ bool FlutterWindow::OnCreate() {
   flutter_controller_->ForceRedraw();
 
   // ── Register kiosk platform channel ─────────────────────────────────────
-  // Listens for setBlockSysCommands from Dart so WM_SYSCOMMAND SC_CLOSE
-  // absorption can be toggled based on kiosk hardening state.
+  // Listens for setBlockSysCommands from Dart so WM_CLOSE and
+  // WM_SYSCOMMAND SC_CLOSE/SC_MAXIMIZE absorption can be toggled based
+  // on kiosk hardening state.
   kiosk_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
       flutter_controller_->engine()->messenger(),
       "com.intelliattend/kiosk",
@@ -51,6 +52,11 @@ bool FlutterWindow::OnCreate() {
         if (call.method_name() == "setBlockSysCommands") {
           if (call.arguments() && std::holds_alternative<bool>(*call.arguments())) {
             block_sys_commands_ = std::get<bool>(*call.arguments());
+          }
+          result->Success();
+        } else if (call.method_name() == "setBlockCloseCommands") {
+          if (call.arguments() && std::holds_alternative<bool>(*call.arguments())) {
+            close_blocked_ = std::get<bool>(*call.arguments());
           }
           result->Success();
         } else {
@@ -73,11 +79,50 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
-  // Give Flutter, including plugins, an opportunity to handle window messages.
+  // ── Kiosk: absorb close messages before Flutter/plugins see them ─────
+  // close_blocked_ traps WM_CLOSE (taskbar right-click → Close window,
+  // End Task) and WM_SYSCOMMAND SC_CLOSE (Alt+F4, X button)
+  // unconditionally.  This flag stays true during suspended (minimized)
+  // mode so the window cannot be killed from the taskbar.
+  //
+  // block_sys_commands_ traps SC_MAXIMIZE only — it is false during
+  // suspended so the user can restore the window, and true during
+  // fullscreen / locked / absoluteLocked to prevent taskbar restore.
+  //
+  // Both flags default to false so the boot / registration / failure
+  // screens remain fully closable.
+  if (close_blocked_) {
+    switch (message) {
+      case WM_CLOSE:
+        return 0;
+      case WM_SYSCOMMAND: {
+        const auto cmd = wparam & 0xFFF0;
+        if (cmd == SC_CLOSE) {
+          return 0;
+        }
+        break;
+      }
+    }
+  }
+  if (block_sys_commands_) {
+    switch (message) {
+      case WM_SYSCOMMAND: {
+        const auto cmd = wparam & 0xFFF0;
+        if (cmd == SC_MAXIMIZE) {
+          return 0;
+        }
+        break;
+      }
+    }
+  }
+
+  // Give Flutter, including plugins, an opportunity to handle window
+  // messages.  WM_CLOSE and SC_CLOSE will never reach this point when
+  // block_sys_commands_ is true.
   if (flutter_controller_) {
     std::optional<LRESULT> result =
         flutter_controller_->HandleTopLevelWindowProc(hwnd, message, wparam,
-                                                      lparam);
+                                                       lparam);
     if (result) {
       return *result;
     }
@@ -87,24 +132,6 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
-
-    // ── Kiosk: conditionally block window-close system commands ────────────
-    // When kiosk hardening is active (block_sys_commands_ == true), we
-    // intercept SC_CLOSE and SC_MAXIMIZE so Alt+F4 / the close button /
-    // maximize cannot be used.  When not active (boot phase, suspended, or
-    // force-released), these pass through to DefWindowProc so the
-    // window_manager plugin's WM_CLOSE handler (setPreventClose) controls
-    // close behaviour — keeping the taskbar "Close" option and Alt+F4
-    // available when the user needs to close the app.
-    case WM_SYSCOMMAND: {
-      if (block_sys_commands_) {
-        const auto cmd = wparam & 0xFFF0;
-        if (cmd == SC_CLOSE || cmd == SC_MAXIMIZE) {
-          return 0; // Absorb — do not forward to DefWindowProc.
-        }
-      }
-      break;
-    }
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);

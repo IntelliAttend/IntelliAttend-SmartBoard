@@ -33,10 +33,22 @@ class FlutterWindow : public Win32Window {
   // Platform channel for kiosk communication with Dart.
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> kiosk_channel_;
 
-  // When true, WM_SYSCOMMAND SC_CLOSE and SC_MAXIMIZE are absorbed
-  // (kiosk hardening active). When false, they pass through to
-  // DefWindowProc so the window_manager plugin's WM_CLOSE handler
-  // (setPreventClose) controls close behavior.
+  // When true, WM_CLOSE and WM_SYSCOMMAND SC_CLOSE are absorbed at the
+  // native message-pump level, making the window unkillable from the
+  // taskbar context menu, Alt+F4, or the X button regardless of focus
+  // or visibility state.  Managed independently of block_sys_commands_
+  // so that close remains blocked even when the window is minimized
+  // (suspended) but maximize is still allowed.
+  //
+  // Defaults to false so the boot/registration screen remains closable.
+  bool close_blocked_ = false;
+
+  // When true, WM_SYSCOMMAND SC_MAXIMIZE is absorbed, preventing the
+  // window from being restored from the taskbar during kiosk hardening.
+  // This is set to false during suspended mode so the user can restore
+  // the window, and to true during fullscreen/locked/absoluteLocked.
+  //
+  // Defaults to false so the window starts in a normal resizable state.
   bool block_sys_commands_ = false;
 };
 

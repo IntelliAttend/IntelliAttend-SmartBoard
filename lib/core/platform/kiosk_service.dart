@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import '../utils/logger.dart';
 import 'hardware_fingerprint_service.dart';
+import '../../services/session_manager.dart';
 
 enum KioskMode {
   /// Fullscreen mode with no kiosk locks. Used for Registration, Idle, and
@@ -215,7 +216,9 @@ class KioskService {
           await windowManager
               .setResizable(true); // Allow resizing when suspended
           if (Platform.isWindows) {
-            await windowManager.setPreventClose(false);
+            // CRITICAL: Keep close prevented even when minimized — otherwise
+            // the taskbar context menu "Close window" bypasses kiosk locks.
+            await windowManager.setPreventClose(true);
             // Show icon on taskbar when minimized so user knows it's alive.
             await windowManager.setSkipTaskbar(false);
           }
@@ -232,20 +235,23 @@ class KioskService {
 
       _currentMode = mode;
 
-      // Sync the C++ WM_SYSCOMMAND blocking state with the current mode.
-      // When hardening is active (fullscreen/locked/absoluteLocked), Alt+F4
-      // and the close button are absorbed at the native message-pump level.
-      // When not active (suspended), they pass through to DefWindowProc so
-      // the window_manager plugin's WM_CLOSE handler controls close behavior.
+      // Sync the C++ blocking flags with the current mode.
+      // close_blocked_ is always active during any kiosk mode (including
+      // suspended) so the window cannot be killed from the taskbar.
+      //   block_sys_commands_ blocks SC_MAXIMIZE during fullscreen/locked/
+      //   absoluteLocked but is released during suspended so the user can
+      //   restore the window from the taskbar.
       if (Platform.isWindows) {
         switch (mode) {
           case KioskMode.fullscreen:
           case KioskMode.locked:
           case KioskMode.absoluteLocked:
             await _setBlockSysCommands(true);
+            await _setBlockCloseCommands(true);
             break;
           case KioskMode.suspended:
             await _setBlockSysCommands(false);
+            await _setBlockCloseCommands(true);
             break;
         }
       }
@@ -256,12 +262,26 @@ class KioskService {
     }
   }
 
-  /// Tells the C++ runner whether to absorb WM_SYSCOMMAND SC_CLOSE/SC_MAXIMIZE.
+  /// Tells the C++ runner whether to absorb WM_SYSCOMMAND SC_MAXIMIZE.
   static Future<void> _setBlockSysCommands(bool block) async {
     try {
       await _kioskChannel.invokeMethod('setBlockSysCommands', block);
     } catch (e) {
       Log.d('[Kiosk] setBlockSysCommands($block) failed: $e');
+    }
+  }
+
+  /// Tells the C++ runner whether to absorb WM_CLOSE and WM_SYSCOMMAND
+  /// SC_CLOSE at the native message-pump level.  This flag stays true
+  /// whenever kiosk hardening is active (fullscreen, locked, absoluteLocked,
+  /// AND suspended) so the window cannot be killed from the taskbar context
+  /// menu or via Alt+F4 while minimized.  Only set to false by
+  /// [forceRelease] or during early boot.
+  static Future<void> _setBlockCloseCommands(bool block) async {
+    try {
+      await _kioskChannel.invokeMethod('setBlockCloseCommands', block);
+    } catch (e) {
+      Log.d('[Kiosk] setBlockCloseCommands($block) failed: $e');
     }
   }
 
@@ -305,6 +325,26 @@ class KioskService {
     }
   }
 
+  /// Administrative escape door — performs a cascading teardown and
+  /// terminates the application cleanly.  Releases kiosk constraints,
+  /// flushes the local Isar database, then destroys the native window.
+  /// If windowManager fails, falls back to exit(0).
+  static Future<void> executeAdministrativeShutdown() async {
+    try {
+      Log.w('🛑 [Kiosk] Administrative Kill Switch Triggered. Initializing Teardown...');
+      await forceRelease();
+      try {
+        await SessionManager.isar.close();
+      } catch (_) {
+        Log.d('[Kiosk] Isar already closed or unavailable.');
+      }
+      await windowManager.destroy();
+    } catch (e) {
+      Log.e('❌ [Kiosk] Administrative shutdown fallback: $e');
+      exit(0);
+    }
+  }
+
   /// Force-releases all kiosk constraints, making the window a normal
   /// closable window with a visible taskbar icon. This is the emergency
   /// kill switch — call it when the app freezes or the user needs to
@@ -322,6 +362,7 @@ class KioskService {
       await windowManager.show();
       if (Platform.isWindows) {
         await _setBlockSysCommands(false);
+        await _setBlockCloseCommands(false);
       }
     } catch (e) {
       Log.e('❌ [Kiosk] forceRelease error: $e');
@@ -338,11 +379,22 @@ class KioskService {
   static WindowListener createWindowListener() => _KioskWindowListener();
 }
 
-/// Listens for window restore/minimize events and enforces kiosk mode.
+/// Listens for window restore/minimize/close events and enforces kiosk mode.
 class _KioskWindowListener extends WindowListener {
   @override
   void onWindowRestore() {
     _enforceOnRestore();
+  }
+
+  @override
+  void onWindowClose() {
+    // Defense-in-depth: if the C++ layer somehow misses a close message
+    // (e.g. plugin race during startup), this prevents the Dart layer
+    // from forwarding it while kiosk is active.
+    if (KioskService._enabled && KioskService._currentMode != null) {
+      Log.w('🛡️ [Kiosk] onWindowClose intercepted — kiosk active, ignoring.');
+      return;
+    }
   }
 
   /// Re-applies fullscreen after window restore. Skips if we are already

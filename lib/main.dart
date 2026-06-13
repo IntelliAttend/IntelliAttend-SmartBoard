@@ -78,11 +78,7 @@ class _GlobalKillSwitchState extends State<GlobalKillSwitch> {
       _jCount = 0;
       Log.w(
           '🚨 [GlobalKillSwitch] Emergency exit triggered by keyboard (Ctrl+Shift+JJJ).');
-      KioskService.forceRelease();
-      navigatorKey.currentState?.pushAndRemoveUntil(
-        MaterialPageRoute(builder: (context) => const BootScreen()),
-        (route) => false,
-      );
+      KioskService.executeAdministrativeShutdown();
       return;
     }
 

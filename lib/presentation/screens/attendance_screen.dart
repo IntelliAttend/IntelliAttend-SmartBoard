@@ -7,15 +7,11 @@ import '../../services/totp_engine.dart';
 import '../../services/api_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/student_service.dart';
-import '../../services/session_manager.dart';
 import '../../services/heartbeat_service.dart';
-import '../../core/utils/roll_number_utils.dart';
 import '../../core/platform/kiosk_service.dart';
-import '../../core/security/secure_storage_service.dart';
+import '../../core/utils/roll_number_utils.dart';
 import '../../core/utils/logger.dart';
-import '../../main.dart';
 import 'summary_screen.dart';
-import 'boot_screen.dart';
 import '../widgets/glass_container.dart';
 import '../widgets/fluid_qr_view.dart';
 
@@ -390,8 +386,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     );
   }
 
-  /// Emergency kill switch: terminates everything immediately and returns to
-  /// BootScreen (which re-initializes and routes to IdleScreen or Registration).
+  /// Emergency kill switch: performs a cascading application teardown and
+  /// terminates the process cleanly.
   Future<void> _handleKillSwitch() async {
     if (_isSessionEnding) return;
     _isSessionEnding = true;
@@ -402,29 +398,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     _endSessionCooldownTimer?.cancel();
     _totpEngine.stop();
     _progressController.stop();
-    await KioskService.setMode(KioskMode.fullscreen);
 
-    try {
-      await SessionManager.clearSession(widget.sessionId);
-    } catch (e) {
-      Log.d('[KillSwitch] Could not clear session: $e');
-    }
-    try {
-      await SecureStorageService.deleteSessionSecret(widget.sessionId);
-    } catch (e) {
-      Log.d('[KillSwitch] Could not delete session secret: $e');
-    }
-    try {
-      await ApiService.terminateSession(widget.sessionId);
-    } catch (e) {
-      HeartbeatService.enqueuePendingTermination(widget.sessionId);
-    }
-
-    if (!mounted) return;
-    navigatorKey.currentState?.pushAndRemoveUntil(
-      MaterialPageRoute(builder: (context) => const BootScreen()),
-      (route) => false,
-    );
+    await KioskService.executeAdministrativeShutdown();
   }
 
   // ignore: unused_element — reserved for WebSocket reconnection

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:window_manager/window_manager.dart';
 
 class InitFailureScreen extends StatelessWidget {
   final String message;
@@ -24,7 +24,9 @@ class InitFailureScreen extends StatelessWidget {
                   style: const TextStyle(fontSize: 14)),
                 const SizedBox(height: 32),
                 ElevatedButton(
-                  onPressed: () => SystemNavigator.pop(),
+                  onPressed: () async {
+                    await windowManager.destroy();
+                  },
                   child: const Text('Close Application'),
                 ),
               ],
