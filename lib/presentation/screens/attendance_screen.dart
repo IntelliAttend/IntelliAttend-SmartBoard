@@ -29,6 +29,7 @@ class AttendanceScreen extends StatefulWidget {
   final String? slotId;
   final TotpEngine totpEngine;
   final WebsocketService websocketService;
+  final String accessToken;
   final bool isOffline;
 
   const AttendanceScreen({
@@ -40,6 +41,7 @@ class AttendanceScreen extends StatefulWidget {
     required this.roomName,
     required this.totpEngine,
     required this.websocketService,
+    required this.accessToken,
     this.sectionId,
     this.slotId,
     this.isOffline = false,
@@ -59,6 +61,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   bool _isSessionEnding = false;
   // ignore: prefer_final_fields - mutated when WS re-enabled
   int _presentCount = 0;
+  int _totalStudents = 0;
   // ignore: prefer_final_fields - mutated when WS re-enabled
   Set<int> _presentSeatIndices = {};
   int _secondsRemaining = 0;
@@ -119,28 +122,34 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   void _connectWebSocket() {
-    _wsService.connect(widget.sessionId);
+    _wsService.connect(widget.sessionId, widget.accessToken);
 
-    _wsSyncSubscription = _wsService.onFullStateSync.listen((students) {
+    _wsSyncSubscription = _wsService.onFullStateSync.listen((sync) {
       if (!mounted) return;
       setState(() {
-        _presentCount = students.length;
         _presentSeatIndices.clear();
-        for (final student in students) {
-          final index = _emailToSeatIndex[student.studentId.toLowerCase()];
+        int presentCount = 0;
+        for (final student in sync.presentStudents) {
+          if (student.status.toUpperCase() != 'PRESENT') continue;
+          final email = (student.studentEmail ?? student.studentId).toLowerCase();
+          final index = _emailToSeatIndex[email];
           if (index != null) {
             _presentSeatIndices.add(index);
+            presentCount++;
           }
         }
+        _presentCount = presentCount;
+        _totalStudents = sync.totalStudents;
       });
       Log.i(
-          '[Attendance] Full state sync: ${_presentSeatIndices.length} seats marked.');
+          '[Attendance] Full state sync: $_presentCount present / ${sync.totalStudents} total.');
     });
 
     _wsAttendanceSubscription = _wsService.onAttendanceMarked.listen((event) {
       if (!mounted) return;
       setState(() {
-        final index = _emailToSeatIndex[event.studentId.toLowerCase()];
+        final email = (event.studentEmail ?? event.studentId).toLowerCase();
+        final index = _emailToSeatIndex[email];
         if (index != null) {
           if (!_presentSeatIndices.contains(index)) {
             _presentSeatIndices.add(index);
@@ -792,7 +801,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                 crossAxisSpacing: 12,
                 childAspectRatio: 1,
               ),
-              itemCount: widget.capacity,
+              itemCount: _totalStudents > 0 ? _totalStudents : widget.capacity,
               itemBuilder: (context, index) {
                 // Determine if this seat is present
                 final isPresent = _presentSeatIndices.contains(index);
@@ -1010,8 +1019,9 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   Widget _buildFooter(bool isDark) {
-    final attendanceRate = widget.capacity > 0
-        ? (_presentCount / widget.capacity * 100).toInt()
+    final total = _totalStudents > 0 ? _totalStudents : widget.capacity;
+    final attendanceRate = total > 0
+        ? (_presentCount / total * 100).toInt()
         : 0;
 
     return Container(
@@ -1040,7 +1050,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                   Text('$_presentCount',
                       style: const TextStyle(
                           fontSize: 24, fontWeight: FontWeight.bold)),
-                  Text(' / ${widget.capacity}',
+                  Text(' / ${total}',
                       style: const TextStyle(fontSize: 16, color: Colors.grey)),
                   const SizedBox(width: 12),
                   Container(

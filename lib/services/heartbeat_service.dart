@@ -110,7 +110,17 @@ class HeartbeatService {
         appVersion: _cachedVersion ?? 'unknown',
       );
 
-      final sessionData = result['session'];
+      Log.d('[Heartbeat] Raw response keys: ${result.keys.join(', ')}');
+
+      // Try both flat and nested response structures so a server schema
+      // change doesn't silently cause null-session force-ends.
+      Map<String, dynamic>? sessionData = result['session'];
+      if (sessionData == null && result['data'] is Map) {
+        sessionData = (result['data'] as Map)['session'];
+        if (sessionData != null) {
+          Log.i('[Heartbeat] Resolved session from result.data.session (nested format).');
+        }
+      }
       if (sessionData is Map<String, dynamic>) {
         _consecutiveNullSessions = 0;
         final info = HeartbeatSessionInfo(

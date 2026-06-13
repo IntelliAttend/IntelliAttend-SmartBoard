@@ -63,6 +63,9 @@ dependencies:
   # Path & Files
   path_provider: ^2.1.2
   
+  # PDF Viewing
+  pdfrx: ^2.4.3
+  
   # Network & Device Telemetry
   connectivity_plus: ^7.1.1
   device_info_plus: ^12.4.0
@@ -90,6 +93,16 @@ flutter:
     - assets/background.png
     - assets/logo.png
     - assets/logo_square.png
+    - assets/sample.pdf
+    - assets/orimi_sample.pdf
+    - assets/sample.txt
+    - assets/sample_notes.md
+    - assets/sample_report.html
+    - assets/chart_sample.png
+    - assets/sample_document.docx
+    - assets/sample_spreadsheet.xlsx
+    - assets/sample_presentation.pptx
+    - assets/sample_presentation.ppt
 
 dependency_overrides:
   flutter_secure_storage_windows:

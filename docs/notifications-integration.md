@@ -25,6 +25,10 @@ Each document in this collection represents a notification targeted at one or mo
 | `timestamp` | `timestamp` | No | When the notification was created. Falls back to `created_at`. |
 | `created_at` | `timestamp` | No | Fallback if `timestamp` is not set. |
 | `read` | `boolean` | No | Read/unread status. Defaults to `false`. |
+| `attachment_url` | `string` | No | URL to a downloadable document (PDF, image, etc.). Triggers the board's document viewer. |
+| `attachment_name` | `string` | No | Human-readable file name to display (e.g. `"Lecture_Notes_Week10.pdf"`). |
+| `attachment_type` | `string` | No | MIME type (e.g. `"application/pdf"`, `"image/png"`). Used for icon selection. |
+| `attachment_size` | `number` | No | File size in bytes. Displayed as human-readable (KB/MB) in the UI. |
 
 **Type values and their UI rendering:**
 
@@ -147,6 +151,65 @@ The board's Firestore listener picks this up within seconds (push-based) and dis
 - **No custom API endpoint needed** — the board reads directly from Firestore.
 - **No auth integration needed** — the board uses its Firebase API key for native access.
 - **No delivery confirmation needed** — the `read` field is for the UI only; the backend does not need to track read status.
+
+---
+
+## 5. Document Sharing (Share-to-Board)
+
+Users (faculty/students) can share documents to the SmartBoard by writing a notification with attachment fields to Firestore. This enables a **"Share to SmartBoard"** flow from phones.
+
+### Example Document Notification
+
+```json
+{
+  "smart_board_id": "IASB-4208",
+  "title": "Lecture Notes — Week 10",
+  "body": "Dr. Smith shared a PDF with the class.",
+  "type": "message",
+  "created_at": "2026-06-10T10:30:00Z",
+  "read": false,
+  "attachment_url": "https://storage.googleapis.com/.../lecture_week10.pdf",
+  "attachment_name": "CSE-AIML_Week10_Notes.pdf",
+  "attachment_type": "application/pdf",
+  "attachment_size": 2457600
+}
+```
+
+### How the Board Handles Documents (Prototyping Mode)
+
+> **Status:** Prototyping / dev-only. Gated behind `ENABLE_DOCUMENTS=true` in `.env`.
+> Document sharing is **not enabled** in production builds.
+
+1. **Detection:** Notifications with a non-empty `attachment_url` are marked with a teal-bordered attachment chip in the UI.
+2. **Tap to Download:** When the user taps the notification, the board downloads the file to a local cache (`{appDocDir}/documents/`).
+3. **Viewing:**
+   - **PDFs** are opened in `DocumentViewerScreen` (built on `pdfrx`/PDFium) with pinch-zoom, page navigation, and text selection.
+   - **All other file types** (DOCX, PPTX, XLSX, TXT, MD, HTML, PNG, etc.) are opened with the **system default application** via `url_launcher`/`LaunchMode.externalApplication` — e.g. Word for `.docx`, Excel for `.xlsx`, the browser for `.html`.
+4. **Caching:** Downloaded files are cached locally (configurable: max 200 MB, 7-day TTL). Re-opening the same document is instant.
+5. **Offline:** Once downloaded, documents are viewable without connectivity (PDFs in the built-in viewer, other types via system app if available locally).
+
+> **Prototyping note:** The system-default-app approach for non-PDFs was chosen for speed during prototyping. A future production version should either:
+> - Integrate a universal inline document viewer (e.g. `universal_file_previewer` or `flutter_document_viewer`), or
+> - Render documents inside a WebView using Microsoft Office Online / Google Docs viewer URLs.
+
+### Document Service Configuration (`.env`)
+
+```env
+ENABLE_DOCUMENTS=true           # Enable document sharing feature (prototyping only)
+DOCUMENT_CACHE_MAX_DAYS=7       # Auto-clear files older than N days
+DOCUMENT_CACHE_MAX_MB=200       # Max local cache size before cleanup
+```
+
+### Backend Integration for Share-to-Board
+
+To enable a "Share to SmartBoard" button on the faculty/student app:
+
+1. The mobile app uploads the document to cloud storage (Firebase Storage / GCS / S3).
+2. The backend writes a Firestore notification document with the `attachment_*` fields pointing to the uploaded file URL.
+3. The SmartBoard receives it via the existing Firestore `.snapshots()` listener within seconds.
+4. The board user taps the notification → document downloads and opens.
+
+> **Note:** The board only supports **reading** documents. It cannot upload or send documents back.
 
 ---
 

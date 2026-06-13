@@ -19,6 +19,10 @@ class CircuitBreaker {
   DateTime? _lastFailure;
   CircuitState _state = CircuitState.closed;
 
+  /// Called whenever state transitions occur (open → halfOpen → closed).
+  /// Used by ApiService to broadcast connectivity changes to the UI.
+  void Function(CircuitState state)? onStateChanged;
+
   CircuitBreaker({
     required this.name,
     this.failureThreshold = 5,
@@ -32,7 +36,7 @@ class CircuitBreaker {
     if (_state == CircuitState.open) {
       if (_lastFailure != null &&
           DateTime.now().difference(_lastFailure!) >= cooldown) {
-        _state = CircuitState.halfOpen;
+        _setState(CircuitState.halfOpen);
         Log.d('[CB] $name → half-open (cooldown elapsed)');
       } else {
         throw CircuitBreakerOpenException(name);
@@ -49,26 +53,32 @@ class CircuitBreaker {
     }
   }
 
+  void _setState(CircuitState newState) {
+    if (_state == newState) return;
+    _state = newState;
+    onStateChanged?.call(newState);
+  }
+
   void _onSuccess() {
     if (_state == CircuitState.halfOpen) {
       Log.i('[CB] $name → closed (trial call succeeded)');
     }
     _failureCount = 0;
-    _state = CircuitState.closed;
+    _setState(CircuitState.closed);
   }
 
   void _onFailure() {
     _failureCount++;
     _lastFailure = DateTime.now();
     if (_state == CircuitState.halfOpen || _failureCount >= failureThreshold) {
-      _state = CircuitState.open;
       Log.w('[CB] $name → open ($_failureCount failures)');
+      _setState(CircuitState.open);
     }
   }
 
   void reset() {
     _failureCount = 0;
     _lastFailure = null;
-    _state = CircuitState.closed;
+    _setState(CircuitState.closed);
   }
 }

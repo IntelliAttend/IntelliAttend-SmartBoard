@@ -142,6 +142,12 @@ class ApiService {
               '[API] Correlation ID mismatch: client=$reqId, server=$serverReqId');
         }
 
+        // 401: token expired or invalid — propagate immediately
+        if (response.statusCode == 401) {
+          Log.w('[API] $method $path got 401 — session expired.');
+          throw UnauthorizedException('Session expired.');
+        }
+
         // 5xx server errors are retryable
         if (response.statusCode >= 500 && attempt < maxRetries) {
           Log.w('[API] $method $path got ${response.statusCode}, retrying...');

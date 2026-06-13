@@ -18,6 +18,11 @@ class SlotWarmUpState {
   Timer? recoveryPollTimer;
   DateTime? lastAttempt;
 
+  /// Monotonically increasing generation counter for this slot.
+  /// Incremented every time a new warm-up is triggered so stale
+  /// async callbacks from previous attempts are silently dropped.
+  int generation = 0;
+
   void reset() {
     retryCount = 0;
     exhausted = false;
@@ -27,6 +32,7 @@ class SlotWarmUpState {
     recoveryPollTimer?.cancel();
     recoveryPollTimer = null;
     lastAttempt = null;
+    generation++;
   }
 
   void dispose() {
@@ -199,7 +205,8 @@ class PreFlightService {
 
   Future<Map<String, dynamic>?> forceWarmUp(String slotId,
       {void Function(Map<String, dynamic> result)? onSuccess,
-      void Function(String status)? onStatusChange}) async {
+      void Function(String status)? onStatusChange,
+      void Function(String error)? onError}) async {
     final state = _stateFor(slotId);
     state.retryTimer?.cancel();
     state.recoveryPollTimer?.cancel();
@@ -208,13 +215,14 @@ class PreFlightService {
     state.inProgress = false;
     Log.i('[PreFlight] Forcing warm-up for slot: $slotId');
     return runPerSessionWarmUp(slotId,
-        onSuccess: onSuccess, onStatusChange: onStatusChange);
+        onSuccess: onSuccess, onStatusChange: onStatusChange, onError: onError);
   }
 
   Future<Map<String, dynamic>?> runPerSessionWarmUp(String slotId,
       {bool isRetry = false,
       void Function(Map<String, dynamic> result)? onSuccess,
-      void Function(String status)? onStatusChange}) async {
+      void Function(String status)? onStatusChange,
+      void Function(String error)? onError}) async {
     final state = _stateFor(slotId);
 
     if (state.inProgress && !isRetry) return null;
@@ -223,7 +231,10 @@ class PreFlightService {
       state.retryCount = 0;
       state.exhausted = false;
       state.retryTimer?.cancel();
+      state.generation++;
     }
+
+    final capturedGeneration = state.generation;
 
     state.inProgress = true;
     state.retryCount++;
@@ -238,11 +249,16 @@ class PreFlightService {
           await ApiService.getPreFlight(slotId, retryCount: state.retryCount);
       final responseReceivedAt = DateTime.now();
 
-      final serverTs = result['server_timestamp'] as int;
-      result['pre_allocated_session_id'] as String;
+      final serverTs = (result['server_timestamp'] ?? result['server_timestamp_ms'] ?? 0) as int;
 
       TimeSyncService.synchronizeWithServer(
           requestSentAt, responseReceivedAt, serverTs);
+
+      if (capturedGeneration != state.generation) {
+        Log.d('[PreFlight] Stale warm-up success ignored for $slotId (gen $capturedGeneration != ${state.generation})');
+        state.inProgress = false;
+        return null;
+      }
 
       Log.i('[PreFlight] Warm-Up Successful for slot: $slotId');
       state.inProgress = false;
@@ -252,8 +268,14 @@ class PreFlightService {
     } catch (e) {
       Log.e('[PreFlight] Warm-Up Attempt ${state.retryCount} Failed: $e');
 
+      if (capturedGeneration != state.generation) {
+        Log.d('[PreFlight] Stale warm-up failure ignored for $slotId (gen $capturedGeneration != ${state.generation})');
+        state.inProgress = false;
+        return null;
+      }
+
       if (onStatusChange != null) onStatusChange('none');
-      if (onSuccess != null) onSuccess({'pre_allocated_session_id': null});
+      if (onError != null) onError(e.toString());
 
       if (state.retryCount >= _maxWarmUpRetries) {
         Log.w(
@@ -261,7 +283,7 @@ class PreFlightService {
         state.inProgress = false;
         state.exhausted = true;
         _startRecoveryPolling(slotId,
-            onSuccess: onSuccess, onStatusChange: onStatusChange);
+            onSuccess: onSuccess, onStatusChange: onStatusChange, onError: onError);
         return null;
       }
 
@@ -276,7 +298,8 @@ class PreFlightService {
         runPerSessionWarmUp(slotId,
             isRetry: true,
             onSuccess: onSuccess,
-            onStatusChange: onStatusChange);
+            onStatusChange: onStatusChange,
+            onError: onError);
       });
 
       return null;
@@ -285,7 +308,8 @@ class PreFlightService {
 
   void _startRecoveryPolling(String slotId,
       {void Function(Map<String, dynamic> result)? onSuccess,
-      void Function(String status)? onStatusChange}) async {
+      void Function(String status)? onStatusChange,
+      void Function(String error)? onError}) async {
     final state = _stateFor(slotId);
     state.recoveryPollTimer?.cancel();
 
@@ -314,7 +338,7 @@ class PreFlightService {
         state.exhausted = false;
         state.retryCount = 0;
         runPerSessionWarmUp(slotId,
-            onSuccess: onSuccess, onStatusChange: onStatusChange);
+            onSuccess: onSuccess, onStatusChange: onStatusChange, onError: onError);
       } else {
         Log.d('[PreFlight] Recovery poll for $slotId — server still down.');
       }

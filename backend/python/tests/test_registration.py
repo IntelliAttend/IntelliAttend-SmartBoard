@@ -1,27 +1,29 @@
 """
-Tests for registration / ignition fixes S1–S6:
-  S1: OTP hashed (SHA-256) before Firestore storage
-  S2: OTP expiry checked server-side
-  S3: Server-side OTP rate limiting (10 attempts -> 15 min lockout)
-  S4: OTP redacted from info logs (visible only at debug)
-  S5: already_registered response when board is already bound
-  S6: password field removed from initiate request model
+DEPRECATED — Tests for legacy OTP-based board registration (S1–S6).
+
+The SmartBoard now authenticates using Firebase Auth email/password,
+the same as the Faculty and Student mobile apps. Board accounts are
+provisioned via Firebase Auth Admin at install time, not via OTP flow.
+
+These tests are preserved for reference in case re-registration flows
+are revisited. The schemas and rate-limiting functions they depend on
+have been commented out in the main codebase.
 """
 
-import os
-os.environ.setdefault("JWT_SECRET", "test-secret-key-not-for-production")
-
-import asyncio
-import hashlib
-from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, AsyncMock, MagicMock
-
-import pytest
-from fastapi import HTTPException
-from google.cloud import firestore
-
-from services.auth_service import AuthService
-from models.board_auth_schema import DeviceRegisterInitiateRequest
+# import os
+# os.environ.setdefault("JWT_SECRET", "test-secret-key-not-for-production")
+#
+# import asyncio
+# import hashlib
+# from datetime import datetime, timezone, timedelta
+# from unittest.mock import patch, AsyncMock, MagicMock
+#
+# import pytest
+# from fastapi import HTTPException
+# from google.cloud import firestore
+#
+# from services.auth_service import AuthService
+# from models.board_auth_schema import DeviceRegisterInitiateRequest
 
 
 class _MockDoc:

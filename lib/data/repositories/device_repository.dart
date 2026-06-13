@@ -228,6 +228,19 @@ class DeviceRepository implements IDeviceRepository {
         if (dayFilter != null && existing.dayOfWeek != dayFilter) continue;
         await _isar.timetableEntrys.delete(existing.id);
       }
+
+      // Dedup: if a concurrent sync created two entries with the same slotId,
+      // keep only the one with the lowest auto-increment id.
+      final after = await _isar.timetableEntrys.where().findAll();
+      final seen = <String, int>{};
+      for (final e in after) {
+        final first = seen[e.slotId];
+        if (first != null) {
+          await _isar.timetableEntrys.delete(e.id);
+        } else {
+          seen[e.slotId] = e.id;
+        }
+      }
     });
 
     return await _isar.timetableEntrys

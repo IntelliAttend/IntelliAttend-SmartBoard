@@ -1,102 +1,45 @@
 import logging
-import jwt
-import os
 from datetime import datetime, timezone, timedelta
-from fastapi import Header, HTTPException, status, Request
 from google.cloud import firestore
 
-from services.alert_service import AlertService
+from core.security import get_current_board
 
 logger = logging.getLogger("IntelliAttend")
 
-JWT_SECRET = os.environ.get("JWT_SECRET")
-if not JWT_SECRET:
-    raise RuntimeError(
-        "JWT_SECRET environment variable is not set. "
-        "The application cannot start securely without it."
-    )
 
 class BoardService:
+    """
+    DEPRECATED — Legacy custom JWT + X-Device-ID auth preserved for reference.
+
+    The SmartBoard now authenticates exactly like the Faculty and Student mobile
+    apps — using Firebase Auth with email/password. See core/security.py for the
+    current get_current_board() dependency.
+
+    Key changes:
+      - Token type: HMAC-signed JWT (HS256) → Firebase ID Token (RS256)
+      - Token expiry: 2 hours → ~1 hour (Google-managed, auto-refreshed by SDK)
+      - Refresh mechanism: Manual POST /board/refresh → Automatic (Firebase SDK)
+      - Registration: OTP + fingerprint → Firebase Auth email/password
+      - Board lookup: By board_id field → By email field in smart_boards collection
+    """
     COLLECTION = "smart_boards"
 
     @classmethod
     def get_board_data(cls, db: firestore.AsyncClient):
-        async def _verify(
-            request: Request,
-            x_device_id: str = Header(alias="X-Device-ID", default=None),
-            authorization: str = Header(default=None)
-        ) -> dict:
-            # 1. Identity Check: Hardware ID must be present
-            if not x_device_id:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="AUTH_FAILED: Hardware Identity Breach - X-Device-ID missing"
-                )
-            
-            # 2. Authentication Check: JWT Bearer token required (v5.4)
-            if not authorization or not authorization.startswith("Bearer "):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="AUTH_FAILED: Missing or invalid Authorization header"
-                )
-            
-            token = authorization.split(" ")[1]
-            try:
-                # 3. Cryptographic Validation: Verify token signature and expiry
-                payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-                
-                # 4. Strict Binding: Token's device_id MUST match the physical X-Device-ID header
-                token_device_id = payload.get("device_id")
-                if token_device_id != x_device_id:
-                    reason = f"Hardware ID Mismatch. Header: {x_device_id} vs Token: {token_device_id}"
-                    await AlertService.notify_security_violation(payload.get("sub", "unknown"), reason)
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="AUTH_FAILED: Token/Hardware Mismatch (Spoofing detected)"
-                    )
-                
-                # 5. RBAC: Ensure the token has the correct role
-                if payload.get("role") != "smart_board":
-                    await AlertService.notify_security_violation(payload.get("sub", "unknown"), "Invalid role for board endpoint")
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="AUTH_FAILED: Insufficient permissions for this role"
-                    )
+        """
+        DEPRECATED — Use core.security.get_current_board() instead.
 
-                board_id = payload.get("sub")
-                
-            except jwt.ExpiredSignatureError:
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AUTH_FAILED: Token expired")
-            except jwt.InvalidTokenError as e:
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"AUTH_FAILED: {str(e)}")
+        This method previously validated custom JWTs signed with JWT_SECRET,
+        enforced X-Device-ID / token device_id binding, and fell back to
+        Firebase token verification by firebase_uid lookup.
 
-            # 6. Database Verification: Confirm board is still ACTIVE in Firestore
-            if db:
-                board_ref = db.collection(cls.COLLECTION).document(board_id)
-                board_doc = await board_ref.get()
-                
-                if not board_doc.exists:
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="BOARD_NOT_FOUND: Board not found in smart_boards collection"
-                    )
-                
-                board_data = board_doc.to_dict()
-                if board_data.get("status") != "ACTIVE":
-                     raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="BOARD_SUSPENDED: This board has been deactivated by an administrator"
-                    )
-                
-                board_data["smart_board_id"] = board_doc.id
-                board_data["device_id"] = x_device_id
-                return board_data
-                
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="DATABASE_UNAVAILABLE: Firestore is not configured. Set GOOGLE_APPLICATION_CREDENTIALS in the environment."
-            )
-        return _verify
+        Replaced by get_current_board() which:
+          1. Extracts Firebase ID Token from Authorization: Bearer header
+          2. Verifies via firebase_admin.auth.verify_id_token()
+          3. Looks up board by email field in smart_boards collection
+          4. Returns board data (same shape as before)
+        """
+        return get_current_board(db)
 
 
 class HeartbeatService:

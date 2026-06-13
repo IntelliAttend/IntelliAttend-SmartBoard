@@ -7,6 +7,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'core/config/app_config.dart';
 import 'core/theme/app_theme.dart';
@@ -167,6 +168,23 @@ void main(List<String> args) {
     // ─── TIER 1: Blocking (must pass or app can't run) ──────────────────────
     await _initWindow();
     _traceStartup('window: initialized');
+
+    // ─── RESET (--reset flag) ───────────────────────────────────────────────
+    // Wipe all persisted state BEFORE Isar / Firestore open. This lets the user
+    // start the registration flow from scratch without stale SecureStorage keys
+    // or a populated Isar database.
+    if (args.contains('--reset')) {
+      Log.w('[Startup] --reset flag detected. Wiping all local data...');
+      await SecureStorageService.clearAll().catchError((e) {
+        Log.e('[Startup] SecureStorage clear failed: $e');
+      });
+      final isarDir = await getApplicationSupportDirectory();
+      if (isarDir.existsSync()) {
+        isarDir.deleteSync(recursive: true);
+      }
+      Log.w('[Startup] Local data wiped. Booting to registration flow.');
+    }
+
     // NOTE: Kiosk fullscreen is intentionally deferred until AFTER Tier-1
     // plugin initialization succeeds. If a native C++ exception is thrown
     // during plugin init (e.g. cloud_firestore C++ SDK on Windows), exiting
@@ -552,6 +570,9 @@ Future<void> startBackgroundProtocols() async {
 
     // Start real-time notifications listener for admin/faculty messages.
     NotificationListenerService().start(boardId);
+    if (AppConfig.enableDocuments) {
+      await NotificationListenerService().injectSampleData();
+    }
 
     PreFlightService().startCountdownWatcher();
     WindowOrchestratorService().start();

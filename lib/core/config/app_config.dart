@@ -34,6 +34,20 @@ class AppConfig {
   static int get qrRotationFrequencyMs =>
       int.tryParse(dotenv.env['QR_ROTATION_FREQUENCY_MS'] ?? '') ?? 5000;
 
+  /// Enable document sharing (prototyping mode only).
+  /// PDFs open in the built-in pdfrx viewer.
+  /// All other file types launch the system default app via url_launcher.
+  static bool get enableDocuments =>
+      dotenv.env['ENABLE_DOCUMENTS']?.toLowerCase() == 'true' || false;
+
+  /// Maximum cache age for downloaded documents in days.
+  static int get documentCacheMaxDays =>
+      int.tryParse(dotenv.env['DOCUMENT_CACHE_MAX_DAYS'] ?? '') ?? 7;
+
+  /// Maximum cache size for downloaded documents in MB.
+  static int get documentCacheMaxMb =>
+      int.tryParse(dotenv.env['DOCUMENT_CACHE_MAX_MB'] ?? '') ?? 200;
+
   // Firebase REST credentials — used by FirebaseRestAuth (no plugin).
   // The kiosk only ever hits identitytoolkit + securetoken endpoints.
   static String get firebaseApiKey => dotenv.env['FIREBASE_API_KEY'] ?? '';

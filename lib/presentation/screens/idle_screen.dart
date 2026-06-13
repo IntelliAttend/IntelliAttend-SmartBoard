@@ -86,8 +86,8 @@ class _IdleScreenState extends State<IdleScreen>
   // directly. Falls back to initiateSession() API response if this is null.
   String? _preAllocatedSessionId;
   PreFlightStatus _preFlightStatus = PreFlightStatus.none;
+  String? _preFlightError;
   bool _isReadyCheckDone = false;
-  String? _currentSlotWarmUpSlotId;
 
   /// Tracks which upcoming slot's warm-up has been initiated so the 10-second
   /// [_preClassTimer] in [_checkUpcomingClass] does NOT re-trigger a warm-up
@@ -109,15 +109,23 @@ class _IdleScreenState extends State<IdleScreen>
   /// and reset warm-up state for the new slot.
   String? _lastBedrockSlotId;
 
-  /// Tracks which slots have already received a T-0 forced warm-up attempt,
-  /// so the 10s timer doesn't spam retries every tick for the same slot.
-  final Set<String> _preFlightForceAttemptedSlots = {};
-
   // Tracks which slots have already triggered a Kiosk restore at T-0 so the
   // 10s timer does not spam KioskService.setMode on every tick.
   final Set<String> _t0RestoredSlots = {};
 
   bool _isUpcomingClassCheckRunning = false;
+
+  /// Tracks which slots have completed warm-up successfully.
+  /// Cleared only on slot transitions — prevents the 10-second timer from
+  /// re-triggering warm-up when [_preFlightStatus] is transiently `connecting`.
+  final Set<String> _completedWarmUpSlots = {};
+
+  /// Monotonic clock started at warm-up time. Combined with [_serverWarmUpTime]
+  /// to provide a server-corrected time that never jumps backwards.
+  Stopwatch? _monotonicWarmUpClock;
+
+  /// Server time (epoch ms) captured from the last successful warm-up response.
+  DateTime? _serverWarmUpTime;
 
   // Listens to the global TimetableCache — every Firestore snapshot update
   // triggers _onTimetableCacheChanged which re-reads today's entries from RAM
@@ -177,11 +185,15 @@ class _IdleScreenState extends State<IdleScreen>
 
       if (!mounted) return;
 
-      // 3. One-shot REST sync to guarantee fresh data on boot.
-      //    The Firestore snapshot listener keeps the cache + Isar updated
-      //    going forward, so subsequent sync calls are no longer needed.
-      await context.read<IDeviceRepository>().syncTimetable(fullSync: true);
-      _refreshTimetable();
+      // 3. The Firestore listener (or its REST fallback) already synced the
+      //    timetable inside startBackgroundProtocols().  We only need to read
+      //    from Isar to populate the UI state — no duplicate REST sync.
+      await ApiService.syncTime().catchError((_) {
+        Log.w('[Idle] Boot time sync failed — using cached skew.');
+        return 0;
+      });
+
+      await _refreshTimetable();
       _checkCrashRecovery();
       // Load completed slots before starting the 10s timer so the first
       // _checkUpcomingClass() tick sees accurate data. Without this, a
@@ -495,12 +507,11 @@ class _IdleScreenState extends State<IdleScreen>
           '📅 [Idle] Day changed from $_lastQueryDay to $today. Refreshing from cache...');
       _lastQueryDay = today;
       _t0RestoredSlots.clear();
-      _preFlightForceAttemptedSlots.clear();
       _preAllocatedSessionId = null;
       _upcomingAllocatedSessionId = null;
-      _currentSlotWarmUpSlotId = null;
       _warmUpTriggeredSlotId = null;
       _preFlightStatus = PreFlightStatus.none;
+      _preFlightError = null;
       _lastBedrockSlotId = null;
       _refreshTimetable();
       SessionManager.clearCompletedSessionsForDay(_lastQueryDay!);
@@ -519,6 +530,10 @@ class _IdleScreenState extends State<IdleScreen>
     // When the active slot changes (e.g. P2 ends, P3 begins), reset warm-up
     // state for the new slot so it gets a fresh retry budget. This also
     // fires on first load after boot (null → first slot).
+    //
+    // Also fires when a class ends (non-null → null) to clean up the OTP
+    // card and session state so the screen returns to the ambient idle view
+    // during lunch breaks or gaps between classes.
     final bedrockSlotId = _bedrockEntry?.slotId;
     if (bedrockSlotId != null && bedrockSlotId != _lastBedrockSlotId) {
       Log.i(
@@ -526,11 +541,29 @@ class _IdleScreenState extends State<IdleScreen>
       PreFlightService().resetForSlot(bedrockSlotId);
       _lastBedrockSlotId = bedrockSlotId;
       _warmUpTriggeredSlotId = null;
+      _completedWarmUpSlots.clear();
       _preFlightStatus = PreFlightStatus.none;
+      _preFlightError = null;
+      _forceShowCard = false;
       _preAllocatedSessionId = null;
       _upcomingAllocatedSessionId = null;
-      _currentSlotWarmUpSlotId = null;
       _isReadyCheckDone = false;
+    }
+    if (bedrockSlotId == null && _lastBedrockSlotId != null) {
+      Log.i('[Idle] Class ended: $_lastBedrockSlotId → (break) — cleaning up session state.');
+      PreFlightService().resetForSlot('');
+      _lastBedrockSlotId = null;
+      _warmUpTriggeredSlotId = null;
+      _completedWarmUpSlots.clear();
+      _preFlightStatus = PreFlightStatus.none;
+      _preFlightError = null;
+      _forceShowCard = false;
+      _showStartingSoon = false;
+      _isKeypadExpanded = false;
+      _upcomingSlot = null;
+      _preAllocatedSessionId = null;
+      _upcomingAllocatedSessionId = null;
+      _preFlightSessionSubscription?.cancel();
     }
     if (bedrockSlotId == null) {
       _lastBedrockSlotId = null;
@@ -571,7 +604,6 @@ class _IdleScreenState extends State<IdleScreen>
         Log.iOnce('completed_$currentSlotId',
             '[Idle] Current slot $currentSlotId already completed — skipping auto-show and warm-up.');
         setState(() {
-          _currentSlotWarmUpSlotId = null;
           _preAllocatedSessionId = null;
           _preFlightStatus = PreFlightStatus.none;
           _forceShowCard = false;
@@ -604,11 +636,11 @@ class _IdleScreenState extends State<IdleScreen>
               '[Idle] T-0 restore: slot $currentSlotId — window brought to foreground.');
         }
 
-        if (_preFlightStatus != PreFlightStatus.ready &&
-            !_preFlightForceAttemptedSlots.contains(currentSlotId)) {
-          _preFlightForceAttemptedSlots.add(currentSlotId);
-          Log.i('[Idle] T-0 forced warm-up for slot: $currentSlotId');
-          _triggerWarmUp(currentSlotId, force: true);
+        if (!_completedWarmUpSlots.contains(currentSlotId) &&
+            _preAllocatedSessionId == null &&
+            !PreFlightService().isWarmUpExhausted(currentSlotId)) {
+          Log.i('[Idle] Current class $currentSlotId in progress — triggering warm-up.');
+          _triggerWarmUp(currentSlotId);
         }
 
         if (_preFlightStatus != PreFlightStatus.ready &&
@@ -618,19 +650,7 @@ class _IdleScreenState extends State<IdleScreen>
             _errorMessage = 'System sync delayed. Enter PIN to proceed.';
           });
         }
-
-        if (_preAllocatedSessionId == null &&
-            !PreFlightService().isWarmUpExhausted(currentSlotId)) {
-          if (_currentSlotWarmUpSlotId != currentSlotId) {
-            _currentSlotWarmUpSlotId = currentSlotId;
-            Log.i(
-                '[Idle] Current class $currentSlotId in progress — triggering warm-up.');
-            _triggerWarmUp(currentSlotId);
-          }
-        }
       }
-    } else {
-      _currentSlotWarmUpSlotId = null;
     }
 
     // ── Upcoming Class (T-3 window) ─────────────────────────────────────────
@@ -671,30 +691,28 @@ class _IdleScreenState extends State<IdleScreen>
         }
       }
 
-      if (mounted && _showStartingSoon && minDiff > 5 && _bedrockEntry == null) {
-        setState(() {
-          _showStartingSoon = false;
-          _isKeypadExpanded = false;
-          _upcomingSlot = null;
-          _preFlightStatus = PreFlightStatus.none;
-          _preFlightForceAttemptedSlots.clear();
-          _warmUpTriggeredSlotId = null;
-          _preFlightSessionSubscription?.cancel();
-          _preAllocatedSessionId = null;
-          _upcomingAllocatedSessionId = null;
-        });
+      if (mounted && minDiff > 5 && _bedrockEntry == null) {
+        final shouldReset = _preFlightStatus != PreFlightStatus.ready &&
+            _preFlightStatus != PreFlightStatus.connecting;
+        if (shouldReset) {
+          setState(() {
+            _showStartingSoon = false;
+            _isKeypadExpanded = false;
+            _upcomingSlot = null;
+            _preFlightStatus = PreFlightStatus.none;
+            _preFlightError = null;
+            _forceShowCard = false;
+            _warmUpTriggeredSlotId = null;
+            _preFlightSessionSubscription?.cancel();
+            _preAllocatedSessionId = null;
+            _upcomingAllocatedSessionId = null;
+          });
+        }
       }
     }
   }
 
   void _triggerWarmUp(String slotId, {bool force = false}) async {
-    // Determine if this warm-up is for the UPCOMING class (T-3 background)
-    // vs the CURRENT class. When it's for the upcoming class, we must NOT
-    // overwrite _preFlightStatus / _preAllocatedSessionId because those
-    // belong to the current class's warm-up state (which may be armed).
-    // Instead the result is stored in _upcomingAllocatedSessionId so it
-    // can be consumed by _handleVerifyOtp when the upcoming class becomes
-    // the active target.
     final isForUpcoming =
         slotId == _upcomingSlot?.slotId && slotId != _bedrockEntry?.slotId;
     final currentId = _bedrockEntry?.slotId;
@@ -703,11 +721,17 @@ class _IdleScreenState extends State<IdleScreen>
     try {
       setState(() {
         _preFlightStatus = PreFlightStatus.connecting;
+        _preFlightError = null;
         _errorMessage = null;
       });
 
       void onWarmUpSuccess(Map<String, dynamic> result) {
-        if (!mounted) return;
+        if (!mounted) {
+          Log.d('[Idle] onWarmUpSuccess: not mounted — skipping');
+          return;
+        }
+
+        Log.d('[Idle] onWarmUpSuccess fired for slot=$slotId current=$currentId upcoming=$upcomingId keys=[${result.keys.join(", ")}]');
 
         if (slotId != currentId && slotId != upcomingId) {
           Log.w(
@@ -715,12 +739,30 @@ class _IdleScreenState extends State<IdleScreen>
           return;
         }
 
-        if (result['pre_allocated_session_id'] != null) {
-          final pid = result['pre_allocated_session_id']?.toString();
+        final sessionId = result['session_id']?.toString();
+        if (sessionId != null && sessionId.isNotEmpty) {
+          final pid = sessionId;
+
+          // Mark this slot as completed so the 10-second timer stops
+          // re-triggering warm-up.
+          _completedWarmUpSlots.add(slotId);
+
+          // Capture server time and start a monotonic reference clock.
+          // This gives us a server-corrected time that never jumps backwards
+          // (unlike wall-clock-based drift correction).
+          final serverTs =
+              (result['server_timestamp'] ?? result['server_timestamp_ms'] ?? 0)
+                  as int;
+          if (serverTs > 0) {
+            _serverWarmUpTime = DateTime.fromMillisecondsSinceEpoch(serverTs);
+            (_monotonicWarmUpClock ??= Stopwatch()).start();
+          }
+
           if (isForUpcoming) {
             setState(() {
               _upcomingAllocatedSessionId = pid;
               _preFlightStatus = PreFlightStatus.ready;
+              _preFlightError = null;
               _errorMessage = null;
             });
             Log.i('✅ [Idle] UPCOMING class armed. SessionID: $pid.');
@@ -728,11 +770,14 @@ class _IdleScreenState extends State<IdleScreen>
             setState(() {
               _preFlightStatus = PreFlightStatus.ready;
               _preAllocatedSessionId = pid;
+              _preFlightError = null;
               _errorMessage = null;
             });
             Log.i('✅ [Idle] Board ARMED. SessionID in RAM: $pid.');
           }
         } else {
+          Log.d('[Idle] Warm-up response missing session_id. Keys: ${result.keys.join(", ")}');
+          Log.d('[Idle] Full response: $result');
           setState(() {
             if (isForUpcoming) {
               _upcomingAllocatedSessionId = null;
@@ -757,16 +802,26 @@ class _IdleScreenState extends State<IdleScreen>
         });
       }
 
-      final result = force
-          ? await PreFlightService().forceWarmUp(slotId,
-              onSuccess: onWarmUpSuccess, onStatusChange: onStatusChange)
-          : await PreFlightService().runPerSessionWarmUp(slotId,
-              onSuccess: onWarmUpSuccess, onStatusChange: onStatusChange);
+      void onWarmUpError(String error) {
+        if (!mounted) return;
+        if (slotId != currentId && slotId != upcomingId) return;
 
-      if (result == null && mounted) {
-        // Initial attempt failed — the onSuccess/onStatusChange callbacks
-        // will still fire later if a PreFlightService retry eventually succeeds.
+        setState(() {
+          _preFlightStatus = PreFlightStatus.none;
+          _preFlightError = 'Warm-up failed: $error';
+        });
+        Log.w('[Idle] Pre-flight warm-up error: $error');
       }
+
+      await (force
+          ? PreFlightService().forceWarmUp(slotId,
+              onSuccess: onWarmUpSuccess,
+              onStatusChange: onStatusChange,
+              onError: onWarmUpError)
+          : PreFlightService().runPerSessionWarmUp(slotId,
+              onSuccess: onWarmUpSuccess,
+              onStatusChange: onStatusChange,
+              onError: onWarmUpError));
     } catch (e) {
       if (mounted) {
         if (e is UnregisteredException) {
@@ -781,7 +836,10 @@ class _IdleScreenState extends State<IdleScreen>
             );
           }
         } else {
-          setState(() => _preFlightStatus = PreFlightStatus.none);
+          setState(() {
+            _preFlightStatus = PreFlightStatus.none;
+            _preFlightError = 'Pre-flight failed: $e';
+          });
           Log.w(
               '⚠️ [Idle] Pre-flight failed. Faculty may still proceed manually: $e');
         }
@@ -843,6 +901,7 @@ class _IdleScreenState extends State<IdleScreen>
       final courseName = data['course_name']?.toString() ?? 'Active Class';
       final sectionId =
           data['section_id']?.toString() ?? widget.registration.smartBoardId;
+      final accessToken = data['access_token']?.toString();
 
       if (sessionId == null || sessionSecret == null) {
         setState(() => _errorMessage =
@@ -891,13 +950,13 @@ class _IdleScreenState extends State<IdleScreen>
           sessionSecret: sessionSecret,
         );
         final wsService = WebsocketService(AppConfig.baseUrl);
-        // WebSocket kept as a parameter for future use — not actively connecting.
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (context) => AttendanceScreen(
               sessionId: sessionId,
               totpEngine: engine,
               websocketService: wsService,
+              accessToken: accessToken ?? '',
               capacity: widget.registration.capacity,
               courseName: courseName,
               facultyName: facultyName,
@@ -1126,6 +1185,16 @@ class _IdleScreenState extends State<IdleScreen>
     return _preFlightStatus == PreFlightStatus.ready
         ? AppColors.successLime
         : AppColors.primaryTeal;
+  }
+
+  /// Returns a server-corrected monotonic time by adding the elapsed time
+  /// since warm-up to the server's timestamp. Falls back to [TimeSyncService]
+  /// if no warm-up has completed yet.
+  DateTime get _warmUpServerTime {
+    if (_serverWarmUpTime != null && (_monotonicWarmUpClock?.isRunning ?? false)) {
+      return _serverWarmUpTime!.add(_monotonicWarmUpClock!.elapsed);
+    }
+    return TimeSyncService.timeNow;
   }
 
   Widget _buildNavLinks(Color color) {
@@ -1422,6 +1491,23 @@ class _IdleScreenState extends State<IdleScreen>
                   _errorMessage!,
                   style: const TextStyle(color: AppColors.error, fontSize: 12),
                   maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          if (_preFlightError != null && _errorMessage == null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _preFlightError!,
+                  style: TextStyle(
+                    color: AppColors.warningAmber,
+                    fontSize: 10,
+                  ),
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),

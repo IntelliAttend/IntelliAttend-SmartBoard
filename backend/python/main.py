@@ -15,19 +15,17 @@ from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 
 from middleware.rate_limit_middleware import RateLimitMiddleware
-from services.board_service import BoardService, HeartbeatService
+from core.security import get_current_board
+from services.board_service import HeartbeatService
 from services.session_service import SessionService
 from services.active_sessions_service import ActiveSessionsService
 from services.auth_service import AuthService
 from services.cache_service import CacheService
 from services.alert_service import AlertService
 from models.board_auth_schema import (
-    TelemetryPayload, 
-    SessionInitiateRequest, 
+    TelemetryPayload,
+    SessionInitiateRequest,
     SessionCreateRequest,
-    DeviceRegisterInitiateRequest,
-    DeviceRegisterVerifyRequest,
-    DeviceRegisterCompleteRequest,
     VaultSyncRequest,
 )
 
@@ -214,7 +212,7 @@ async def _initiate_session_logic(request: SessionInitiateRequest, board_data: d
 @app.post("/api/v1/board/heartbeat")
 async def board_heartbeat_v2(
     request: HeartbeatV2Request,
-    board_data: dict = Depends(BoardService.get_board_data(db)),
+    board_data: dict = Depends(get_current_board(db)),
 ):
     authenticated_id = board_data.get("smart_board_id") or board_data.get("board_id") or board_data.get("device_id", "")
     if request.boardId != authenticated_id:
@@ -251,7 +249,7 @@ async def board_heartbeat_v2(
 @app.post("/api/v1/board/verify-otp")
 async def verify_otp_v2(
     request: SessionInitiateRequest,
-    board_data: dict = Depends(BoardService.get_board_data(db)),
+    board_data: dict = Depends(get_current_board(db)),
 ):
     return await _initiate_session_logic(request, board_data)
 
@@ -324,12 +322,17 @@ async def session_websocket(websocket: WebSocket, session_id: str, ticket: str =
     finally:
         await manager.disconnect(session_id, websocket)
 
-@app.post("/v1/board/session/initiate")
-async def initiate_session_legacy(
-    request: SessionInitiateRequest,
-    board_data: dict = Depends(BoardService.get_board_data(db)),
-):
-    return await _initiate_session_logic(request, board_data)
+# ─── DEPRECATED: Legacy /v1/board/session/initiate ────────────────────────
+#
+# Replaced by /api/v1/board/session/initiate (defined in the api_router below).
+# The board should use the /api/v1/board/* endpoints with Firebase Auth.
+# ─────────────────────────────────────────────────────────────────────────
+# @app.post("/v1/board/session/initiate")
+# async def initiate_session_legacy(
+#     request: SessionInitiateRequest,
+#     board_data: dict = Depends(get_current_board(db)),
+# ):
+#     return await _initiate_session_logic(request, board_data)
 
 # --- Standard API Router (api/v1/board) ---
 api_router = APIRouter(prefix="/api/v1/board")
@@ -342,7 +345,7 @@ async def get_server_time():
     }
 
 @api_router.get("/ready")
-async def board_ready(board_data: dict = Depends(BoardService.get_board_data(db))):
+async def board_ready(board_data: dict = Depends(get_current_board(db))):
     """Boot canary — confirms board is registered in smart_boards collection."""
     board_id = board_data.get("smart_board_id") or board_data.get("board_id") or board_data.get("device_id", "unknown")
     return {"status": "registered", "board_id": board_id}
@@ -352,7 +355,7 @@ async def get_preflight(
     response: Response,
     slot_id: str,
     x_retry_attempt: Optional[int] = Header(None, alias="X-Retry-Attempt"),
-    board_data: dict = Depends(BoardService.get_board_data(db))
+    board_data: dict = Depends(get_current_board(db))
 ):
     if x_retry_attempt and x_retry_attempt > 1:
         logger.warning(f"⚡ [PreFlight] High-priority retry detected (Attempt: {x_retry_attempt}) for slot {slot_id}")
@@ -417,7 +420,7 @@ async def get_preflight(
     }
 
 @api_router.post("/telemetry")
-async def receive_telemetry(payload: TelemetryPayload, board_data: dict = Depends(BoardService.get_board_data(db))):
+async def receive_telemetry(payload: TelemetryPayload, board_data: dict = Depends(get_current_board(db))):
     if db:
         await db.collection("smart_boards").document(board_data["smart_board_id"]).update({
             "health": {**payload.model_dump(), "last_seen": firestore.SERVER_TIMESTAMP}
@@ -425,11 +428,11 @@ async def receive_telemetry(payload: TelemetryPayload, board_data: dict = Depend
     return {"status": "success"}
 
 @api_router.get("/sync-context")
-async def sync_context(board_data: dict = Depends(BoardService.get_board_data(db))):
+async def sync_context(board_data: dict = Depends(get_current_board(db))):
     return {"status": "success", "data": board_data}
 
 @api_router.post("/session/initiate")
-async def initiate_session_api(request: SessionInitiateRequest, board_data: dict = Depends(BoardService.get_board_data(db))):
+async def initiate_session_api(request: SessionInitiateRequest, board_data: dict = Depends(get_current_board(db))):
     return await _initiate_session_logic(request, board_data)
 
 @api_router.post("/session/terminate")
@@ -486,7 +489,7 @@ async def record_attendance(request: Request):
 @api_router.post("/sync/vault")
 async def sync_vault(
     request: VaultSyncRequest,
-    board_data: dict = Depends(BoardService.get_board_data(db)),
+    board_data: dict = Depends(get_current_board(db)),
 ):
     """Flush offline attendance scans from the board's local Isar vault."""
     if db:
@@ -506,143 +509,131 @@ async def sync_vault(
         logger.info(f"📤 [VaultSync] Synced {len(request.queued_scans)} scans for session {request.session_id}")
     return {"status": "success", "synced_count": len(request.queued_scans)}
 
-# --- Registration API Router (api/v1/device/register) ---
-auth_router = APIRouter(prefix="/api/v1/device/register")
+# ─── DEPRECATED: Legacy OTP Registration Router ───────────────────────────
+#
+# The /api/v1/device/register/* endpoints implemented OTP-based board
+# registration (initiate -> verify -> complete) with custom JWT issuance
+# and refresh token rotation.
+#
+# SmartBoard now authenticates using Firebase Auth email/password, the
+# same as the Faculty and Student mobile apps. Board accounts are
+# provisioned via Firebase Auth Admin at install time.
+#
+# Key replacements:
+#   POST /login             -> Firebase Auth signInWithEmailAndPassword()
+#   POST /verify            -> (not needed - no OTP flow)
+#   POST /complete          -> (not needed - no hardware binding)
+#   POST /token/refresh     -> Firebase SDK auto-refresh (user.getIdToken())
+#   POST /deregister        -> (not needed - managed via Firebase Auth Admin)
+#
+# Preserved for reference in case re-registration flows are revisited.
+# ─────────────────────────────────────────────────────────────────────────
+# auth_router = APIRouter(prefix="/api/v1/device/register")
+#
+# _otp_attempts: dict[str, dict] = {}
+# _OTP_MAX_ATTEMPTS = 10
+# _OTP_LOCKOUT_MINUTES = 15
+#
+# def _check_otp_rate_limit(board_id: str):
+#     now = datetime.now(timezone.utc)
+#     state = _otp_attempts.get(board_id)
+#     if state:
+#         lockout_until = state.get("lockout_until")
+#         if lockout_until and now < lockout_until:
+#             remaining = int((lockout_until - now).total_seconds())
+#             raise HTTPException(status_code=429, detail=f"Too many OTP attempts. Try again in {remaining} seconds.")
+#         if lockout_until and now >= lockout_until:
+#             _otp_attempts.pop(board_id, None)
+#
+# def _record_otp_attempt(board_id: str, success: bool):
+#     now = datetime.now(timezone.utc)
+#     state = _otp_attempts.get(board_id, {"count": 0, "lockout_until": None})
+#     if success:
+#         _otp_attempts.pop(board_id, None)
+#         return
+#     state["count"] += 1
+#     if state["count"] >= _OTP_MAX_ATTEMPTS:
+#         state["lockout_until"] = now + timedelta(minutes=_OTP_LOCKOUT_MINUTES)
+#         logger.warning(f"[RateLimit] Board {board_id} locked out for {_OTP_LOCKOUT_MINUTES} min")
+#     _otp_attempts[board_id] = state
+#
+# def _extract_bearer_token(request: Request) -> Optional[str]:
+#     auth_header = request.headers.get("Authorization")
+#     if auth_header and auth_header.startswith("Bearer "):
+#         return auth_header.split(" ")[1]
+#     return None
+#
+# @auth_router.post("/login")
+# async def initiate_device_registration(request: DeviceRegisterInitiateRequest):
+#     if not db:
+#         return {"status": "error", "message": "Database not initialized"}
+#     result = await AuthService.initiate_registration(request.smart_board_id, db)
+#     if not result:
+#         raise HTTPException(status_code=400, detail="Board ID not provisioned")
+#     return result
+#
+# @auth_router.post("/verify")
+# async def verify_device_registration(request: DeviceRegisterVerifyRequest):
+#     if not db:
+#         return {"status": "error", "message": "Database not initialized"}
+#     _check_otp_rate_limit(request.smart_board_id)
+#     result = await AuthService.verify_otp(request.smart_board_id, request.otp, db)
+#     if not result:
+#         _record_otp_attempt(request.smart_board_id, success=False)
+#         raise HTTPException(status_code=400, detail="Invalid OTP or Session Expired")
+#     _record_otp_attempt(request.smart_board_id, success=True)
+#     return result
+#
+# @auth_router.post("/complete")
+# async def complete_device_registration(http_request: Request, request: DeviceRegisterCompleteRequest):
+#     if not db:
+#         return {"status": "error", "message": "Database not initialized"}
+#     firebase_id_token = _extract_bearer_token(http_request)
+#     firebase_uid = None
+#     if firebase_id_token:
+#         decoded = await AuthService.verify_firebase_token(firebase_id_token)
+#         if decoded:
+#             firebase_uid = decoded.get("uid")
+#     result = await AuthService.complete_registration(
+#         board_id=request.smart_board_id,
+#         verification_token=request.verification_token,
+#         hardware_id=request.hardware_id,
+#         db=db,
+#         firebase_uid=firebase_uid
+#     )
+#     if not result:
+#         raise HTTPException(status_code=400, detail="Registration Failed: Invalid Token or Board ID")
+#     return result
+#
+# @auth_router.post("/token/refresh")
+# async def refresh_board_token(refresh_token: str = Header(alias="X-Refresh-Token")):
+#     if not db:
+#         return {"status": "error", "message": "Database not initialized"}
+#     result = await AuthService.refresh_access_token(refresh_token, db)
+#     if not result:
+#         raise HTTPException(status_code=401, detail="INVALID_REFRESH_TOKEN")
+#     return result
+#
+# @auth_router.post("/deregister")
+# async def deregister_board(board_data: dict = Depends(get_current_board(db))):
+#     if not db:
+#         return {"status": "error", "message": "Database not initialized"}
+#     board_id = board_data.get("smart_board_id")
+#     device_id = board_data.get("device_id")
+#     tokens = db.collection("refresh_tokens").where("board_id", "==", board_id).where("device_id", "==", device_id).stream()
+#     async for token in tokens:
+#         await token.reference.delete()
+#     await db.collection("smart_boards").document(board_id).update({
+#         "is_registered": False,
+#         "device_id": None,
+#         "status": "PROVISIONED",
+#         "last_deregistered_at": firestore.SERVER_TIMESTAMP
+#     })
+#     logger.info(f"[Auth] Board {board_id} deregistered successfully.")
+#     return {"status": "success", "message": "Board deregistered and tokens revoked"}
+#
+# app.include_router(auth_router)
 
-# OTP rate limiting state (S3): per board_id, in-memory
-_otp_attempts: dict[str, dict] = {}
-_OTP_MAX_ATTEMPTS = 10
-_OTP_LOCKOUT_MINUTES = 15
-
-def _check_otp_rate_limit(board_id: str):
-    """Raises 429 if board has exceeded max OTP attempts."""
-    now = datetime.now(timezone.utc)
-    state = _otp_attempts.get(board_id)
-    if state:
-        lockout_until = state.get("lockout_until")
-        if lockout_until and now < lockout_until:
-            remaining = int((lockout_until - now).total_seconds())
-            raise HTTPException(
-                status_code=429,
-                detail=f"Too many OTP attempts. Try again in {remaining} seconds."
-            )
-        # Reset if lockout expired
-        if lockout_until and now >= lockout_until:
-            _otp_attempts.pop(board_id, None)
-
-def _record_otp_attempt(board_id: str, success: bool):
-    """Record a successful or failed OTP attempt."""
-    now = datetime.now(timezone.utc)
-    state = _otp_attempts.get(board_id, {"count": 0, "lockout_until": None})
-    if success:
-        _otp_attempts.pop(board_id, None)
-        return
-    state["count"] += 1
-    if state["count"] >= _OTP_MAX_ATTEMPTS:
-        state["lockout_until"] = now + timedelta(minutes=_OTP_LOCKOUT_MINUTES)
-        logger.warning(f"🔒 [RateLimit] Board {board_id} locked out for {_OTP_LOCKOUT_MINUTES} min after {state['count']} failed OTP attempts")
-    _otp_attempts[board_id] = state
-
-def _extract_bearer_token(request: Request) -> Optional[str]:
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        return auth_header.split(" ")[1]
-    return None
-
-@auth_router.post("/login")
-async def initiate_device_registration(request: DeviceRegisterInitiateRequest):
-    """Phase 2: Ignition Login (Trigger OTP)"""
-    if not db:
-        return {"status": "error", "message": "Database not initialized"}
-    
-    result = await AuthService.initiate_registration(request.smart_board_id, db)
-    if not result:
-        raise HTTPException(status_code=400, detail="Board ID not provisioned")
-        
-    return result
-
-@auth_router.post("/verify")
-async def verify_device_registration(request: DeviceRegisterVerifyRequest):
-    """Phase 2.5: OTP Verification"""
-    if not db:
-        return {"status": "error", "message": "Database not initialized"}
-
-    # Check OTP rate limit before processing (S3)
-    _check_otp_rate_limit(request.smart_board_id)
-
-    result = await AuthService.verify_otp(request.smart_board_id, request.otp, db)
-    if not result:
-        _record_otp_attempt(request.smart_board_id, success=False)
-        raise HTTPException(status_code=400, detail="Invalid OTP or Session Expired")
-
-    _record_otp_attempt(request.smart_board_id, success=True)
-    return result
-
-@auth_router.post("/complete")
-async def complete_device_registration(http_request: Request, request: DeviceRegisterCompleteRequest):
-    """Phase 3: Hardware Binding"""
-    if not db:
-        return {"status": "error", "message": "Database not initialized"}
-    
-    # Optional: Extract Firebase UID from token to link accounts
-    firebase_id_token = _extract_bearer_token(http_request)
-    firebase_uid = None
-    if firebase_id_token:
-        decoded = await AuthService.verify_firebase_token(firebase_id_token)
-        if decoded:
-            firebase_uid = decoded.get("uid")
-
-    result = await AuthService.complete_registration(
-        board_id=request.smart_board_id,
-        verification_token=request.verification_token,
-        hardware_id=request.hardware_id,
-        db=db,
-        firebase_uid=firebase_uid
-    )
-    
-    if not result:
-        raise HTTPException(status_code=400, detail="Registration Failed: Invalid Token or Board ID")
-        
-    return result
-
-@auth_router.post("/token/refresh")
-async def refresh_board_token(refresh_token: str = Header(alias="X-Refresh-Token")):
-    """Rotate access token using refresh token."""
-    if not db:
-        return {"status": "error", "message": "Database not initialized"}
-    
-    result = await AuthService.refresh_access_token(refresh_token, db)
-    if not result:
-        raise HTTPException(status_code=401, detail="INVALID_REFRESH_TOKEN")
-        
-    return result
-
-@auth_router.post("/deregister")
-async def deregister_board(board_data: dict = Depends(BoardService.get_board_data(db))):
-    """Securely unlink hardware and revoke all tokens."""
-    if not db:
-        return {"status": "error", "message": "Database not initialized"}
-    
-    board_id = board_data.get("smart_board_id")
-    device_id = board_data.get("device_id")
-    
-    # 1. Revoke all refresh tokens for this board/device
-    tokens = db.collection("refresh_tokens").where("board_id", "==", board_id).where("device_id", "==", device_id).stream()
-    async for token in tokens:
-        await token.reference.delete()
-        
-    # 2. Reset board status in Firestore
-    await db.collection("smart_boards").document(board_id).update({
-        "is_registered": False,
-        "device_id": None,
-        "status": "PROVISIONED",
-        "last_deregistered_at": firestore.SERVER_TIMESTAMP
-    })
-    
-    logger.info(f"🗑️ [Auth] Board {board_id} (Hardware: {device_id}) deregistered successfully.")
-    return {"status": "success", "message": "Board deregistered and tokens revoked"}
-
-app.include_router(auth_router)
 app.include_router(api_router)
 
 # ─── Admin / IT Dashboard Routes (O1/O2) ──────────────────────────────────────

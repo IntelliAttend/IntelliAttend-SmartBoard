@@ -18,17 +18,28 @@ class SessionCreateRequest(BaseModel):
     roster_count: int = 0
     slot_id: Optional[str] = None
 
-class DeviceRegisterInitiateRequest(BaseModel):
-    smart_board_id: str
+# ─── DEPRECATED: Legacy OTP Registration Schemas ──────────────────────────
+#
+# These schemas were used by the OTP-based board registration flow
+# (initiate → verify → complete). The SmartBoard now authenticates
+# using Firebase Auth email/password. Board accounts are provisioned
+# via Firebase Auth Admin (createUserWithEmailAndPassword) and looked
+# up by email in the smart_boards collection.
+#
+# Preserved for reference in case re-registration flows are revisited.
+# ─────────────────────────────────────────────────────────────────────────
 
-class DeviceRegisterVerifyRequest(BaseModel):
-    smart_board_id: str
-    otp: str
-
-class DeviceRegisterCompleteRequest(BaseModel):
-    smart_board_id: str
-    verification_token: str
-    hardware_id: str
+# class DeviceRegisterInitiateRequest(BaseModel):
+#     smart_board_id: str
+#
+# class DeviceRegisterVerifyRequest(BaseModel):
+#     smart_board_id: str
+#     otp: str
+#
+# class DeviceRegisterCompleteRequest(BaseModel):
+#     smart_board_id: str
+#     verification_token: str
+#     hardware_id: str
 
 class QueuedScan(BaseModel):
     student_id: str

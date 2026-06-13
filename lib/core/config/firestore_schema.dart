@@ -40,6 +40,13 @@ class FirestoreSchema {
   static String get fieldTitle => 'title';
   static String get fieldType => 'type';
 
+  // ── Document attachment fields ───────────────────────────────────────────
+
+  static String get fieldAttachmentUrl => 'attachment_url';
+  static String get fieldAttachmentName => 'attachment_name';
+  static String get fieldAttachmentType => 'attachment_type';
+  static String get fieldAttachmentSize => 'attachment_size';
+
   // ── Well-known field values ──────────────────────────────────────────────
 
   static String get statusActive => 'active';

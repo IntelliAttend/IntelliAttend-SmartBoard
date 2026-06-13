@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../services/time_sync_service.dart';
@@ -24,30 +26,69 @@ class SecureStorageService {
 
   static Future<void> init() async {}
 
-  static Future<void> _write(String key, String value) async {
-    try {
-      await _secure.write(key: key, value: value);
-    } catch (e) {
-      Log.e('🚨 [SecureStorage] FATAL: OS Keychain Write Failure ($e). Session data at risk.');
-      rethrow;
+  /// Maximum number of retries for file-lock conflicts on Windows.
+  static const int _maxLockRetries = 3;
+  static const Duration _lockRetryDelay = Duration(milliseconds: 500);
+
+  /// Retry an async operation if it fails with [PathAccessException]
+  /// (Windows file-lock contention). Clears all data if retries exhausted.
+  static Future<T> _retryOnLock<T>(Future<T> Function() fn) async {
+    for (int attempt = 0; attempt < _maxLockRetries; attempt++) {
+      try {
+        return await fn();
+      } on PathAccessException catch (e) {
+        if (attempt < _maxLockRetries - 1) {
+          Log.w('[SecureStorage] Lock contention (attempt ${attempt + 1}/$_maxLockRetries): $e');
+          await Future.delayed(_lockRetryDelay * (1 << attempt));
+          continue;
+        }
+        Log.e('[SecureStorage] Lock contention exhausted — clearing all data to recover.');
+        await _deleteAllUnsafe();
+      }
     }
+    return fn();
+  }
+
+  static Future<void> _write(String key, String value) async {
+    await _retryOnLock(() async {
+      try {
+        await _secure.write(key: key, value: value);
+      } catch (e) {
+        Log.e('🚨 [SecureStorage] FATAL: OS Keychain Write Failure ($e). Session data at risk.');
+        rethrow;
+      }
+    });
   }
 
   static Future<String?> _read(String key) async {
-    try {
-      return await _secure.read(key: key);
-    } catch (e) {
-      Log.e('🚨 [SecureStorage] FATAL: OS Keychain Read Failure ($e).');
-      rethrow;
-    }
+    return await _retryOnLock(() async {
+      try {
+        return await _secure.read(key: key);
+      } catch (e) {
+        Log.e('🚨 [SecureStorage] FATAL: OS Keychain Read Failure ($e).');
+        rethrow;
+      }
+    });
   }
 
   static Future<void> _delete(String key) async {
+    await _retryOnLock(() async {
+      try {
+        await _secure.delete(key: key);
+      } catch (e) {
+        Log.e('🚨 [SecureStorage] FATAL: OS Keychain Delete Failure ($e).');
+        rethrow;
+      }
+    });
+  }
+
+  /// Deletes every known key without wrapping in retry — called only
+  /// as a last-resort recovery when lock retries are exhausted.
+  static Future<void> _deleteAllUnsafe() async {
     try {
-      await _secure.delete(key: key);
+      await _secure.deleteAll();
     } catch (e) {
-      Log.e('🚨 [SecureStorage] FATAL: OS Keychain Delete Failure ($e).');
-      rethrow;
+      Log.e('[SecureStorage] Delete-all recovery also failed: $e');
     }
   }
 

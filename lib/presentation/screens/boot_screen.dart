@@ -11,6 +11,9 @@ import '../../services/api_service.dart';
 import '../../core/utils/logger.dart';
 import '../../models/isar_schemas.dart';
 import '../../core/security/firebase_rest_auth.dart';
+import '../../core/platform/hardware_fingerprint_service.dart';
+import '../../data/repositories/auth_repository.dart';
+import '../../services/session_manager.dart';
 
 class BootScreen extends StatefulWidget {
   const BootScreen({super.key});
@@ -28,6 +31,7 @@ class _BootScreenState extends State<BootScreen> {
   bool _needsReauth = false;
   bool _isReauthenticating = false;
   String? _reauthError;
+  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
 
   @override
@@ -52,6 +56,7 @@ class _BootScreenState extends State<BootScreen> {
 
   @override
   void dispose() {
+    _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
@@ -66,11 +71,9 @@ class _BootScreenState extends State<BootScreen> {
           registration.smartBoardId != 'UNKNOWN';
 
       if (!isRegistered) {
-        Log.i('[Boot] No local registration found. Redirecting to Registration.');
+        Log.i('[Boot] No local registration found. Showing login prompt.');
         if (mounted) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (context) => const RegistrationScreen()),
-          );
+          setState(() => _needsReauth = true);
         }
         return;
       }
@@ -136,21 +139,29 @@ class _BootScreenState extends State<BootScreen> {
     });
 
     try {
-      final boardId = _registration!.smartBoardId;
-      final email = AppConfig.boardIdToEmail(boardId);
+      final email = _registration != null
+          ? AppConfig.boardIdToEmail(_registration!.smartBoardId)
+          : _emailController.text.trim();
 
       await FirebaseRestAuth.signInWithPassword(email, password);
-      Log.i('[Boot] Re-authentication successful. Proceeding to IdleScreen.');
+      Log.i('[Boot] Authentication successful.');
 
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => IdleScreen(
-              registration: _registration!,
-            ),
-          ),
-        );
+      if (_registration == null) {
+        final authRepo = context.read<IAuthRepository>();
+        final hardwareId = await HardwareFingerprintService.getDeviceId();
+        await authRepo.saveRegistration({
+          'smart_board_id': _extractBoardId(email),
+          'hardware_id': hardwareId,
+        }, SessionManager.isar, hardwareId: hardwareId);
       }
+
+      if (!mounted) return;
+      final registration = _registration ?? await repoRegistration();
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => IdleScreen(registration: registration),
+        ),
+      );
     } on FirebaseRestAuthException catch (e) {
       setState(() {
         _isReauthenticating = false;
@@ -164,6 +175,15 @@ class _BootScreenState extends State<BootScreen> {
         _reauthError = 'Connection error. Check network.';
       });
     }
+  }
+
+  String _extractBoardId(String email) {
+    final atIndex = email.indexOf('@');
+    return atIndex == -1 ? email.toUpperCase() : email.substring(0, atIndex).toUpperCase();
+  }
+
+  Future<DeviceRegistration> repoRegistration() async {
+    return (await context.read<IDeviceRepository>().getRegistration())!;
   }
 
   Future<void> _backgroundSync(IDeviceRepository repository) async {
@@ -317,7 +337,8 @@ class _BootScreenState extends State<BootScreen> {
   }
 
   Widget _buildReauthForm() {
-    final boardId = _registration?.smartBoardId ?? 'UNKNOWN';
+    final isFirstTime = _registration == null;
+    final boardId = _registration?.smartBoardId ?? '---';
     return Container(
       constraints: const BoxConstraints(maxWidth: 400),
       padding: const EdgeInsets.all(32),
@@ -334,17 +355,33 @@ class _BootScreenState extends State<BootScreen> {
         children: [
           const Icon(Icons.lock_outline_rounded, color: AppColors.primary, size: 48),
           const SizedBox(height: 16),
-          const Text(
-            'SESSION EXPIRED',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, letterSpacing: 2, color: Color(0xFF1E293B)),
+          Text(
+            isFirstTime ? 'SMARTBOARD LOGIN' : 'SESSION EXPIRED',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, letterSpacing: 2, color: Color(0xFF1E293B)),
           ),
           const SizedBox(height: 8),
           Text(
-            'Enter your credentials to re-authenticate\nBoard: $boardId',
+            isFirstTime ? 'Enter board credentials to authenticate' : 'Enter your credentials to re-authenticate\nBoard: $boardId',
             textAlign: TextAlign.center,
             style: const TextStyle(color: Color(0xFF64748B), fontSize: 13, height: 1.5),
           ),
           const SizedBox(height: 24),
+          if (isFirstTime)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: TextField(
+                controller: _emailController,
+                keyboardType: TextInputType.emailAddress,
+                decoration: InputDecoration(
+                  labelText: 'Email',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  prefixIcon: const Icon(Icons.email_outlined),
+                ),
+                onChanged: (_) {
+                  if (_reauthError != null) setState(() => _reauthError = null);
+                },
+              ),
+            ),
           TextField(
             controller: _passwordController,
             obscureText: true,

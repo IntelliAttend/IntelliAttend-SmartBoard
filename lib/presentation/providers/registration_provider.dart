@@ -106,8 +106,10 @@ class RegistrationProvider extends ChangeNotifier {
                 await _authRepository.initiateRegistration(boardId, password);
 
             if (initResult != null) {
+              Log.i('[RegistrationProvider] initiateRegistration response: $initResult');
               // S5: Server says board is already registered — skip OTP
-              if (initResult['status'] == 'already_registered') {
+              if (initResult['is_registered'] == true ||
+                  initResult['status'] == 'already_registered') {
                 final profile = Map<String, dynamic>.from(initResult);
                 profile['smart_board_id'] = initResult['smart_board_id'];
                 await _authRepository.saveRegistration(
