@@ -12,7 +12,6 @@ import '../core/platform/hardware_fingerprint_service.dart';
 import '../core/security/ssl_pinning_service.dart';
 import '../core/circuit_breaker.dart';
 import 'time_sync_service.dart';
-import '../core/security/secure_storage_service.dart';
 import '../core/security/firebase_rest_auth.dart';
 
 class ApiException implements Exception {
@@ -207,15 +206,8 @@ class ApiService {
       headers['X-Device-ID'] = deviceId;
     }
 
-    // v5.4 Strategy: Prefer the backend-issued Access Token (JWT) over
-    // the initial Firebase ID token. This token is bound to the hardware.
-    final backendToken = await SecureStorageService.getValidAccessToken();
-    if (backendToken != null && backendToken.isNotEmpty) {
-      headers['Authorization'] = 'Bearer $backendToken';
-      return headers;
-    }
-
-    // Fallback: Use Firebase ID token if backend token is missing (e.g. during initial handshake)
+    // Board endpoints validate Firebase ID tokens directly via
+    // firebase_admin.auth.verify_id_token() — no backend JWT needed.
     final idToken = await FirebaseRestAuth.getIdToken();
     if (idToken != null && idToken.isNotEmpty) {
       headers['Authorization'] = 'Bearer $idToken';

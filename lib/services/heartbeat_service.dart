@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../data/repositories/device_repository.dart';
@@ -7,8 +6,6 @@ import 'api_service.dart';
 import 'time_sync_service.dart';
 import '../core/utils/logger.dart';
 import '../core/state/board_state_machine.dart';
-import '../main.dart';
-import '../presentation/screens/registration_screen.dart';
 
 class HeartbeatSessionInfo {
   final String? sessionId;
@@ -147,14 +144,7 @@ class HeartbeatService {
     } catch (e) {
       if (e is ApiException &&
           (e.statusCode == 401 || e.statusCode == 404)) {
-        Log.e('[Heartbeat] Auth lost or device revoked. Forcing logout...');
-        await stop();
-        await _deviceRepository?.clearRegistration();
-
-        navigatorKey.currentState?.pushAndRemoveUntil(
-          MaterialPageRoute(builder: (context) => const RegistrationScreen()),
-          (route) => false,
-        );
+        Log.w('[Heartbeat] Server rejected heartbeat (${e.statusCode}) — operating in offline mode. Board remains registered locally.');
         return;
       }
 

@@ -234,8 +234,10 @@ class RegistrationProvider extends ChangeNotifier {
       final hardwareId = await HardwareFingerprintService.getDeviceId();
 
       // ── Step D: Hardware binding ──────────────────────────────────────────
+      final metadata = await HardwareFingerprintService.getHardwareMetadata();
       final registrationResult = await _authRepository.completeRegistration(
-          boardId, hardwareId, _verificationToken!);
+          boardId, hardwareId, _verificationToken!,
+          metadata: metadata);
 
       if (registrationResult == null) {
         // Server rejected binding. The verification_token is still persisted so
@@ -247,9 +249,9 @@ class RegistrationProvider extends ChangeNotifier {
         return;
       }
 
-      // ── Steps E & F: Firebase custom-token sign-in (handled inside completeRegistration)
-      // completeRegistration() calls signInWithCustomToken() and storeRefreshToken()
-      // internally. At this point the Firebase session is established.
+      // ── Steps E & F: Firebase custom-token sign-in (handled inside completeRegistration())
+      // completeRegistration() calls FirebaseRestAuth.signInWithCustomToken() internally.
+      // At this point the Firebase session is bound to the registered hardware.
 
       // ── Step G: Write local registration record ───────────────────────────
       _otpTimer?.cancel();

@@ -609,6 +609,28 @@ class _IdleScreenState extends State<IdleScreen>
       _lastBedrockSlotId = null;
     }
 
+    // ── Next upcoming class ───────────────────────────────────────────────────
+    // Computed early so both T-5 cooldown and T-3 warm-up can reference it.
+    TimetableEntry? nextEntry;
+    int minDiff = 9999;
+
+    for (final entry in _todayTimeline) {
+      final parts = entry.startTime.split(':');
+      if (parts.length != 2) continue;
+
+      int entryMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
+      int diff = entryMinutes - currentMinutes;
+
+      if (diff < _midnightWrapThreshold) {
+        diff += _minutesPerDay;
+      }
+
+      if (diff > 0 && diff < minDiff) {
+        minDiff = diff;
+        nextEntry = entry;
+      }
+    }
+
     // ── T-5 proactive cooldown ──────────────────────────────────────────────
     // If the current class is within 5 minutes of its scheduled end time and
     // attendance has NOT been taken locally, start the 2-minute hard cooldown
@@ -619,12 +641,19 @@ class _IdleScreenState extends State<IdleScreen>
     //
     // Guard: if _preAllocatedSessionId is non-null, the user may be mid-OTP-
     // entry on the IdleScreen card. We skip the proactive cooldown and let the
-    // natural class-end handler (line 582) decide. The professor gets until the
-    // scheduled end time to submit; if they succeed, markAttendanceTaken is
-    // called and no cooldown fires at all.
+    // natural class-end handler (line 582) decide.
+    //
+    // Also skip if _upcomingAllocatedSessionId is non-null — the T-3 warm-up
+    // already succeeded for the next class; starting a cooldown would wipe
+    // that pre-allocated session and force a redundant re-warm-up cycle.
+    //
+    // Also skip when minDiff <= 3 — the next class T-3 window is active or
+    // imminent; the cooldown would block the warm-up and create a loop.
     if (_bedrockEntry != null &&
         _cooldownState != CooldownState.locked &&
-        _preAllocatedSessionId == null) {
+        _preAllocatedSessionId == null &&
+        _upcomingAllocatedSessionId == null &&
+        minDiff > 3) {
       final endParts = _bedrockEntry!.endTime.split(':');
       if (endParts.length == 2) {
         final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
@@ -645,34 +674,9 @@ class _IdleScreenState extends State<IdleScreen>
     // After cooldown completes, _evaluateNextClass handles the next-link chain.
     if (_cooldownState == CooldownState.locked) return;
 
-    TimetableEntry? nextEntry;
-    int minDiff = 9999;
-
-    for (final entry in _todayTimeline) {
-      final parts = entry.startTime.split(':');
-      if (parts.length != 2) continue;
-
-      int entryMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
-      int diff = entryMinutes - currentMinutes;
-
-      // Handle wraparound (e.g. current 23:50, next 00:50)
-      if (diff < _midnightWrapThreshold) {
-        diff += _minutesPerDay;
-      }
-
-      if (diff > 0 && diff < minDiff) {
-        minDiff = diff;
-        nextEntry = entry;
-      }
-    }
-
-    // ── Current Class Warm-Up (always runs, independent of T-3 window) ──────
-    // v6.6 FIX: Moved outside the if/else block so the current active class
-    // gets a warm-up attempt even when a next class is within the T-3 window.
-    // Previously the _bedrockEntry logic was only accessible from the else
-    // branch, so when nextEntry != null && minDiff <= 3 the current class's
-    // warm-up was completely starved, causing it to show PENDING instead of
-    // WARMING UP... / READY.
+    // ── Current Class State ───────────────────────────────────────────────────
+    // Manages the OTP card visibility and session transfer for the active class.
+    // Warm-up at T-3 is handled exclusively by the upcoming-class block below.
     if (_bedrockEntry != null) {
       final currentSlotId = _bedrockEntry!.slotId;
       final isBedrockCompleted = _completedSlotIds.contains(currentSlotId);
@@ -712,16 +716,22 @@ class _IdleScreenState extends State<IdleScreen>
               '[Idle] T-0 restore: slot $currentSlotId — window brought to foreground.');
         }
 
-        if (!_completedWarmUpSlots.contains(currentSlotId) &&
-            _preAllocatedSessionId == null &&
+        // One-time fallback warm-up if T-3 was missed (e.g. app started
+        // during an active class). Guards: no session yet, not already in
+        // progress, not already completed for this slot, retries remain.
+        if (_preAllocatedSessionId == null &&
+            _preFlightStatus != PreFlightStatus.connecting &&
+            !_completedWarmUpSlots.contains(currentSlotId) &&
             !PreFlightService().isWarmUpExhausted(currentSlotId)) {
-          Log.i('[Idle] Current class $currentSlotId in progress — triggering warm-up.');
+          Log.i(
+              '[Idle] Current class $currentSlotId in session — triggering warm-up.');
           _triggerWarmUp(currentSlotId);
         }
 
-        if (_preFlightStatus != PreFlightStatus.ready &&
-            (_errorMessage == null ||
-                !_errorMessage!.contains('Enter PIN'))) {
+        if (_preAllocatedSessionId == null &&
+            _preFlightStatus != PreFlightStatus.ready &&
+            _preFlightStatus != PreFlightStatus.connecting &&
+            !PreFlightService().isWarmUpExhausted(currentSlotId)) {
           setState(() {
             _errorMessage = 'System sync delayed. Enter PIN to proceed.';
           });
@@ -797,6 +807,9 @@ class _IdleScreenState extends State<IdleScreen>
   void _startCooldown() {
     _cooldownState = CooldownState.locked;
     _cooldownSecondsRemaining = 120;
+    _forceShowCard = false;
+    _isKeypadExpanded = false;
+    _otpController.clear();
     _cooldownTimer?.cancel();
     _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       _cooldownSecondsRemaining--;
@@ -1163,11 +1176,6 @@ class _IdleScreenState extends State<IdleScreen>
 
   @override
   Widget build(BuildContext context) {
-    // 2-minute hard cooldown overlay — no interactivity until it expires.
-    if (_cooldownState == CooldownState.locked) {
-      return _buildCooldownScreen();
-    }
-
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final size = MediaQuery.of(context).size;
     final isBreak = _isAnyBreak();
@@ -1196,7 +1204,11 @@ class _IdleScreenState extends State<IdleScreen>
           final secondaryTextColor = Color.lerp(
               AppColors.textSecondaryLight, AppColors.textSecondaryDark, morph)!;
 
-          final bool showCardContextually = _forceShowCard || _bedrockEntry != null;
+          final isBedrockCompleted =
+              _bedrockEntry != null && _completedSlotIds.contains(_bedrockEntry!.slotId);
+          final bool showCardContextually = (_forceShowCard || _bedrockEntry != null) &&
+              _cooldownState != CooldownState.locked &&
+              !isBedrockCompleted;
 
           final cardOpacity = showCardContextually ? 1.0 : 0.0;
           final lockOpacity = showCardContextually ? 0.0 : 1.0;
@@ -1979,9 +1991,14 @@ class _IdleScreenState extends State<IdleScreen>
     final isSlotCompleted =
         activeSlotId != null && _completedSlotIds.contains(activeSlotId);
     final isUnlocked = _showStartingSoon && !isSlotCompleted && _upcomingAllocatedSessionId != null;
+    final isWiping = _cooldownState == CooldownState.locked;
 
     String label;
-    if (isSlotCompleted) {
+    if (isWiping) {
+      final minutes = (_cooldownSecondsRemaining / 60).floor();
+      final seconds = _cooldownSecondsRemaining % 60;
+      label = 'WIPING SESSION\n${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+    } else if (isSlotCompleted) {
       label = 'COMPLETED';
     } else if (isUnlocked) {
       label = 'TAP TO START';
@@ -1990,7 +2007,7 @@ class _IdleScreenState extends State<IdleScreen>
     }
 
     return InkWell(
-      onTap: isUnlocked
+      onTap: isUnlocked && !isWiping
           ? () {
               setState(() {
                 _forceShowCard = true;
@@ -2007,104 +2024,77 @@ class _IdleScreenState extends State<IdleScreen>
             height: 40,
             color: color.withValues(alpha: 0.2),
           ),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: isSlotCompleted
-                  ? AppColors.warningAmber.withValues(alpha: 0.15)
-                  : isUnlocked
-                      ? AppColors.successLime.withValues(alpha: 0.15)
-                      : color.withValues(alpha: 0.05),
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: isSlotCompleted
-                    ? AppColors.warningAmber.withValues(alpha: 0.3)
-                    : isUnlocked
-                        ? AppColors.successLime.withValues(alpha: 0.3)
-                        : color.withValues(alpha: 0.1),
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              if (isWiping)
+                SizedBox(
+                  width: 66,
+                  height: 66,
+                  child: CircularProgressIndicator(
+                    value: _cooldownSecondsRemaining / 120.0,
+                    strokeWidth: 3,
+                    valueColor: const AlwaysStoppedAnimation<Color>(AppColors.warningAmber),
+                    backgroundColor: color.withValues(alpha: 0.1),
+                  ),
+                ),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: isSlotCompleted
+                      ? AppColors.warningAmber.withValues(alpha: 0.15)
+                      : isUnlocked
+                          ? AppColors.successLime.withValues(alpha: 0.15)
+                          : isWiping
+                              ? AppColors.warningAmber.withValues(alpha: 0.1)
+                              : color.withValues(alpha: 0.05),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: isSlotCompleted
+                        ? AppColors.warningAmber.withValues(alpha: 0.3)
+                        : isUnlocked
+                            ? AppColors.successLime.withValues(alpha: 0.3)
+                            : isWiping
+                                ? Colors.transparent
+                                : color.withValues(alpha: 0.1),
+                  ),
+                ),
+                child: Icon(
+                  isSlotCompleted
+                      ? Icons.check_circle_outline
+                      : isUnlocked
+                          ? Icons.lock_open_outlined
+                          : Icons.lock_outline,
+                  color: isSlotCompleted
+                      ? AppColors.warningAmber
+                      : isUnlocked
+                          ? AppColors.successLime
+                          : isWiping
+                              ? AppColors.warningAmber
+                              : color.withValues(alpha: 0.5),
+                  size: 32,
+                ),
               ),
-            ),
-            child: Icon(
-              isSlotCompleted
-                  ? Icons.check_circle_outline
-                  : isUnlocked
-                      ? Icons.lock_open_outlined
-                      : Icons.lock_outline,
-              color: isSlotCompleted
-                  ? AppColors.warningAmber
-                  : isUnlocked
-                      ? AppColors.successLime
-                      : color.withValues(alpha: 0.5),
-              size: 32,
-            ),
+            ],
           ),
           const SizedBox(height: 12),
           Text(
             label,
+            textAlign: TextAlign.center,
             style: TextStyle(
               color: isSlotCompleted
                   ? AppColors.warningAmber
                   : isUnlocked
                       ? AppColors.successLime
-                      : color.withValues(alpha: 0.3),
+                      : isWiping
+                          ? AppColors.warningAmber
+                          : color.withValues(alpha: 0.3),
               fontSize: 10,
               fontWeight: FontWeight.bold,
               letterSpacing: 2,
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  /// Full-screen overlay shown during the 2-minute hard cooldown between
-  /// classes. Displays a countdown timer and a locked icon. No interactive
-  /// elements — all input is blocked until the cooldown expires.
-  Widget _buildCooldownScreen() {
-    final minutes = (_cooldownSecondsRemaining / 60).floor();
-    final seconds = _cooldownSecondsRemaining % 60;
-    return Scaffold(
-      backgroundColor: AppColors.bgDark,
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.05),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.lock_outline, size: 48, color: Colors.white38),
-            ),
-            const SizedBox(height: 32),
-            const Text(
-              'SESSION LOCKED',
-              style: TextStyle(
-                color: Colors.white70,
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 6,
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'System reset in progress. Please wait...',
-              style: TextStyle(color: Colors.white24, fontSize: 14, letterSpacing: 1),
-            ),
-            const SizedBox(height: 48),
-            Text(
-              '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}',
-              style: GoogleFonts.robotoMono(
-                textStyle: const TextStyle(
-                  color: Colors.white38,
-                  fontSize: 64,
-                  fontWeight: FontWeight.w300,
-                ),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

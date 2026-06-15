@@ -16,7 +16,8 @@ abstract class IAuthRepository {
       String boardId, String password);
   Future<Map<String, dynamic>?> verifyOtp(String boardId, String otp);
   Future<Map<String, dynamic>?> completeRegistration(
-      String boardId, String hardwareId, String verificationToken);
+      String boardId, String hardwareId, String verificationToken,
+      {Map<String, dynamic>? metadata});
   Future<void> saveRegistration(Map<String, dynamic> profile, Isar isar,
       {String? hardwareId});
   Future<void> logout();
@@ -90,6 +91,7 @@ class AuthRepository implements IAuthRepository {
         ),
         data: {
           'smart_board_id': boardId,
+          'password': password,
         },
       );
 
@@ -141,8 +143,9 @@ class AuthRepository implements IAuthRepository {
   Future<Map<String, dynamic>?> completeRegistration(
     String boardId,
     String hardwareId,
-    String verificationToken,
-  ) async {
+    String verificationToken, {
+    Map<String, dynamic>? metadata,
+  }) async {
     try {
       final idToken = await FirebaseRestAuth.getIdToken();
 
@@ -155,29 +158,23 @@ class AuthRepository implements IAuthRepository {
           'smart_board_id': boardId,
           'hardware_id': hardwareId,
           'verification_token': verificationToken,
+          if (metadata != null) 'metadata': metadata,
         },
       );
 
       if (response.statusCode == 200) {
         final data = response.data as Map<String, dynamic>;
 
-        // v5.4 JWT Strategy: The backend now returns access_token and refresh_token
-        // directly. We persist these to SecureStorage for use by the AuthInterceptor.
-        final accessToken = data['access_token']?.toString();
-        final refreshToken = data['refresh_token']?.toString();
-        final expiresIn = data['expires_in'] as int? ?? 3600;
-
-        if (accessToken != null && refreshToken != null) {
-          final expiryMs = TimeSyncService.timeNow.millisecondsSinceEpoch + (expiresIn * 1000);
-          await SecureStorageService.storeAccessToken(accessToken, expiryMs);
-          await SecureStorageService.storeRefreshToken(refreshToken);
-          
-          // Also store hardwareId as the long-lived API key for secondary verification
-          await SecureStorageService.storeApiKey(hardwareId);
-          
-          Log.i('[AuthRepository] Registration complete. v5.4 JWTs persisted.');
-        } else {
-          Log.w('[AuthRepository] Server did not return tokens — fallback to legacy might be needed.');
+        // Server returns a Firebase custom token to bind the session to
+        // the registered hardware. Exchange it for a new ID token.
+        final customToken = data['custom_token']?.toString();
+        if (customToken != null && customToken.isNotEmpty) {
+          try {
+            await FirebaseRestAuth.signInWithCustomToken(customToken);
+            Log.i('[AuthRepository] Custom-token exchange successful — session bound to hardware.');
+          } catch (e) {
+            Log.w('[AuthRepository] Custom-token exchange failed (non-fatal): $e');
+          }
         }
 
         return data;

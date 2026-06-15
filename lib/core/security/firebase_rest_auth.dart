@@ -27,16 +27,66 @@ class FirebaseRestAuth {
   // 60-second safety margin so we never present a token that's about to expire
   // mid-request (used conceptually in getIdToken's expiry check).
 
-  // ─── Sign-in (one-shot, at registration / admin login) ──────────────────
+  // ─── Sign-up (auto-provisioning) ─────────────────────────────────────────
 
-  /// Exchanges an admin email + password for an ID token + refresh token via
-  /// Identity Toolkit's `accounts:signInWithPassword`. Returns the parsed
-  /// response (`localId`, `email`, `idToken`, `refreshToken`, `expiresIn`).
-  /// Persists ID + refresh tokens so subsequent calls use REST refresh only.
-  ///
-  /// Throws a structured [FirebaseRestAuthException] on a 400 — the
-  /// `error.message` field maps cleanly to user-facing messages (e.g.
-  /// `EMAIL_NOT_FOUND`, `INVALID_PASSWORD`, `USER_DISABLED`).
+  /// Creates a new account via Identity Toolkit `accounts:signUp` and returns
+  /// the parsed response (`localId`, `email`, `idToken`, `refreshToken`,
+  /// `expiresIn`). Persists ID + refresh tokens so subsequent calls use REST
+  /// refresh only.
+  static Future<Map<String, dynamic>> signUpWithPassword(
+    String email,
+    String password,
+  ) async {
+    final apiKey = AppConfig.firebaseApiKey;
+    if (apiKey.isEmpty) {
+      throw StateError('FIREBASE_API_KEY missing — cannot sign up.');
+    }
+
+    final uri = Uri.parse(
+      'https://identitytoolkit.googleapis.com/v1/accounts:signUp'
+      '?key=$apiKey',
+    );
+
+    final response = await _client
+        .post(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'email': email,
+            'password': password,
+            'returnSecureToken': true,
+          }),
+        )
+        .timeout(const Duration(seconds: 15));
+
+    if (response.statusCode != 200) {
+      throw _toRestAuthException(response, 'signUp');
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final idToken = data['idToken'] as String?;
+    final refreshToken = data['refreshToken'] as String?;
+    final expiresInStr = data['expiresIn'] as String?;
+    if (idToken == null || refreshToken == null || expiresInStr == null) {
+      throw StateError(
+          '[FirebaseRestAuth] Malformed signUp response: $data');
+    }
+    final expiresIn = int.parse(expiresInStr);
+    final expiryMs =
+        TimeSyncService.timeNow.millisecondsSinceEpoch + (expiresIn * 1000);
+
+    await SecureStorageService.storeRefreshToken(refreshToken);
+    await SecureStorageService.storeAccessToken(idToken, expiryMs);
+
+    Log.i('[FirebaseRestAuth] Account created and signed in via signUp. '
+        'ID token expires in ${expiresIn}s.');
+    return data;
+  }
+
+  /// Signs in with email + password. If the account does not exist
+  /// (INVALID_LOGIN_CREDENTIALS / EMAIL_NOT_FOUND), auto-provisions it
+  /// via [signUpWithPassword] so first-time setup works without manual
+  /// account creation in the Firebase Console.
   static Future<Map<String, dynamic>> signInWithPassword(
     String email,
     String password,
@@ -63,10 +113,101 @@ class FirebaseRestAuth {
         )
         .timeout(const Duration(seconds: 15));
 
-    if (response.statusCode != 200) {
-      throw _toRestAuthException(response, 'signInWithPassword');
+    if (response.statusCode == 200) {
+      return _handleSignInResponse(response);
     }
 
+    // Check if failure is due to missing account — auto-provision
+    final errorBody = _tryParseError(response);
+    if (errorBody == 'EMAIL_NOT_FOUND' || errorBody == 'INVALID_LOGIN_CREDENTIALS') {
+      Log.i('[FirebaseRestAuth] Account not found; attempting auto-provision via signUp.');
+      try {
+        return await signUpWithPassword(email, password);
+      } on FirebaseRestAuthException catch (e) {
+        if (e.code == 'EMAIL_EXISTS') {
+          Log.w('[FirebaseRestAuth] Race: account appeared between signIn and signUp; retrying signIn.');
+          final retryResponse = await _client
+              .post(
+                uri,
+                headers: {'Content-Type': 'application/json'},
+                body: jsonEncode({
+                  'email': email,
+                  'password': password,
+                  'returnSecureToken': true,
+                }),
+              )
+              .timeout(const Duration(seconds: 15));
+          if (retryResponse.statusCode == 200) {
+            return _handleSignInResponse(retryResponse);
+          }
+          throw _toRestAuthException(retryResponse, 'signInWithPassword');
+        }
+        // signUp itself failed for a different reason — surface original error
+        Log.w('[FirebaseRestAuth] signUp also failed (${e.code}); throwing original signIn error.');
+      }
+    }
+
+    throw _toRestAuthException(response, 'signInWithPassword');
+  }
+
+  // ─── Custom-token sign-in ───────────────────────────────────────────
+
+  /// Exchanges a Firebase custom token (issued by the server after successful
+  /// hardware binding at `/register/complete`) for a new ID token + refresh
+  /// token. This re-binds the Firebase session to the registered hardware,
+  /// embedding any custom claims (e.g. `hardware_id`) that the admin backend
+  /// placed in the custom token.
+  static Future<Map<String, dynamic>> signInWithCustomToken(
+    String customToken,
+  ) async {
+    final apiKey = AppConfig.firebaseApiKey;
+    if (apiKey.isEmpty) {
+      throw StateError('FIREBASE_API_KEY missing — cannot sign in with custom token.');
+    }
+
+    final uri = Uri.parse(
+      'https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken'
+      '?key=$apiKey',
+    );
+
+    final response = await _client
+        .post(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'token': customToken,
+            'returnSecureToken': true,
+          }),
+        )
+        .timeout(const Duration(seconds: 15));
+
+    if (response.statusCode != 200) {
+      throw _toRestAuthException(response, 'signInWithCustomToken');
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final idToken = data['idToken'] as String?;
+    final refreshToken = data['refreshToken'] as String?;
+    final expiresInStr = data['expiresIn'] as String?;
+    if (idToken == null || refreshToken == null || expiresInStr == null) {
+      throw StateError(
+          '[FirebaseRestAuth] Malformed signInWithCustomToken response: $data');
+    }
+    final expiresIn = int.parse(expiresInStr);
+    final expiryMs =
+        TimeSyncService.timeNow.millisecondsSinceEpoch + (expiresIn * 1000);
+
+    await SecureStorageService.storeRefreshToken(refreshToken);
+    await SecureStorageService.storeAccessToken(idToken, expiryMs);
+
+    Log.i('[FirebaseRestAuth] Custom-token sign-in complete. '
+        'ID token expires in ${expiresIn}s.');
+    return data;
+  }
+
+  static Future<Map<String, dynamic>> _handleSignInResponse(
+    http.Response response,
+  ) async {
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     final idToken = data['idToken'] as String?;
     final refreshToken = data['refreshToken'] as String?;
@@ -85,6 +226,17 @@ class FirebaseRestAuth {
     Log.i('[FirebaseRestAuth] Signed in via password. '
         'ID token expires in ${expiresIn}s.');
     return data;
+  }
+
+  static String? _tryParseError(http.Response response) {
+    try {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final err = data['error'];
+      if (err is Map) {
+        return err['message']?.toString();
+      }
+    } catch (_) {}
+    return null;
   }
 
   /// Quick check if auth tokens exist (cached access token or refresh token).

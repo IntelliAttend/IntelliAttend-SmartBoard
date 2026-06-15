@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:package_info_plus/package_info_plus.dart';
-import '../../core/config/app_config.dart';
 import '../../core/theme/app_theme.dart';
 import 'registration_screen.dart';
 import 'idle_screen.dart';
@@ -10,10 +8,6 @@ import '../../data/repositories/device_repository.dart';
 import '../../services/api_service.dart';
 import '../../core/utils/logger.dart';
 import '../../models/isar_schemas.dart';
-import '../../core/security/firebase_rest_auth.dart';
-import '../../core/platform/hardware_fingerprint_service.dart';
-import '../../data/repositories/auth_repository.dart';
-import '../../services/session_manager.dart';
 
 class BootScreen extends StatefulWidget {
   const BootScreen({super.key});
@@ -25,91 +19,32 @@ class BootScreen extends StatefulWidget {
 class _BootScreenState extends State<BootScreen> {
   final String _statusMessage = 'INITIALIZING SYSTEM...';
   String? _errorMessage;
-  String _appVersion = '';
-
-  DeviceRegistration? _registration;
-  bool _needsReauth = false;
-  bool _isReauthenticating = false;
-  String? _reauthError;
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _performHandshake();
-    _loadVersion();
-  }
-
-  Future<void> _loadVersion() async {
-    try {
-      final info = await PackageInfo.fromPlatform();
-      if (mounted) {
-        setState(() => _appVersion = 'v${info.version}+${info.buildNumber}');
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() => _appVersion = 'v0.0.0');
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
   }
 
   Future<void> _performHandshake() async {
     final deviceRepository = context.read<IDeviceRepository>();
     try {
-      // Step 1: Rapid Local Check — Isar registration record
+      // Step 1: Rapid Local Check (OS-style persistence)
       final registration = await deviceRepository.getRegistration();
-      final isRegistered = registration != null &&
-          registration.smartBoardId.isNotEmpty &&
-          registration.smartBoardId != 'UNKNOWN';
+      final isRegistered = registration != null && registration.smartBoardId.isNotEmpty;
 
       if (!isRegistered) {
-        Log.i('[Boot] No local registration found. Showing login prompt.');
+        Log.i('[Boot] No local registration found. Redirecting to Registration.');
         if (mounted) {
-          setState(() => _needsReauth = true);
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (context) => const RegistrationScreen()),
+          );
         }
         return;
       }
 
-      _registration = registration;
-
-      // Step 2: Check Firebase auth tokens
-      final hasToken = await FirebaseRestAuth.hasValidToken();
-      if (!hasToken) {
-        Log.w('[Boot] No Firebase auth tokens found. Showing login prompt.');
-        if (mounted) {
-          setState(() => _needsReauth = true);
-        }
-        return;
-      }
-
-      // Step 2.5: Server-side registration canary
-      // Validates the board's Firestore document exists via GET /api/v1/board/ready
-      // (which has a `Depends(BoardService.get_board_data)` auth guard).
-      try {
-        await ApiService.syncReadyCheck();
-        Log.i('[Boot] Server-side registration confirmed for ${registration.smartBoardId}.');
-      } on ApiException catch (e) {
-        if (e.statusCode == 403) {
-          Log.e('[Boot] Board not registered on server (403). Blocking transition.');
-          if (mounted) {
-            setState(() => _errorMessage = 'BOARD NOT REGISTERED\nThis device is not registered in the system.\nPlease contact IT Department.');
-          }
-          return;
-        }
-        Log.w('[Boot] Canary failed with ${e.statusCode}: ${e.userMessage}. Proceeding degraded.');
-      } catch (e) {
-        Log.w('[Boot] Canary network error: $e. Proceeding degraded.');
-      }
-
-      // Step 3: Instant UI Transition — local identity is valid.
+      // Step 2: Instant UI Transition
+      // We trust the local Isar cache to provide immediate dashboard access
       Log.i('[Boot] Local identity confirmed for ${registration.smartBoardId}. Entering Idle state.');
       if (mounted) {
         Navigator.of(context).pushReplacement(
@@ -117,7 +52,7 @@ class _BootScreenState extends State<BootScreen> {
         );
       }
 
-      // Step 4: Background Resynchronization
+      // Step 3: Background Resynchronization
       // We perform network tasks asynchronously to ensure zero-lag startup
       _backgroundSync(deviceRepository);
 
@@ -127,63 +62,6 @@ class _BootScreenState extends State<BootScreen> {
         setState(() => _errorMessage = 'SYSTEM INITIALIZATION FAILED\n$e');
       }
     }
-  }
-
-  Future<void> _reauthenticate() async {
-    final password = _passwordController.text.trim();
-    if (password.isEmpty) return;
-
-    setState(() {
-      _isReauthenticating = true;
-      _reauthError = null;
-    });
-
-    try {
-      final email = _registration != null
-          ? AppConfig.boardIdToEmail(_registration!.smartBoardId)
-          : _emailController.text.trim();
-
-      await FirebaseRestAuth.signInWithPassword(email, password);
-      Log.i('[Boot] Authentication successful.');
-
-      if (_registration == null) {
-        final authRepo = context.read<IAuthRepository>();
-        final hardwareId = await HardwareFingerprintService.getDeviceId();
-        await authRepo.saveRegistration({
-          'smart_board_id': _extractBoardId(email),
-          'hardware_id': hardwareId,
-        }, SessionManager.isar, hardwareId: hardwareId);
-      }
-
-      if (!mounted) return;
-      final registration = _registration ?? await repoRegistration();
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => IdleScreen(registration: registration),
-        ),
-      );
-    } on FirebaseRestAuthException catch (e) {
-      setState(() {
-        _isReauthenticating = false;
-        _reauthError = e.code == 'INVALID_PASSWORD'
-            ? 'Incorrect password'
-            : 'Authentication failed: ${e.code}';
-      });
-    } catch (e) {
-      setState(() {
-        _isReauthenticating = false;
-        _reauthError = 'Connection error. Check network.';
-      });
-    }
-  }
-
-  String _extractBoardId(String email) {
-    final atIndex = email.indexOf('@');
-    return atIndex == -1 ? email.toUpperCase() : email.substring(0, atIndex).toUpperCase();
-  }
-
-  Future<DeviceRegistration> repoRegistration() async {
-    return (await context.read<IDeviceRepository>().getRegistration())!;
   }
 
   Future<void> _backgroundSync(IDeviceRepository repository) async {
@@ -267,13 +145,16 @@ class _BootScreenState extends State<BootScreen> {
                 children: [
                   GestureDetector(
                     onLongPress: () => _showWipeConfirmation(),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(20),
-                      child: Image.asset(
-                        'assets/logo.png',
-                        width: 360,
-                        height: 360,
-                        fit: BoxFit.contain,
+                    child: Container(
+                      padding: const EdgeInsets.all(32),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.settings_input_antenna_rounded,
+                        size: 80,
+                        color: AppColors.primary,
                       ),
                     ),
                   ),
@@ -287,30 +168,23 @@ class _BootScreenState extends State<BootScreen> {
                         ),
                   ),
                   const SizedBox(height: 16),
-                  if (!_needsReauth) ...[
-                    Text(
-                      _statusMessage,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            color: AppColors.textSecondaryLight,
-                            letterSpacing: 2,
-                            fontWeight: FontWeight.w500,
-                          ),
+                  Text(
+                    _statusMessage,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: AppColors.textSecondaryLight,
+                          letterSpacing: 2,
+                          fontWeight: FontWeight.w500,
+                        ),
+                  ),
+                  const SizedBox(height: 64),
+                  const SizedBox(
+                    width: 200,
+                    child: LinearProgressIndicator(
+                      backgroundColor: Colors.black12,
+                      valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                      minHeight: 2,
                     ),
-                    const SizedBox(height: 64),
-                    const SizedBox(
-                      width: 200,
-                      child: LinearProgressIndicator(
-                        backgroundColor: Colors.black12,
-                        valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
-                        minHeight: 2,
-                      ),
-                    ),
-                  ],
-                  if (_needsReauth)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 48),
-                      child: _buildReauthForm(),
-                    ),
+                  ),
                   if (_errorMessage != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 48),
@@ -326,94 +200,12 @@ class _BootScreenState extends State<BootScreen> {
               child: Center(
                 child: Opacity(
                   opacity: 0.3,
-                  child: Text(_appVersion, style: Theme.of(context).textTheme.labelLarge),
+                  child: Text('v5.4.1-STABLE', style: Theme.of(context).textTheme.labelLarge),
                 ),
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildReauthForm() {
-    final isFirstTime = _registration == null;
-    final boardId = _registration?.smartBoardId ?? '---';
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 400),
-      padding: const EdgeInsets.all(32),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 30, offset: const Offset(0, 10)),
-        ],
-        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.lock_outline_rounded, color: AppColors.primary, size: 48),
-          const SizedBox(height: 16),
-          Text(
-            isFirstTime ? 'SMARTBOARD LOGIN' : 'SESSION EXPIRED',
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900, letterSpacing: 2, color: Color(0xFF1E293B)),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            isFirstTime ? 'Enter board credentials to authenticate' : 'Enter your credentials to re-authenticate\nBoard: $boardId',
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Color(0xFF64748B), fontSize: 13, height: 1.5),
-          ),
-          const SizedBox(height: 24),
-          if (isFirstTime)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: TextField(
-                controller: _emailController,
-                keyboardType: TextInputType.emailAddress,
-                decoration: InputDecoration(
-                  labelText: 'Email',
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                  prefixIcon: const Icon(Icons.email_outlined),
-                ),
-                onChanged: (_) {
-                  if (_reauthError != null) setState(() => _reauthError = null);
-                },
-              ),
-            ),
-          TextField(
-            controller: _passwordController,
-            obscureText: true,
-            decoration: InputDecoration(
-              labelText: 'Password',
-              errorText: _reauthError,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              prefixIcon: const Icon(Icons.key),
-            ),
-            onChanged: (_) {
-              if (_reauthError != null) setState(() => _reauthError = null);
-            },
-            onSubmitted: (_) => _reauthenticate(),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: ElevatedButton(
-              onPressed: _isReauthenticating ? null : _reauthenticate,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                textStyle: const TextStyle(fontWeight: FontWeight.w700, letterSpacing: 1),
-              ),
-              child: _isReauthenticating
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('LOGIN'),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -516,9 +308,6 @@ class _BootScreenState extends State<BootScreen> {
                 }
 
                 setDialogState(() => isVerifying = true);
-
-                final repo = context.read<IDeviceRepository>();
-                final nav = Navigator.of(context);
                 
                 final isValid = await ApiService.verifyAdminPin(pin);
                 
@@ -538,10 +327,10 @@ class _BootScreenState extends State<BootScreen> {
                   // We continue with local wipe anyway to ensure device is cleared
                 }
 
-                await repo.clearRegistration();
+                await context.read<IDeviceRepository>().clearRegistration();
                 
                 if (mounted) {
-                  nav.pushReplacement(
+                  Navigator.of(context).pushReplacement(
                     MaterialPageRoute(builder: (context) => const RegistrationScreen()),
                   );
                 }
