@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../core/auth/token_manager.dart';
 import '../data/repositories/device_repository.dart';
 import 'api_service.dart';
 import 'time_sync_service.dart';
@@ -27,6 +28,8 @@ class HeartbeatService {
   static bool _started = false;
   static int _consecutiveNullSessions = 0;
   static const int _maxNullSessionsBeforeForceEnd = 2;
+
+  static int _heartbeatCount = 0;
 
   static String screenState = 'unknown';
 
@@ -87,6 +90,19 @@ class HeartbeatService {
       } catch (e) {
         Log.w('[Heartbeat] Pending termination retry failed for $pendingId: $e');
       }
+    }
+
+    // Proactive token refresh — keeps the ID token fresh within its 5 min
+    // buffer window.  Every 3rd beat (~15 min) forces a network-level
+    // rotation to actively correct NTP clock drift while the classroom is
+    // idle.
+    _heartbeatCount++;
+    try {
+      await TokenManager().getValidToken(
+        forceRefresh: _heartbeatCount % 3 == 0,
+      );
+    } catch (e) {
+      Log.w('[Heartbeat] Token refresh failed; will retry next beat: $e');
     }
 
     final registration = await _deviceRepository?.getRegistration();

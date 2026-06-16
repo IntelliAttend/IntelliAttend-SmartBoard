@@ -12,7 +12,7 @@ import '../core/platform/hardware_fingerprint_service.dart';
 import '../core/security/ssl_pinning_service.dart';
 import '../core/circuit_breaker.dart';
 import 'time_sync_service.dart';
-import '../core/security/firebase_rest_auth.dart';
+import '../core/auth/token_manager.dart';
 
 class ApiException implements Exception {
   final String userMessage;
@@ -208,9 +208,13 @@ class ApiService {
 
     // Board endpoints validate Firebase ID tokens directly via
     // firebase_admin.auth.verify_id_token() — no backend JWT needed.
-    final idToken = await FirebaseRestAuth.getIdToken();
-    if (idToken != null && idToken.isNotEmpty) {
-      headers['Authorization'] = 'Bearer $idToken';
+    try {
+      final token = await TokenManager().getValidToken();
+      headers['Authorization'] = 'Bearer $token';
+    } catch (e) {
+      Log.w('[ApiService] Cannot attach auth header: $e');
+      // Request proceeds without a token — the server will return 401,
+      // which is an honest and debuggable response.
     }
 
     return headers;
