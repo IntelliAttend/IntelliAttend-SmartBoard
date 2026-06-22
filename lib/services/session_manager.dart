@@ -28,6 +28,8 @@ class SessionManager {
       DeviceRegistrationSchema,
       TimetableEntrySchema,
       CompletedSessionSchema,
+      HydrationProfileSchema,
+      HydrationRosterSchema,
     ];
 
     try {

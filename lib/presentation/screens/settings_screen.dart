@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../models/isar_schemas.dart';
-import '../../main.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../core/config/app_config.dart';
 import 'qr_test_screen.dart';
@@ -32,7 +31,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _handleForceSync() async {
     setState(() => _isSyncing = true);
     try {
-      await globalDeviceRepository.syncTimetable();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Timetable synced successfully')),

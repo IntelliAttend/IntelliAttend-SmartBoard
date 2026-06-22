@@ -24,7 +24,7 @@ abstract class IAuthRepository {
 }
 
 /// Auth repository — PURE-REST. No `firebase_auth` plugin, no
-/// `cloud_firestore` plugin. All Firebase touchpoints go through
+/// plugin. All Firebase touchpoints go through
 /// [FirebaseRestAuth] (Identity Toolkit + Secure Token API only); all
 /// registration/profile data goes through the server's REST contract.
 ///

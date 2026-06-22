@@ -32,7 +32,7 @@ class TimelineSlot extends StatelessWidget {
         border: isLive
             ? Border(top: BorderSide(color: AppColors.primaryTeal, width: 2))
             : isFailed
-                ? Border(top: BorderSide(color: AppColors.warningAmber, width: 2))
+                ? Border(top: BorderSide(color: AppColors.error, width: 2))
                 : isCompleted
                     ? Border(top: BorderSide(color: AppColors.successLime, width: 2))
                     : null,

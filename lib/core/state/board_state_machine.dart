@@ -1,7 +1,7 @@
 import 'dart:async';
 import '../utils/logger.dart';
 
-enum BoardState { idle, preFlight, attendance, summary }
+enum BoardState { idle, preparing, igniting, active, closed }
 
 class BoardStateMachine {
   BoardStateMachine._();
@@ -19,12 +19,14 @@ class BoardStateMachine {
   bool _allowTransition(BoardState from, BoardState to) {
     switch (from) {
       case BoardState.idle:
-        return to == BoardState.preFlight;
-      case BoardState.preFlight:
-        return to == BoardState.attendance || to == BoardState.idle;
-      case BoardState.attendance:
-        return to == BoardState.summary || to == BoardState.idle;
-      case BoardState.summary:
+        return to == BoardState.preparing;
+      case BoardState.preparing:
+        return to == BoardState.igniting || to == BoardState.idle;
+      case BoardState.igniting:
+        return to == BoardState.active || to == BoardState.idle;
+      case BoardState.active:
+        return to == BoardState.closed || to == BoardState.idle;
+      case BoardState.closed:
         return to == BoardState.idle;
     }
   }
@@ -33,24 +35,25 @@ class BoardStateMachine {
     if (_state == newState) return;
 
     if (!_allowTransition(_state, newState)) {
-      Log.w('[StateMachine] Illegal: ${_state.name} → ${newState.name} — rejected');
+      Log.w('[StateMachine] Illegal: ${_state.name} -> ${newState.name} rejected');
       return;
     }
 
-    Log.i('[StateMachine] ${_state.name} → ${newState.name}');
+    Log.i('[StateMachine] ${_state.name} -> ${newState.name}');
     _state = newState;
     _stateController.add(_state);
   }
 
   void forceTransitionTo(BoardState newState) {
     if (_state == newState) return;
-    Log.i('[StateMachine] Forced: ${_state.name} → ${newState.name}');
+    Log.i('[StateMachine] Forced: ${_state.name} -> ${newState.name}');
     _state = newState;
     _stateController.add(_state);
   }
 
   void reset() {
     _state = BoardState.idle;
+    _stateController.add(_state);
   }
 
   void dispose() {

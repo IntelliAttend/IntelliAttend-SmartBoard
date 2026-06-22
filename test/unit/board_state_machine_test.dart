@@ -14,61 +14,77 @@ void main() {
       expect(machine.currentState, equals(BoardState.idle));
     });
 
-    test('IDLE → PRE-FLIGHT is valid', () {
-      machine.transitionTo(BoardState.preFlight);
-      expect(machine.currentState, equals(BoardState.preFlight));
+    test('IDLE -> PREPARING is valid', () {
+      machine.transitionTo(BoardState.preparing);
+      expect(machine.currentState, equals(BoardState.preparing));
     });
 
-    test('IDLE → ATTENDANCE is invalid (must go through PRE-FLIGHT)', () {
-      machine.transitionTo(BoardState.attendance);
+    test('IDLE -> IGNITING is invalid (must go through PREPARING)', () {
+      machine.transitionTo(BoardState.igniting);
       expect(machine.currentState, equals(BoardState.idle));
     });
 
-    test('IDLE → SUMMARY is invalid', () {
-      machine.transitionTo(BoardState.summary);
+    test('IDLE -> ACTIVE is invalid', () {
+      machine.transitionTo(BoardState.active);
       expect(machine.currentState, equals(BoardState.idle));
     });
 
-    test('PRE-FLIGHT → ATTENDANCE is valid', () {
-      machine.transitionTo(BoardState.preFlight);
-      machine.transitionTo(BoardState.attendance);
-      expect(machine.currentState, equals(BoardState.attendance));
+    test('IDLE -> CLOSED is invalid', () {
+      machine.transitionTo(BoardState.closed);
+      expect(machine.currentState, equals(BoardState.idle));
     });
 
-    test('PRE-FLIGHT → IDLE is valid (abort)', () {
-      machine.transitionTo(BoardState.preFlight);
+    test('PREPARING -> IGNITING is valid', () {
+      machine.transitionTo(BoardState.preparing);
+      machine.transitionTo(BoardState.igniting);
+      expect(machine.currentState, equals(BoardState.igniting));
+    });
+
+    test('PREPARING -> IDLE is valid (abort)', () {
+      machine.transitionTo(BoardState.preparing);
       machine.transitionTo(BoardState.idle);
       expect(machine.currentState, equals(BoardState.idle));
     });
 
-    test('ATTENDANCE → SUMMARY is valid', () {
-      machine.transitionTo(BoardState.preFlight);
-      machine.transitionTo(BoardState.attendance);
-      machine.transitionTo(BoardState.summary);
-      expect(machine.currentState, equals(BoardState.summary));
+    test('IGNITING -> ACTIVE is valid', () {
+      machine.transitionTo(BoardState.preparing);
+      machine.transitionTo(BoardState.igniting);
+      machine.transitionTo(BoardState.active);
+      expect(machine.currentState, equals(BoardState.active));
     });
 
-    test('SUMMARY → IDLE is valid', () {
-      machine.transitionTo(BoardState.preFlight);
-      machine.transitionTo(BoardState.attendance);
-      machine.transitionTo(BoardState.summary);
+    test('ACTIVE -> CLOSED is valid', () {
+      machine.transitionTo(BoardState.preparing);
+      machine.transitionTo(BoardState.igniting);
+      machine.transitionTo(BoardState.active);
+      machine.transitionTo(BoardState.closed);
+      expect(machine.currentState, equals(BoardState.closed));
+    });
+
+    test('CLOSED -> IDLE is valid', () {
+      machine.transitionTo(BoardState.preparing);
+      machine.transitionTo(BoardState.igniting);
+      machine.transitionTo(BoardState.active);
+      machine.transitionTo(BoardState.closed);
       machine.transitionTo(BoardState.idle);
       expect(machine.currentState, equals(BoardState.idle));
     });
 
-    test('full lifecycle: IDLE → PRE-FLIGHT → ATTENDANCE → SUMMARY → IDLE', () {
-      machine.transitionTo(BoardState.preFlight);
-      machine.transitionTo(BoardState.attendance);
-      machine.transitionTo(BoardState.summary);
+    test('full lifecycle: IDLE -> PREPARING -> IGNITING -> ACTIVE -> CLOSED -> IDLE', () {
+      machine.transitionTo(BoardState.preparing);
+      machine.transitionTo(BoardState.igniting);
+      machine.transitionTo(BoardState.active);
+      machine.transitionTo(BoardState.closed);
       machine.transitionTo(BoardState.idle);
       expect(machine.currentState, equals(BoardState.idle));
     });
 
-    test('fire-and-forget path: IF session null go IDLE', () {
-      machine.transitionTo(BoardState.preFlight);
-      machine.transitionTo(BoardState.attendance);
-      machine.forceTransitionTo(BoardState.summary);
-      expect(machine.currentState, equals(BoardState.summary));
+    test('fire-and-forced: force to CLOSED from ACTIVE', () {
+      machine.transitionTo(BoardState.preparing);
+      machine.transitionTo(BoardState.igniting);
+      machine.transitionTo(BoardState.active);
+      machine.forceTransitionTo(BoardState.closed);
+      expect(machine.currentState, equals(BoardState.closed));
       machine.transitionTo(BoardState.idle);
       expect(machine.currentState, equals(BoardState.idle));
     });
@@ -81,22 +97,22 @@ void main() {
     test('stateStream emits on valid transition', () async {
       final states = <BoardState>[];
       machine.stateStream.listen((s) => states.add(s));
-      machine.transitionTo(BoardState.preFlight);
+      machine.transitionTo(BoardState.preparing);
       await Future(() {});
-      expect(states, equals([BoardState.preFlight]));
+      expect(states, equals([BoardState.preparing]));
     });
 
     test('stateStream does NOT emit on invalid transition', () async {
       final states = <BoardState>[];
       machine.stateStream.listen((s) => states.add(s));
-      machine.transitionTo(BoardState.attendance);
+      machine.transitionTo(BoardState.active);
       await Future(() {});
       expect(states, isEmpty);
     });
 
     test('forceTransitionTo bypasses validation', () {
-      machine.forceTransitionTo(BoardState.summary);
-      expect(machine.currentState, equals(BoardState.summary));
+      machine.forceTransitionTo(BoardState.active);
+      expect(machine.currentState, equals(BoardState.active));
     });
   });
 }

@@ -146,7 +146,6 @@ class PreFlightService {
         '[PreFlight] T-10 Window Detected. Status 1 Handshake for $slotId...');
     try {
       await ApiService.syncTime();
-      await globalDeviceRepository.syncTimetable(fullSync: false);
       await _pushHardwareTelemetry();
       _telemetryPushedForCurrentSlot = true;
       Log.i('[PreFlight] Status 1 Handshake Successful.');
@@ -185,7 +184,6 @@ class PreFlightService {
               .deleteAll(staleSessions.map((s) => s.id).toList());
         });
 
-        await globalDeviceRepository.syncTimetable(fullSync: true);
         await _pushHardwareTelemetry();
 
         success = true;
@@ -244,15 +242,15 @@ class PreFlightService {
     Log.i('[PreFlight] Attempt ${state.retryCount}: Warm-Up for slot: $slotId');
 
     try {
-      final requestSentAt = DateTime.now();
+      final t0 = DateTime.now().millisecondsSinceEpoch;
       final result =
           await ApiService.getPreFlight(slotId, retryCount: state.retryCount);
-      final responseReceivedAt = DateTime.now();
+      final t3 = DateTime.now().millisecondsSinceEpoch;
 
       final serverTs = (result['server_timestamp'] ?? result['server_timestamp_ms'] ?? 0) as int;
 
-      TimeSyncService.synchronizeWithServer(
-          requestSentAt, responseReceivedAt, serverTs);
+      TimeSyncService.synchronizeWithServerLegacy(
+          DateTime.fromMillisecondsSinceEpoch(t0), DateTime.fromMillisecondsSinceEpoch(t3), serverTs);
 
       if (capturedGeneration != state.generation) {
         Log.d('[PreFlight] Stale warm-up success ignored for $slotId (gen $capturedGeneration != ${state.generation})');

@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:window_manager/window_manager.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'core/config/app_config.dart';
@@ -25,7 +24,6 @@ import 'core/platform/window_orchestrator_service.dart';
 import 'services/pre_flight_service.dart';
 import 'services/sync_manager.dart';
 import 'services/timetable_cache.dart';
-import 'services/timetable_listener_service.dart';
 import 'services/time_sync_service.dart';
 import 'services/notification_listener_service.dart';
 import 'package:provider/provider.dart';
@@ -33,7 +31,6 @@ import 'data/repositories/auth_repository.dart';
 import 'data/repositories/device_repository.dart';
 import 'core/network/api_client.dart';
 import 'presentation/providers/registration_provider.dart';
-import 'firebase_options.dart';
 
 /// Global kill switch: tracks Ctrl+Shift+JJJ sequence from any screen.
 /// When triggered, releases kiosk mode and navigates to BootScreen.
@@ -106,14 +103,12 @@ class _GlobalKillSwitchState extends State<GlobalKillSwitch> {
 }
 
 class InitStatus {
-  final bool firebase;
   final bool isar;
   final bool secureStorage;
   final bool dotenv;
   final List<String> errors;
 
   const InitStatus({
-    required this.firebase,
     required this.isar,
     required this.secureStorage,
     required this.dotenv,
@@ -124,9 +119,6 @@ class InitStatus {
   String get message {
     if (isFatal) {
       return 'Critical initialization failed. Please reinstall or contact IT.';
-    }
-    if (!firebase) {
-      return 'Running in offline mode — real-time updates unavailable.';
     }
     return '';
   }
@@ -183,14 +175,14 @@ void main(List<String> args) {
 
     // NOTE: Kiosk fullscreen is intentionally deferred until AFTER Tier-1
     // plugin initialization succeeds. If a native C++ exception is thrown
-    // during plugin init (e.g. cloud_firestore C++ SDK on Windows), exiting
+    // during plugin init, exiting
     // the process while the window is already in fullscreen popup mode leaves
     // DWM in a broken state — taskbar hidden, no visible window, system frozen.
     // By keeping the window in normal mode during init, any crash during
     // plugin loading allows DWM to recover naturally.
     final status = await _initTier1();
     _traceStartup(
-        'tier1: firebase=${status.firebase} isar=${status.isar} secure=${status.secureStorage} dotenv=${status.dotenv} fatal=${status.isFatal} errors=${status.errors}');
+        'tier1: isar=${status.isar} secure=${status.secureStorage} dotenv=${status.dotenv} fatal=${status.isFatal} errors=${status.errors}');
 
     if (status.isFatal) {
       await StartupService.markLaunchCompleted();
@@ -207,9 +199,9 @@ void main(List<String> args) {
     // allows DWM to recover naturally.
 
     // Register Windows auto-start immediately (before Tier 2) so the
-    // registry key is written even if a later step (e.g. Firebase C++
-    // SDK init) crashes the process.  Previously this ran in Tier 3
-    // (fire-and-forget) and was silently skipped when the app crashed.
+    // registry key is written even if a later step crashes the process.
+    // Previously this ran in Tier 3 (fire-and-forget) and was silently
+    // skipped when the app crashed.
     if (!kIsWeb && Platform.isWindows) {
       unawaited(StartupService.register().catchError((e) {
         Log.e('❌ [Startup] Registration failed: $e');
@@ -225,7 +217,7 @@ void main(List<String> args) {
     }
 
     // ─── TIER 2: Timeout-aware (fail gracefully, flag degraded) ─────────────
-    await _initTier2(status);
+    await _initTier2();
     _traceStartup('tier2: completed');
 
     // ─── Runtime Integrity ──────────────────────────────────────────────────
@@ -492,7 +484,6 @@ Future<InitStatus> _initTier1() async {
   if (!isarOk) errors.add('Isar');
 
   return InitStatus(
-    firebase: false,
     isar: isarOk,
     secureStorage: secureOk,
     dotenv: dotenvOk,
@@ -502,19 +493,7 @@ Future<InitStatus> _initTier1() async {
 
 // ─── TIER 2: Timeout-aware init steps ────────────────────────────────────
 
-class _Tier2Status {
-  final bool firebase;
-  final bool timeSync;
-  const _Tier2Status({required this.firebase, required this.timeSync});
-}
-
-Future<_Tier2Status> _initTier2(InitStatus tier1) async {
-  final firebaseOk = await _tryInit(
-    'Firebase',
-    _initFirebase,
-    timeout: const Duration(seconds: 5),
-  );
-
+Future<void> _initTier2() async {
   _configureOrientation();
 
   await _tryInit(
@@ -522,8 +501,6 @@ Future<_Tier2Status> _initTier2(InitStatus tier1) async {
     TimeSyncService.init,
     timeout: const Duration(seconds: 3),
   );
-
-  return _Tier2Status(firebase: firebaseOk, timeSync: true);
 }
 
 // ─── TIER 3: Fire-and-forget (non-blocking) ──────────────────────────────
@@ -554,17 +531,15 @@ Future<void> startBackgroundProtocols() async {
     final boardId = registration.smartBoardId;
 
     // Prime the in-memory timetable cache from Isar (last known state).
-    // Gives the UI immediate data while the listener connects.
+    // Gives the UI immediate data while the sync happens.
     TimetableCache()
         .updateAll(await globalDeviceRepository.getWeeklyTimeline());
 
-    // Start real-time Firestore listener for timetable changes.
-    TimetableListenerService().start(
-      boardId,
-      restFallback: () => globalDeviceRepository.syncTimetable(fullSync: true),
-    );
+    // Full hydration — downloads timetable + rosters + profile in one call.
+    // Uses manifest_hash to skip re-processing if nothing changed.
+    await globalDeviceRepository.hydrateFromServer();
 
-    // Start real-time notifications listener for admin/faculty messages.
+    // Notifications listener (in-memory cache, REST-backed).
     NotificationListenerService().start(boardId);
     if (AppConfig.enableDocuments) {
       await NotificationListenerService().injectSampleData();
@@ -660,50 +635,9 @@ Future<bool> _verifyIntegrity() async {
   return tampered;
 }
 
-/// Initialises Firebase with native `cloud_firestore` support.
-///
-/// **Why `.snapshots()` (native listeners):**
-/// Firestore bills 1 read per document *change*, not per poll cycle. REST
-/// polling at 30s would burn ~4,320 reads/board/day (13× over budget for
-/// 5 boards sharing 50,000 reads/month). Live listeners achieve ~92
-/// reads/board/day — the only approach within budget.
-///
-/// **Why NOT `FirebaseFirestore.instance.settings = Settings(persistenceEnabled: false)`:**
-/// The Firestore C++ SDK on Windows throws an unhandled MSVC C++ exception
-/// (0xE06D7363) when `.snapshots()` callbacks fire after persistence has
-/// been explicitly disabled. Removing the setting lets the SDK use its
-/// default persistence behaviour, which works correctly on all platforms.
-///
-/// **Why `firebase_auth` is excluded:**
-/// The `firebase_auth` C++ plugin calls `abort()` on Windows when
-/// AuthStateListener / IdTokenListener callbacks fire on a worker thread.
-/// Auth is handled entirely via FirebaseRestAuth (Identity Toolkit +
-/// Secure Token API over HTTPS) — see `lib/core/security/firebase_rest_auth.dart`.
-Future<void> _initFirebase() async {
-  if (!kIsWeb && Platform.isWindows) {
-    Log.w(
-        '[Firebase] Native Firebase disabled on Windows; using REST fallback.');
-    return;
-  }
-
-  try {
-    final options = DefaultFirebaseOptions.fromConfig(
-      apiKey: AppConfig.firebaseApiKey,
-      projectId: AppConfig.firebaseProjectId,
-      appId: AppConfig.firebaseAppId,
-      messagingSenderId: AppConfig.firebaseMessagingSenderId,
-    );
-    await Firebase.initializeApp(options: options);
-
-    Log.i(
-        '[Firebase] Initialised. Native .snapshots() ready for real-time updates.');
-  } catch (e) {
-    Log.w(
-        '[Firebase] Plugin init failed (non-fatal): $e. REST clients will be used as fallback.');
-    // Don't rethrow — REST-based clients (FirebaseRestAuth, FirestoreRestClient)
-    // operate independently of the Firebase plugin.
-  }
-}
+// Firebase init removed — auth is handled by FirebaseRestAuth
+// (Identity Toolkit + Secure Token API over HTTPS) which requires no
+// Flutter Firebase plugins. Timetable data is fetched via REST APIs.
 
 Future<void> _loadEnvironment() async {
   await dotenv.load(fileName: '.env');

@@ -1,11 +1,10 @@
 import 'package:isar/isar.dart';
 
-import '../../core/config/firestore_schema.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../core/utils/logger.dart';
 import '../../models/isar_schemas.dart';
 import '../../services/api_service.dart';
-import '../../services/firestore_rest_client.dart';
+import '../../services/hydration_service.dart';
 import '../../services/timetable_cache.dart';
 import '../../services/time_sync_service.dart';
 import 'auth_repository.dart';
@@ -27,7 +26,7 @@ abstract class IDeviceRepository {
     required int uptimeSeconds,
     required String appVersion,
   });
-  Future<void> syncTimetable({bool fullSync = false});
+  Future<void> hydrateFromServer();
   Future<List<TimetableEntry>> getTodayTimeline();
   Future<List<TimetableEntry>> getWeeklyTimeline();
   Future<TimetableEntry?> getCurrentSlot();
@@ -95,36 +94,24 @@ class DeviceRepository implements IDeviceRepository {
     }
   }
 
-  // ─── Timetable sync (one-shot, called on boot / reconnect) ──────────────
+  // ─── Hydration (replaces Firestore listeners) ───────────────────────────
 
   @override
-  Future<void> syncTimetable({bool fullSync = false}) async {
-    final registration = await getRegistration();
-    if (registration == null) return;
-
+  Future<void> hydrateFromServer() async {
     try {
-      final smartBoardId = registration.smartBoardId;
-      final now = TimeSyncService.timeNow;
-      final dayName = _getDayNameString(now);
+      final result = await HydrationService.hydrate(isar: _isar);
 
-      final filters = <String, dynamic>{FirestoreSchema.fieldSmartBoardId: smartBoardId};
-      if (!fullSync) filters[FirestoreSchema.fieldDayOfWeek] = dayName;
-
-      final docs = await FirestoreRestClient.runQuery(
-        collection: FirestoreSchema.timetableSlots,
-        where: filters,
-      );
-
-      if (docs.isEmpty) {
-        Log.w('[DeviceRepository] syncTimetable returned 0 docs — preserving existing cache');
-        return;
+      if (result.changed) {
+        final allEntries = await getWeeklyTimeline();
+        TimetableCache().updateAll(allEntries);
+        Log.i('[DeviceRepository] Timetable cache refreshed after hydration');
       }
 
-      final entries = docs.map(_entryFromDoc).toList();
-      final allEntries = await _reconcileEntries(entries, dayFilter: fullSync ? null : now.weekday);
-      TimetableCache().updateAll(allEntries);
+      if (result.error != null) {
+        Log.w('[DeviceRepository] Hydration had errors: ${result.error}');
+      }
     } catch (e) {
-      Log.e('[DeviceRepository] Timetable sync failed: $e');
+      Log.e('[DeviceRepository] Hydration failed: $e');
     }
   }
 
@@ -163,100 +150,4 @@ class DeviceRepository implements IDeviceRepository {
     return null;
   }
 
-  // ─── Helpers ─────────────────────────────────────────────────────────────
-
-  /// Convert a Firestore REST document (flattened) into a [TimetableEntry].
-  /// Matches the field semantics established earlier:
-  ///   - `subject_name`  → courseName
-  ///   - `faculty_id` or first of `faculty_emails` → facultyName (the
-  ///     IdleScreen UI formats email → display name)
-  ///   - `section_id`     → sectionId
-  TimetableEntry _entryFromDoc(Map<String, dynamic> data) {
-    final facultyEmail = data[FirestoreSchema.fieldFacultyId]?.toString() ??
-        (data[FirestoreSchema.fieldFacultyEmails] as List?)?.firstOrNull?.toString() ??
-        '';
-    return TimetableEntry()
-      ..slotId = data[FirestoreSchema.fieldDocId]?.toString() ?? ''
-      ..dayOfWeek = _getDayNumber(data[FirestoreSchema.fieldDayOfWeek]?.toString() ?? '')
-      ..startTime = data[FirestoreSchema.fieldStartTime]?.toString() ?? ''
-      ..endTime = data[FirestoreSchema.fieldEndTime]?.toString() ?? ''
-      ..courseName = data[FirestoreSchema.fieldSubjectName]?.toString() ?? 'Class'
-      ..facultyName = facultyEmail
-      ..sectionId = data[FirestoreSchema.fieldSectionId]?.toString() ?? 'N/A';
-  }
-
-  /// Upserts [incoming] entries into Isar by slotId, then deletes any
-  /// existing entries that are no longer present in the synced set.
-  ///
-  /// When [dayFilter] is non-null, stale deletion is scoped to that day so
-  /// day-specific syncs don't touch other days' data.  Returns the full
-  /// (possibly multi-day) timeline so the caller can refresh the in-memory
-  /// cache with a single read.
-  ///
-  /// CRITICAL: This method NEVER clears the entire collection.  On network
-  /// failure or empty server response the existing local data is preserved
-  /// intact, keeping the app fully functional offline.
-  Future<List<TimetableEntry>> _reconcileEntries(
-    List<TimetableEntry> incoming, {
-    int? dayFilter,
-  }) async {
-    final existingAll = await _isar.timetableEntrys.where().findAll();
-    final existingBySlotId = {for (final e in existingAll) e.slotId: e};
-
-    final incomingSlotIds = incoming.map((e) => e.slotId).toSet();
-
-    await _isar.writeTxn(() async {
-      for (final entry in incoming) {
-        final existing = existingBySlotId[entry.slotId];
-        if (existing != null) {
-          existing
-            ..dayOfWeek = entry.dayOfWeek
-            ..startTime = entry.startTime
-            ..endTime = entry.endTime
-            ..courseName = entry.courseName
-            ..facultyName = entry.facultyName
-            ..sectionId = entry.sectionId;
-          await _isar.timetableEntrys.put(existing);
-        } else {
-          await _isar.timetableEntrys.put(entry);
-        }
-      }
-
-      for (final existing in existingAll) {
-        if (existing.slotId.isEmpty) continue;
-        if (incomingSlotIds.contains(existing.slotId)) continue;
-        if (dayFilter != null && existing.dayOfWeek != dayFilter) continue;
-        await _isar.timetableEntrys.delete(existing.id);
-      }
-
-      // Dedup: if a concurrent sync created two entries with the same slotId,
-      // keep only the one with the lowest auto-increment id.
-      final after = await _isar.timetableEntrys.where().findAll();
-      final seen = <String, int>{};
-      for (final e in after) {
-        final first = seen[e.slotId];
-        if (first != null) {
-          await _isar.timetableEntrys.delete(e.id);
-        } else {
-          seen[e.slotId] = e.id;
-        }
-      }
-    });
-
-    return await _isar.timetableEntrys
-        .where()
-        .sortByDayOfWeek()
-        .thenByStartTime()
-        .findAll();
-  }
-
-  String _getDayNameString(DateTime date) {
-    return dayNames[date.weekday - 1];
-  }
-
-  int _getDayNumber(String dayName) {
-    final idx =
-        dayNames.indexWhere((d) => d.toLowerCase() == dayName.toLowerCase());
-    return idx != -1 ? idx + 1 : TimeSyncService.timeNow.weekday;
-  }
 }

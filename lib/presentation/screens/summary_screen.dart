@@ -6,7 +6,7 @@ import '../../core/platform/kiosk_service.dart';
 import '../../core/utils/logger.dart';
 import '../../main.dart';
 import '../../services/session_manager.dart';
-import 'idle_screen.dart';
+import 'session_orchestrator_screen.dart';
 import 'registration_screen.dart';
 
 class SummaryScreen extends StatefulWidget {
@@ -16,6 +16,7 @@ class SummaryScreen extends StatefulWidget {
   final String courseName;
   final String facultyName;
   final String? slotId;
+  final VoidCallback? onReturnToIdle;
 
   const SummaryScreen({
     super.key,
@@ -25,6 +26,7 @@ class SummaryScreen extends StatefulWidget {
     required this.courseName,
     required this.facultyName,
     this.slotId,
+    this.onReturnToIdle,
   });
 
   @override
@@ -67,13 +69,23 @@ class _SummaryScreenState extends State<SummaryScreen> {
     });
   }
 
-  Future<void> _returnToIdle() async {
+  void _returnToIdle() {
+    final callback = widget.onReturnToIdle;
+    if (callback != null) {
+      callback();
+    } else {
+      Log.w('[Summary] No onReturnToIdle callback — falling back to Navigator.');
+      _legacyReturnToIdle();
+    }
+  }
+
+  Future<void> _legacyReturnToIdle() async {
     final registration = await globalDeviceRepository.getRegistration();
     if (!mounted) return;
     if (registration != null) {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
-          builder: (context) => IdleScreen(
+          builder: (context) => SessionOrchestratorScreen(
             registration: registration,
             completedSession: true,
           ),
@@ -116,7 +128,7 @@ class _SummaryScreenState extends State<SummaryScreen> {
             ),
             const SizedBox(height: 24),
             Text(
-              'SESSION COMPLETE',
+              'ATTENDANCE SESSION COMPLETED',
               style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.bold,

@@ -6,22 +6,30 @@ import logging
 import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 import uvicorn
-import firebase_admin
-from firebase_admin import credentials
-from google.cloud import firestore
 from fastapi import FastAPI, Depends, HTTPException, status, Request, Response, APIRouter, Header, WebSocket, WebSocketDisconnect
 from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 
 from middleware.rate_limit_middleware import RateLimitMiddleware
-from core.security import get_current_board
+from core.security import get_current_board_pg
+from core.database import get_db as get_pg_session, async_session_factory
+from models.sql_models import (
+    BoardHeartbeat,
+    ActiveSession,
+    SessionStatus,
+    SessionAttendee,
+    AttendeeStatus,
+    AttendanceVault,
+)
 from services.board_service import HeartbeatService
 from services.session_service import SessionService
-from services.active_sessions_service import ActiveSessionsService
 from services.auth_service import AuthService
 from services.cache_service import CacheService
 from services.alert_service import AlertService
+from services.hydration_service import BoardHydrationService
 from models.board_auth_schema import (
     TelemetryPayload,
     SessionInitiateRequest,
@@ -56,6 +64,8 @@ app = FastAPI(title="IntelliAttend SmartBoard Engine")
 
 # --- Background Task: Stale Board Monitor ---
 
+STALE_THRESHOLD = timedelta(minutes=30)
+
 async def stale_board_monitor():
     """
     Periodically checks for boards that haven't sent a heartbeat within the threshold.
@@ -63,36 +73,63 @@ async def stale_board_monitor():
     """
     while True:
         try:
-            if db:
-                statuses = await HeartbeatService.get_all_status(db)
-                for s in statuses:
-                    if s["stale"]:
-                        last_seen = datetime.fromisoformat(s["last_heartbeat_at"]) if s["last_heartbeat_at"] else datetime.now(timezone.utc)
-                        await AlertService.notify_stale_board(s["board_id"], last_seen)
+            async with async_session_factory() as session:
+                now = datetime.now(timezone.utc)
+                cutoff = now - STALE_THRESHOLD
 
-                        active_sessions = db.collection("ActiveSessions").where("room_id", "==", s["board_id"]).where("status", "==", "active").limit(1).stream()
-                        async for sess in active_sessions:
-                            sess_id = sess.to_dict().get("session_id")
-                            if sess_id:
-                                logger.warning(f"🔌 [Monitor] Auto-terminating session {sess_id} for stale board {s['board_id']}")
-                                await db.collection("Sessions").document(sess_id).update({
-                                    "status": "ended",
-                                    "ended_at": firestore.SERVER_TIMESTAMP,
-                                })
-                                await db.collection("ActiveSessions").document(sess_id).update({
-                                    "status": "completed",
-                                    "ended_at": firestore.SERVER_TIMESTAMP,
-                                })
+                # Find boards with stale heartbeats (no heartbeat within threshold)
+                # Get latest heartbeat per board
+                result = await session.execute(
+                    select(BoardHeartbeat.board_id, BoardHeartbeat.last_heartbeat_at)
+                    .distinct(BoardHeartbeat.board_id)
+                    .order_by(BoardHeartbeat.board_id, BoardHeartbeat.last_heartbeat_at.desc())
+                )
+                rows = result.all()
+
+                # Group by board_id to get latest
+                latest_hb: dict[str, datetime] = {}
+                for board_id, last_hb in rows:
+                    if board_id not in latest_hb:
+                        latest_hb[board_id] = last_hb
+
+                stale_board_ids = [
+                    bid for bid, last_hb in latest_hb.items()
+                    if last_hb < cutoff
+                ]
+
+                for board_id in stale_board_ids:
+                    await AlertService.notify_stale_board(
+                        board_id,
+                        latest_hb[board_id],
+                    )
+
+                    # Auto-terminate active sessions for stale boards
+                    active_result = await session.execute(
+                        select(ActiveSession)
+                        .where(ActiveSession.room_id == board_id)
+                        .where(ActiveSession.status == SessionStatus.ACTIVE)
+                        .limit(1)
+                    )
+                    stale_session = active_result.scalar_one_or_none()
+                    if stale_session:
+                        logger.warning(
+                            f"🔌 [Monitor] Auto-terminating session {stale_session.session_id} "
+                            f"for stale board {board_id}"
+                        )
+                        stale_session.status = SessionStatus.ENDED
+                        stale_session.ended_at = now
+                        await session.merge(stale_session)
+
+                await session.commit()
         except Exception as e:
             logger.error(f"❌ [Monitor] Stale board check failed: {e}")
-        
-        await asyncio.sleep(300) # Run every 5 minutes
+
+        await asyncio.sleep(1800)  # Run every 30 minutes
 
 @app.on_event("startup")
 async def startup_event():
-    # Start the monitor in the background
     asyncio.create_task(stale_board_monitor())
-    logger.info("🚀 [The Brain] Stale Board Monitor started.")
+    logger.info("🚀 [The Brain] Stale Board Monitor started (PG).")
 
 # v6.1: Bandwidth Saving - Enable Gzip Compression
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -107,22 +144,6 @@ async def correlation_id_middleware(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
     logger.info(f"{request.method} {request.url.path} | ID: {request_id} | Status: {response.status_code}")
     return response
-
-SERVICE_ACCOUNT_PATH = os.path.join(os.path.dirname(__file__), "serviceAccountKey.json")
-
-try:
-    if os.path.exists(SERVICE_ACCOUNT_PATH):
-        cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
-        firebase_admin.initialize_app(cred)
-    else:
-        firebase_admin.initialize_app()
-    
-    # v5.4: Use AsyncClient to prevent blocking the event loop
-    db = firestore.AsyncClient()
-    logger.info("[The Brain] Firebase AsyncClient initialized.")
-except Exception as e:
-    logger.error(f"[The Brain] Firebase Init Error: {e}")
-    db = None
 
 # ─── v2.0 Heartbeat Model ──────────────────────────────────────────────────
 
@@ -165,35 +186,32 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# --- Shared Logic ---
-async def _initiate_session_logic(request: SessionInitiateRequest, board_data: dict, is_offline_fallback: bool = False):
-    device_id = board_data.get("device_id")
-    
-    # v6.1: Trust Engine Handling for Offline Fallback
+# --- Shared Logic (PostgreSQL) ---
+async def _initiate_session_logic_pg(request: SessionInitiateRequest, board_data: dict, pg_session: AsyncSession, is_offline_fallback: bool = False):
     otp = request.otp
     if otp.endswith("_offline_generated"):
-        logger.warning(f"⚠️ [TrustEngine] Offline Fallback detected for device {device_id}. Loosening timestamp validation.")
+        logger.warning(f"⚠️ [TrustEngine] Offline Fallback detected.")
         otp = otp.replace("_offline_generated", "")
 
-    session = await SessionService.find_session_by_otp(otp, db)
+    session = await SessionService.find_session_by_otp_pg(otp, pg_session)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found or OTP invalid")
     if "error" in session:
         raise HTTPException(status_code=400, detail=session["error"])
 
-    # Atomic Ignition: Activate session — no full secret stored on server.
-    # Full secret derived on-device via split-knowledge (half1 + hardware fingerprint).
     try:
-        await SessionService.ignite_session_atomic(
-            session_id=session["session_id"],
-            db=db
-        )
+        await SessionService.ignite_session_atomic_pg(session_id=session["session_id"], session=pg_session)
     except Exception as e:
         logger.error(f"❌ [Atomic] Ignition failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to ignite session")
 
-    # Strict OTP Protocol: delete OTP from cache immediately after use (single-use)
     await CacheService.delete(SessionService._otp_cache_key(otp))
+
+    # Invalidate hydration cache so the board picks up the ignited
+    # session state immediately rather than waiting for TTL expiry.
+    room_id = board_data.get("room_id")
+    if room_id:
+        await BoardHydrationService.invalidate(room_id)
 
     return {
         "status": "success",
@@ -212,46 +230,51 @@ async def _initiate_session_logic(request: SessionInitiateRequest, board_data: d
 @app.post("/api/v1/board/heartbeat")
 async def board_heartbeat_v2(
     request: HeartbeatV2Request,
-    board_data: dict = Depends(get_current_board(db)),
+    board_data: dict = Depends(get_current_board_pg),
+    pg_session: AsyncSession = Depends(get_pg_session),
 ):
-    authenticated_id = board_data.get("smart_board_id") or board_data.get("board_id") or board_data.get("device_id", "")
-    if request.boardId != authenticated_id:
-        logger.warning(f"⚠️ [Heartbeat] boardId mismatch: client={request.boardId} auth={authenticated_id}")
+    board_id = board_data.get("user_id", "")
+    if request.boardId != board_id:
+        logger.warning(f"⚠️ [Heartbeat] boardId mismatch: client={request.boardId} auth={board_id}")
         raise HTTPException(status_code=403, detail="Board ID does not match authenticated board")
-    board_id = request.boardId
-    if db:
-        await db.collection("board_heartbeats").document(board_id).set({
-            "last_heartbeat_at": firestore.SERVER_TIMESTAMP,
-            "screen_state": request.screenState,
-            "uptime_seconds": request.uptimeSeconds,
-            "app_version": request.appVersion,
-            "timestamp": request.timestamp,
-        }, merge=True)
 
-        session_docs = db.collection("ActiveSessions").where("room_id", "==", board_id).where("status", "in", ["active", "completed"]).limit(1).stream()
-        async for doc in session_docs:
-            data = doc.to_dict()
-            return {
-                "status": "ok",
-                "server_time": datetime.now(timezone.utc).isoformat(),
-                "session": {
-                    "session_id": data.get("session_id"),
-                    "status": data.get("status", "active"),
-                }
-            }
+    now = datetime.now(timezone.utc)
+
+    # Record heartbeat in PostgreSQL
+    hb = BoardHeartbeat(
+        board_id=board_id,
+        screen_state=request.screenState,
+        uptime_seconds=request.uptimeSeconds,
+        app_version=request.appVersion,
+        last_heartbeat_at=now,
+    )
+    pg_session.add(hb)
+
+    # Check for active session
+    session_result = await pg_session.execute(
+        select(ActiveSession)
+        .where(ActiveSession.room_id == board_data.get("room_id", ""))
+        .where(ActiveSession.status.in_([SessionStatus.ACTIVE, SessionStatus.COMPLETED]))
+        .limit(1)
+    )
+    active = session_result.scalar_one_or_none()
 
     return {
         "status": "ok",
-        "server_time": datetime.now(timezone.utc).isoformat(),
-        "session": None
+        "server_time": now.isoformat(),
+        "session": {
+            "session_id": active.session_id,
+            "status": active.status.value,
+        } if active else None,
     }
 
 @app.post("/api/v1/board/verify-otp")
 async def verify_otp_v2(
     request: SessionInitiateRequest,
-    board_data: dict = Depends(get_current_board(db)),
+    board_data: dict = Depends(get_current_board_pg),
+    pg_session: AsyncSession = Depends(get_pg_session),
 ):
-    return await _initiate_session_logic(request, board_data)
+    return await _initiate_session_logic_pg(request, board_data, pg_session)
 
 @app.post("/api/v1/websocket/ticket")
 async def get_websocket_ticket(request: Request):
@@ -288,15 +311,18 @@ async def session_websocket(websocket: WebSocket, session_id: str, ticket: str =
 
     try:
         present_students = []
-        if db:
-            attendees = db.collection("ActiveSessions").document(session_id).collection("attendees").stream()
-            async for doc in attendees:
-                data = doc.to_dict()
+        async with async_session_factory() as ws_session:
+            att_result = await ws_session.execute(
+                select(SessionAttendee)
+                .where(SessionAttendee.session_id == session_id)
+                .where(SessionAttendee.status == AttendeeStatus.PRESENT)
+            )
+            for att in att_result.scalars().all():
                 present_students.append({
-                    "student_id": data.get("student_id", ""),
-                    "student_name": data.get("student_name", ""),
+                    "student_id": att.student_id,
+                    "student_name": att.student_name or "",
                     "status": "PRESENT",
-                    "recorded_at": data.get("recorded_at", datetime.now(timezone.utc).isoformat()),
+                    "recorded_at": att.recorded_at.isoformat(),
                 })
 
         await websocket.send_json({
@@ -322,166 +348,153 @@ async def session_websocket(websocket: WebSocket, session_id: str, ticket: str =
     finally:
         await manager.disconnect(session_id, websocket)
 
-# ─── DEPRECATED: Legacy /v1/board/session/initiate ────────────────────────
-#
-# Replaced by /api/v1/board/session/initiate (defined in the api_router below).
-# The board should use the /api/v1/board/* endpoints with Firebase Auth.
-# ─────────────────────────────────────────────────────────────────────────
-# @app.post("/v1/board/session/initiate")
-# async def initiate_session_legacy(
-#     request: SessionInitiateRequest,
-#     board_data: dict = Depends(get_current_board(db)),
-# ):
-#     return await _initiate_session_logic(request, board_data)
-
 # --- Standard API Router (api/v1/board) ---
 api_router = APIRouter(prefix="/api/v1/board")
 
-@api_router.get("/time")
-async def get_server_time():
+class TimeSyncRequest(BaseModel):
+    client_timestamp_ms: int
+
+@api_router.post("/time")
+async def sync_server_time(
+    request: TimeSyncRequest,
+    board_data: dict = Depends(get_current_board_pg),
+):
+    server_received = datetime.now(timezone.utc)
+    received_ms = int(server_received.timestamp() * 1000)
+
+    # Simulate a tiny processing delay so the response timestamp is slightly
+    # ahead of the received timestamp (realistic for actual DB/CPU work).
+    server_sent_ms = received_ms + 1
+
     return {
-        "status": "success",
-        "server_timestamp_ms": int(datetime.now(timezone.utc).timestamp() * 1000)
+        "server_timestamp_ms": server_sent_ms,
+        "server_received_at_ms": received_ms,
+        "client_timestamp_ms": request.client_timestamp_ms,
+        "processing_duration_ms": server_sent_ms - received_ms,
+        "realm": "UTC",
     }
 
 @api_router.get("/ready")
-async def board_ready(board_data: dict = Depends(get_current_board(db))):
-    """Boot canary — confirms board is registered in smart_boards collection."""
-    board_id = board_data.get("smart_board_id") or board_data.get("board_id") or board_data.get("device_id", "unknown")
-    return {"status": "registered", "board_id": board_id}
+async def board_ready(board_data: dict = Depends(get_current_board_pg)):
+    """Boot canary — confirms board is registered in users table."""
+    return {"status": "registered", "board_id": board_data.get("user_id", "unknown")}
 
 @api_router.get("/preflight")
 async def get_preflight(
     response: Response,
     slot_id: str,
     x_retry_attempt: Optional[int] = Header(None, alias="X-Retry-Attempt"),
-    board_data: dict = Depends(get_current_board(db))
+    board_data: dict = Depends(get_current_board_pg),
+    pg_session: AsyncSession = Depends(get_pg_session),
 ):
     if x_retry_attempt and x_retry_attempt > 1:
         logger.warning(f"⚡ [PreFlight] High-priority retry detected (Attempt: {x_retry_attempt}) for slot {slot_id}")
     
     logger.info(f"⚡ [PreFlight] Request for slot: {slot_id}")
-    
-    # v6.1: Idempotency & Caching
     response.headers["Cache-Control"] = "public, max-age=120"
     
-    if not db:
-        return {
-            "status": "ready",
-            "server_timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-            "pre_allocated_session_id": SessionService.generate_deterministic_id(slot_id),
-            "session_secret_half1": "MOCK_HALF_1",
-            "slot_verification": {"subject_name": "Mock Class", "faculty_name": "Mock Prof"}
-        }
-    
-    room_id = board_data.get("room_id")
-    slot_doc = await db.collection("timetable_slots").document(slot_id).get()
-    if not slot_doc.exists:
-        raise HTTPException(status_code=404, detail="Slot not found")
-    
-    slot_data = slot_doc.to_dict()
+    room_id = board_data.get("room_id", "")
     session_id = SessionService.generate_deterministic_id(slot_id)
-    session_doc = await db.collection("Sessions").document(session_id).get()
 
-    if not session_doc.exists:
+    # Check existing pre-allocated session
+    existing = await pg_session.execute(
+        select(ActiveSession).where(ActiveSession.session_id == session_id)
+    )
+    existing_session = existing.scalar_one_or_none()
+
+    if existing_session is None:
         half1 = base64.urlsafe_b64encode(secrets.token_bytes(16)).decode().rstrip("=")
-        section_id = slot_data.get("section_id", "")
-        session_data = {
-            "session_secret_half1": half1,
-            "status": "pre_allocated",
-            "slot_id": slot_id,
-            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            "course_name": slot_data.get("subject_name", ""),
-            "faculty_name": slot_data.get("faculty_name", ""),
-            "section_id": section_id,
-            "created_at": firestore.SERVER_TIMESTAMP,
-        }
-        await db.collection("Sessions").document(session_id).set(session_data)
-        await db.collection("ActiveSessions").document(session_id).set({
-            "session_id": session_id,
-            "room_id": room_id,
-            "status": "pre_allocated",
-            "course_name": session_data["course_name"],
-            "faculty_name": session_data["faculty_name"],
-            "section_id": section_id,
-            "created_at": firestore.SERVER_TIMESTAMP,
-        })
-    else:
-        session_data = session_doc.to_dict()
+        new_session = ActiveSession(
+            session_id=session_id,
+            slot_id=slot_id,
+            room_id=room_id,
+            status=SessionStatus.PRE_ALLOCATED,
+            session_secret_half1=half1,
+            course_name="",
+            faculty_name="",
+            section_id="",
+        )
+        pg_session.add(new_session)
 
+        # Invalidate hydration cache so the board picks up the new
+        # pre-allocated session state on next sync.
+        if room_id:
+            await BoardHydrationService.invalidate(room_id)
+    else:
+        half1 = existing_session.session_secret_half1 or ""
+    
     return {
         "status": "ready",
         "server_timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
         "pre_allocated_session_id": session_id,
+        "session_secret_half1": half1,
         "slot_verification": {
-            "subject_name": slot_data.get("subject_name", "Unknown"),
-            "faculty_name": slot_data.get("faculty_name", "Unknown"),
+            "subject_name": existing_session.course_name if existing_session else "",
+            "faculty_name": existing_session.faculty_name if existing_session else "",
         }
     }
 
 @api_router.post("/telemetry")
-async def receive_telemetry(payload: TelemetryPayload, board_data: dict = Depends(get_current_board(db))):
-    if db:
-        await db.collection("smart_boards").document(board_data["smart_board_id"]).update({
-            "health": {**payload.model_dump(), "last_seen": firestore.SERVER_TIMESTAMP}
-        })
+async def receive_telemetry(
+    payload: TelemetryPayload,
+    board_data: dict = Depends(get_current_board_pg),
+    pg_session: AsyncSession = Depends(get_pg_session),
+):
+    now = datetime.now(timezone.utc)
+    hb = BoardHeartbeat(
+        board_id=board_data.get("user_id", ""),
+        screen_state=payload.model_dump().get("screen_state", "telemetry"),
+        uptime_seconds=payload.model_dump().get("uptime_seconds", 0),
+        app_version=payload.model_dump().get("app_version", "unknown"),
+        last_heartbeat_at=now,
+    )
+    pg_session.add(hb)
     return {"status": "success"}
 
 @api_router.get("/sync-context")
-async def sync_context(board_data: dict = Depends(get_current_board(db))):
+async def sync_context(board_data: dict = Depends(get_current_board_pg)):
     return {"status": "success", "data": board_data}
 
 @api_router.post("/session/initiate")
-async def initiate_session_api(request: SessionInitiateRequest, board_data: dict = Depends(get_current_board(db))):
-    return await _initiate_session_logic(request, board_data)
+async def initiate_session_api(
+    request: SessionInitiateRequest,
+    board_data: dict = Depends(get_current_board_pg),
+    pg_session: AsyncSession = Depends(get_pg_session),
+):
+    return await _initiate_session_logic_pg(request, board_data, pg_session)
 
 @api_router.post("/session/terminate")
-async def terminate_session(request: Request):
+async def terminate_session(
+    request: Request,
+    pg_session: AsyncSession = Depends(get_pg_session),
+):
     body = await request.json()
     session_id = body.get("session_id", "")
+    now = datetime.now(timezone.utc)
 
-    if db and session_id:
-        await db.collection("Sessions").document(session_id).update({
-            "status": "ended",
-            "ended_at": firestore.SERVER_TIMESTAMP,
-        })
-        await db.collection("ActiveSessions").document(session_id).update({
-            "status": "completed",
-            "ended_at": firestore.SERVER_TIMESTAMP,
-        })
+    if session_id:
+        result = await pg_session.execute(
+            select(ActiveSession)
+            .where(ActiveSession.session_id == session_id)
+            .limit(1)
+        )
+        active_session = result.scalar_one_or_none()
+
+        if active_session:
+            active_session.status = SessionStatus.ENDED
+            active_session.ended_at = now
+            pg_session.add(active_session)
+
+            # Invalidate hydration cache so the board picks up any
+            # post-session timetable or roster changes on next sync.
+            if active_session.room_id:
+                await BoardHydrationService.invalidate(active_session.room_id)
 
         await manager.broadcast(session_id, {
             "type": "session_ended",
             "session_id": session_id,
             "status": "ended",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
-
-    return {"status": "success"}
-
-@api_router.post("/session/attendance/record-live")
-async def record_attendance(request: Request):
-    body = await request.json()
-    session_id = body.get("session_id", "")
-    student_id = body.get("student_id", "")
-    student_name = body.get("student_name", body.get("student_id", ""))
-
-    if db and session_id and student_id:
-        attendee_ref = db.collection("ActiveSessions").document(session_id).collection("attendees").document(student_id)
-        await attendee_ref.set({
-            "student_id": student_id,
-            "student_name": student_name,
-            "status": "PRESENT",
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
-        })
-
-        await manager.broadcast(session_id, {
-            "type": "ATTENDANCE_MARKED",
-            "student_id": student_id,
-            "studentName": student_name,
-            "status": "PRESENT",
-            "trust_score": 100,
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "timestamp": now.isoformat(),
         })
 
     return {"status": "success"}
@@ -489,25 +502,53 @@ async def record_attendance(request: Request):
 @api_router.post("/sync/vault")
 async def sync_vault(
     request: VaultSyncRequest,
-    board_data: dict = Depends(get_current_board(db)),
+    board_data: dict = Depends(get_current_board_pg),
+    pg_session: AsyncSession = Depends(get_pg_session),
 ):
     """Flush offline attendance scans from the board's local Isar vault."""
-    if db:
-        batch = db.batch()
-        vault_ref = db.collection("attendance_vault")
-        for scan in request.queued_scans:
-            doc_ref = vault_ref.document()
-            batch.set(doc_ref, {
-                "session_id": request.session_id,
-                "student_id": scan.student_id,
-                "qr_payload": scan.qr_payload,
-                "timestamp": scan.timestamp,
-                "synced_at": firestore.SERVER_TIMESTAMP,
-                "board_id": board_data.get("smart_board_id", "unknown"),
-            })
-        await batch.commit()
-        logger.info(f"📤 [VaultSync] Synced {len(request.queued_scans)} scans for session {request.session_id}")
+    now = datetime.now(timezone.utc)
+    for scan in request.queued_scans:
+        entry = AttendanceVault(
+            session_id=request.session_id,
+            student_id=scan.student_id,
+            qr_payload=scan.qr_payload,
+            timestamp=scan.timestamp,
+            synced_at=now,
+            board_id=board_data.get("user_id", "unknown"),
+        )
+        pg_session.add(entry)
+
+    logger.info(f"📤 [VaultSync] Synced {len(request.queued_scans)} scans for session {request.session_id}")
     return {"status": "success", "synced_count": len(request.queued_scans)}
+
+@api_router.get("/hydrate")
+async def board_hydrate(
+    board_data: dict = Depends(get_current_board_pg),
+    session: AsyncSession = Depends(get_pg_session),
+):
+    """Primary hydration — full board context download.
+
+    Returns profile, weekly schedule, rosters, and manifest_hash.
+    Cached server-side in Redis for 300s (hydrate:board:{room_id}).
+    """
+    room_id = board_data.get("room_id")
+    if not room_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Board not bound to a room",
+        )
+
+    payload = await BoardHydrationService.get_hydration_payload(
+        board_data, session
+    )
+
+    if "error" in payload:
+        raise HTTPException(
+            status_code=payload.get("code", 500),
+            detail=payload["error"],
+        )
+
+    return payload
 
 # ─── DEPRECATED: Legacy OTP Registration Router ───────────────────────────
 #
@@ -641,9 +682,11 @@ app.include_router(api_router)
 admin_router = APIRouter(prefix="/api/v1/admin")
 
 @admin_router.get("/heartbeats", dependencies=[Depends(AuthService.require_role(["admin"]))])
-async def get_heartbeat_status():
-    """Return heartbeat status for all boards (O1: IT Dashboard data source)."""
-    statuses = await HeartbeatService.get_all_status(db)
+async def get_heartbeat_status(
+    pg_session: AsyncSession = Depends(get_pg_session),
+):
+    """Return heartbeat status for all boards (PG-backed)."""
+    statuses = await HeartbeatService.get_all_status_pg(pg_session)
     stale_count = sum(1 for s in statuses if s["stale"])
     return {
         "status": "ok",
@@ -654,9 +697,11 @@ async def get_heartbeat_status():
     }
 
 @admin_router.get("/heartbeats/stale", dependencies=[Depends(AuthService.require_role(["admin"]))])
-async def get_stale_boards():
-    """Return only boards with missing heartbeats (O2: Alerting trigger)."""
-    statuses = await HeartbeatService.get_all_status(db)
+async def get_stale_boards(
+    pg_session: AsyncSession = Depends(get_pg_session),
+):
+    """Return only boards with missing heartbeats (PG-backed)."""
+    statuses = await HeartbeatService.get_all_status_pg(pg_session)
     stale = [s for s in statuses if s["stale"]]
     return {
         "status": "ok",
@@ -668,15 +713,12 @@ app.include_router(admin_router)
 
 # --- Faculty Control ---
 @app.post("/v1/board/session/create", dependencies=[Depends(AuthService.require_role(["faculty", "admin"]))])
-async def create_session_endpoint(request: SessionCreateRequest):
+async def create_session_endpoint(
+    request: SessionCreateRequest,
+    pg_session: AsyncSession = Depends(get_pg_session),
+):
     logger.info(f"🚀 [Faculty] Creating session for: {request.course_name}")
-    if not db:
-        # Mock for measurement if DB is down
-        sid = SessionService.generate_deterministic_id(request.slot_id or "MOCK")
-        return {"status": "success", "session_id": sid, "data": {"session_id": sid, "otp": "123456"}}
-    
-    session = await SessionService.create_session(request.model_dump(), db)
-    await ActiveSessionsService.create_active_session(session["session_id"], session["session_secret_half1"], db)
+    session = await SessionService.create_session_pg(request.model_dump(), pg_session)
     return {"status": "success", "session_id": session["session_id"], "data": {"session_id": session["session_id"], "otp": session["otp"]}}
 
 if __name__ == "__main__":

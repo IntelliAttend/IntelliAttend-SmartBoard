@@ -1,0 +1,47 @@
+================================================================================
+                INTELLIATTEND SMARTBOARD — LABORATORY MANUAL
+                Course: Python Programming (CSE-AIML 201)
+                Semester: VI | Instructor: Dr. Priya Sharma
+================================================================================
+
+Experiment 1: Introduction to Python Programming
+
+Objective:
+  To familiarize students with Python syntax, variables, data types, and 
+  basic I/O operations.
+
+Theory:
+  Python is a high-level, interpreted programming language known for its 
+  readability and versatility. It supports multiple programming paradigms 
+  including procedural, object-oriented, and functional programming.
+
+Steps:
+  1. Launch Python IDLE or any code editor of your choice.
+  2. Write a program to display "Hello, World!".
+  3. Declare variables of different types: int, float, string, boolean.
+  4. Perform arithmetic operations and display results.
+  5. Read input from the user and display a personalized greeting.
+
+Sample Code:
+  # This program demonstrates basic Python concepts
+  name = input("Enter your name: ")
+  age = int(input("Enter your age: "))
+  print(f"Hello {name}! You are {age} years old.")
+  
+  # Type checking
+  print(f"Type of name: {type(name)}")
+  print(f"Type of age: {type(age)}")
+
+Expected Output:
+  Enter your name: Alice
+  Enter your age: 20
+  Hello Alice! You are 20 years old.
+  Type of name: <class 'str'>
+  Type of age: <class 'int'>
+
+Submission:
+  Submit the .py file along with a brief report explaining the code.
+
+===============================================================================
+                        END OF LABORATORY MANUAL
+===============================================================================

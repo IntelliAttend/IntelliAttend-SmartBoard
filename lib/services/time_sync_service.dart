@@ -8,14 +8,12 @@ class TimeSyncService {
   static int _timeDriftOffset = 0;
 
   /// Unix timestamp (ms) when the skew was last synced with the server.
-  /// Null means no sync has ever been recorded.
   static int? _lastSyncedAt;
 
   /// Maximum age (1 hour) before cached skew is considered stale.
   static const int _maxSkewAgeMs = Duration.millisecondsPerHour;
 
   /// Initializes the service by loading the last known skew from secure storage.
-  /// Called once at app startup — provides continuity across reboots.
   static Future<void> init() async {
     final cached = await SecureStorageService.getClockSkew();
     if (cached != null) {
@@ -35,18 +33,40 @@ class TimeSyncService {
     return age > _maxSkewAgeMs;
   }
 
-  /// Synchronizes the local hardware clock based on the server's millisecond
-  /// timestamp using Round-Trip Time (RTT) math for cryptographic precision.
-  ///
-  /// The server generates the timestamp right before sending the HTTP response.
-  /// The true time at the client's arrival point is: serverTs + (RTT / 2).
   static void _persistSkew() {
     _lastSyncedAt = DateTime.now().millisecondsSinceEpoch;
     SecureStorageService.storeClockSkew(_timeDriftOffset);
     SecureStorageService.storeClockSkewTimestamp(_lastSyncedAt!);
   }
 
+  /// NTP-style clock synchronisation.
+  ///
+  /// Uses the server's `server_received_at_ms` (the server clock reading when
+  /// it received our request) and the round-trip time to compute a clock offset.
+  ///
+  /// Formula (same as NTP):
+  ///   offset = server_received_at_ms - (t0 + rtt/2)
+  ///   where t0 = local time just before sending, t3 = local time just after
+  ///   receiving, and rtt = t3 - t0.
   static void synchronizeWithServer(
+    int t0,                    // local ms before request
+    int t3,                    // local ms after response
+    int serverReceivedAtMs,    // server clock when it received our request
+  ) {
+    final rtt = t3 - t0;
+    final offset = serverReceivedAtMs - (t0 + rtt ~/ 2);
+    _timeDriftOffset = offset;
+    _persistSkew();
+
+    if (kDebugMode) {
+      Log.i('[TimeSyncService] NTP sync: rtt=${rtt}ms, offset=${_timeDriftOffset}ms');
+    }
+  }
+
+  /// Legacy sync — kept for backward compatibility.
+  /// Uses `server_timestamp_ms` (server response time) instead of
+  /// `server_received_at_ms`.
+  static void synchronizeWithServerLegacy(
     DateTime requestSentAt,
     DateTime responseReceivedAt,
     int serverTimestampMs,
@@ -55,15 +75,14 @@ class TimeSyncService {
     final int trueTimeAtArrival = serverTimestampMs + (roundTripTime ~/ 2);
     final int localTimeAtArrival = responseReceivedAt.millisecondsSinceEpoch;
     _timeDriftOffset = trueTimeAtArrival - localTimeAtArrival;
-
     _persistSkew();
 
     if (kDebugMode) {
-      Log.i('[TimeSyncService] RTT Handshake: rtt=${roundTripTime}ms, skew=${_timeDriftOffset}ms');
+      Log.i('[TimeSyncService] RTT Handshake (legacy): rtt=${roundTripTime}ms, skew=${_timeDriftOffset}ms');
     }
   }
 
-  /// Manually sets the clock skew (called by ApiService.syncTime).
+  /// Manually sets the clock skew.
   static void setSkew(int skewMs) {
     _timeDriftOffset = skewMs;
     _persistSkew();
@@ -73,7 +92,7 @@ class TimeSyncService {
   /// Returns the current clock skew in milliseconds.
   static int getSkew() => _timeDriftOffset;
 
-  /// Returns the corrected Unix Epoch in seconds (float) as required by v5.2.
+  /// Returns the corrected Unix Epoch in seconds (float).
   static double get correctedTimestamp =>
       (DateTime.now().millisecondsSinceEpoch + _timeDriftOffset) / 1000.0;
 

@@ -1,5 +1,5 @@
-import '../core/config/firestore_schema.dart';
-import 'firestore_rest_client.dart';
+import '../core/config/api_schema.dart';
+import 'api_service.dart';
 import '../core/utils/logger.dart';
 
 /// Represents a student with their roll number and display info.
@@ -24,26 +24,18 @@ class StudentInfo {
   String toString() => 'StudentInfo($rollNumber, $name)';
 }
 
-/// Service for fetching student data from Firestore.
-///
-/// Students are stored in the `students` collection with fields:
-///   - roll_number (document ID)
-///   - name
-///   - email
-///   - section_id
-///   - class_id
-///   - status
+/// Service for fetching student data from the backend REST API.
 class StudentService {
   static final StudentService _instance = StudentService._internal();
   factory StudentService() => _instance;
   StudentService._internal();
 
-  /// Cache of students by section ID to avoid repeated Firestore calls.
+  /// Cache of students by section ID to avoid repeated API calls.
   final Map<String, List<StudentInfo>> _sectionCache = {};
   final Map<String, DateTime> _cacheTimestamps = {};
   static const Duration _cacheTtl = Duration(minutes: 5);
 
-  /// Fetch all students for a given section from Firestore.
+  /// Fetch all students for a given section from the backend.
   ///
   /// Uses a 5-minute cache to avoid excessive API calls.
   /// Falls back to empty list on error (graceful degradation).
@@ -60,23 +52,15 @@ class StudentService {
 
     try {
       Log.d('[StudentService] Fetching students for section: $sectionId');
-      final docs = await FirestoreRestClient.runQuery(
-        collection: FirestoreSchema.students,
-        where: {
-          FirestoreSchema.fieldSectionId: sectionId,
-          FirestoreSchema.fieldStatus: FirestoreSchema.statusActive,
-        },
-      );
+      final docs = await ApiService.getStudentsBySection(sectionId);
 
       final students = docs.map((doc) {
-        final rollNumber = doc[FirestoreSchema.fieldDocId]?.toString() ??
-            doc[FirestoreSchema.fieldRollNumber]?.toString() ??
-            '';
-        final name = doc[FirestoreSchema.fieldName]?.toString() ?? 'Unknown';
-        final email = doc[FirestoreSchema.fieldEmail]?.toString() ?? '';
-        final docSectionId = doc[FirestoreSchema.fieldSectionId]?.toString() ?? sectionId;
-        final classId = doc[FirestoreSchema.fieldClassId]?.toString() ?? '';
-        final status = doc[FirestoreSchema.fieldStatus]?.toString() ?? FirestoreSchema.statusActive;
+        final rollNumber = doc[ApiSchema.fieldRollNumber]?.toString() ?? '';
+        final name = doc[ApiSchema.fieldName]?.toString() ?? 'Unknown';
+        final email = doc[ApiSchema.fieldEmail]?.toString() ?? '';
+        final docSectionId = doc[ApiSchema.fieldSectionId]?.toString() ?? sectionId;
+        final classId = doc[ApiSchema.fieldClassId]?.toString() ?? '';
+        final status = doc[ApiSchema.fieldStatus]?.toString() ?? ApiSchema.statusActive;
 
         return StudentInfo(
           rollNumber: rollNumber,
@@ -96,7 +80,6 @@ class StudentService {
       return students;
     } catch (e) {
       Log.w('[StudentService] Failed to fetch students for section $sectionId: $e');
-      // Return cached data if available, even if expired
       return cached ?? [];
     }
   }
@@ -105,24 +88,16 @@ class StudentService {
   Future<List<StudentInfo>> getStudentsByClass(String classId) async {
     try {
       Log.d('[StudentService] Fetching students for class: $classId');
-      final docs = await FirestoreRestClient.runQuery(
-        collection: FirestoreSchema.students,
-        where: {
-          FirestoreSchema.fieldClassId: classId,
-          FirestoreSchema.fieldStatus: FirestoreSchema.statusActive,
-        },
-      );
+      final docs = await ApiService.getStudentsByClass(classId);
 
       return docs.map((doc) {
         return StudentInfo(
-          rollNumber: doc[FirestoreSchema.fieldDocId]?.toString() ??
-              doc[FirestoreSchema.fieldRollNumber]?.toString() ??
-              '',
-          name: doc[FirestoreSchema.fieldName]?.toString() ?? 'Unknown',
-          email: doc[FirestoreSchema.fieldEmail]?.toString() ?? '',
-          sectionId: doc[FirestoreSchema.fieldSectionId]?.toString() ?? '',
-          classId: doc[FirestoreSchema.fieldClassId]?.toString() ?? classId,
-          status: doc[FirestoreSchema.fieldStatus]?.toString() ?? FirestoreSchema.statusActive,
+          rollNumber: doc[ApiSchema.fieldRollNumber]?.toString() ?? '',
+          name: doc[ApiSchema.fieldName]?.toString() ?? 'Unknown',
+          email: doc[ApiSchema.fieldEmail]?.toString() ?? '',
+          sectionId: doc[ApiSchema.fieldSectionId]?.toString() ?? '',
+          classId: doc[ApiSchema.fieldClassId]?.toString() ?? classId,
+          status: doc[ApiSchema.fieldStatus]?.toString() ?? ApiSchema.statusActive,
         );
       }).toList();
     } catch (e) {

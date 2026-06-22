@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../core/utils/logger.dart';
+import 'session_state_service.dart';
 import 'time_sync_service.dart';
 
 class PresentStudent {
@@ -109,6 +110,37 @@ class SessionEndedEvent {
   }
 }
 
+class StudentVerifiedEvent {
+  final String studentId;
+  final String seat;
+
+  StudentVerifiedEvent({
+    required this.studentId,
+    required this.seat,
+  });
+
+  factory StudentVerifiedEvent.fromJson(Map<String, dynamic> json) {
+    return StudentVerifiedEvent(
+      studentId: json['student_id'] as String,
+      seat: json['seat'] as String? ?? '',
+    );
+  }
+}
+
+class AttendanceUpdatedEvent {
+  final int present;
+  final int absent;
+
+  AttendanceUpdatedEvent({required this.present, required this.absent});
+
+  factory AttendanceUpdatedEvent.fromJson(Map<String, dynamic> json) {
+    return AttendanceUpdatedEvent(
+      present: json['present'] as int? ?? 0,
+      absent: json['absent'] as int? ?? 0,
+    );
+  }
+}
+
 class WebsocketService {
   static const Duration connectTimeout = Duration(seconds: 5);
   static const Duration pingInterval = Duration(seconds: 30);
@@ -120,6 +152,7 @@ class WebsocketService {
   int _reconnectAttempt = 0;
   bool _disposed = false;
   String? _sessionId;
+  String? _boardId;
   String? _accessToken;
   StreamSubscription? _messageSubscription;
 
@@ -134,6 +167,10 @@ class WebsocketService {
       StreamController<SessionEndedEvent>.broadcast();
   final StreamController<bool> _connectionStateController =
       StreamController<bool>.broadcast();
+  final StreamController<StudentVerifiedEvent> _studentVerifiedController =
+      StreamController<StudentVerifiedEvent>.broadcast();
+  final StreamController<AttendanceUpdatedEvent> _attendanceUpdatedController =
+      StreamController<AttendanceUpdatedEvent>.broadcast();
 
   Stream<FullStateSync> get onFullStateSync => _syncController.stream;
   Stream<AttendanceMarkedEvent> get onAttendanceMarked =>
@@ -141,32 +178,55 @@ class WebsocketService {
   Stream<SessionEndedEvent> get onSessionEnded =>
       _sessionEndedController.stream;
   Stream<bool> get onConnectionState => _connectionStateController.stream;
+  Stream<StudentVerifiedEvent> get onStudentVerified =>
+      _studentVerifiedController.stream;
+  Stream<AttendanceUpdatedEvent> get onAttendanceUpdated =>
+      _attendanceUpdatedController.stream;
   bool get isConnected => _channel != null;
+
+  final SessionStateService _sessionState = SessionStateService();
 
   WebsocketService(this._host);
 
-  Future<void> connect(String sessionId, String accessToken) async {
+  Future<void> connectSmartBoard(String boardId, String accessToken) async {
     if (_disposed) return;
     _accessToken = accessToken;
-    if (_sessionId == sessionId && _channel != null) return;
+    _boardId = boardId;
+    _sessionId = null;
+    _reconnectAttempt = 0;
+    await _doConnect();
+  }
+
+  Future<void> connectAttendance(String sessionId, String accessToken) async {
+    if (_disposed) return;
+    _accessToken = accessToken;
     _sessionId = sessionId;
     _reconnectAttempt = 0;
-
     await _doConnect();
   }
 
   Future<void> _doConnect() async {
-    if (_disposed || _sessionId == null) return;
+    if (_disposed) return;
 
     final token = _accessToken;
     if (token == null || token.isEmpty) {
-      Log.w('[WS] No access token available — scheduling reconnect');
+      Log.w('[WS] No access token available scheduling reconnect');
       _scheduleReconnect();
       return;
     }
 
     try {
-      final wsUrl = '$_host/ws/session/$_sessionId?token=$token';
+      String queryParams;
+      if (_sessionId != null) {
+        queryParams = 'session_id=$_sessionId';
+      } else if (_boardId != null) {
+        queryParams = 'board_id=$_boardId';
+      } else {
+        Log.w('[WS] No board ID or session ID available');
+        _scheduleReconnect();
+        return;
+      }
+      final wsUrl = '$_host/ws?$queryParams&token=$token';
       final wsUri = Uri.parse(wsUrl)
           .replace(scheme: wsUrl.startsWith('https') ? 'wss' : 'ws');
 
@@ -182,6 +242,7 @@ class WebsocketService {
 
       _isWaitingForFullSync = true;
       _connectionStateController.add(true);
+      _sessionState.setConnected(true);
       _reconnectAttempt = 0;
       _startPingTimer();
 
@@ -227,67 +288,135 @@ class WebsocketService {
       final Map<String, dynamic> message = jsonDecode(rawMessage as String);
       final type = message['type'] as String?;
 
-      // Ignored message types (board is read-only — these are for faculty or keepalive)
-      if (type == 'pong' || type == 'heartbeat' || type == 'board_connected') return;
+      if (type == 'pong' || type == 'heartbeat') return;
 
       switch (type) {
         case 'full_state_sync':
-          final roster = message['roster'] as List<dynamic>?;
-          final presentList = message['present_students'] as List<dynamic>?;
-          final sourceList = roster ?? presentList ?? [];
-          final students = sourceList
-              .map((e) => PresentStudent.fromJson(e as Map<String, dynamic>))
-              .toList();
-          final presentCount = students.where((s) => s.status.toUpperCase() == 'PRESENT').length;
-          final totalStudents = message['total_students'] as int? ?? students.length;
-          final totalPresent = message['total_present'] as int? ?? presentCount;
-          final sessionId = message['session_id'] as String? ?? _sessionId ?? '';
-          _syncController.add(FullStateSync(
-            sessionId: sessionId,
-            totalPresent: totalPresent,
-            totalStudents: totalStudents,
-            presentStudents: students,
-          ));
-          if (_isWaitingForFullSync) {
-            _isWaitingForFullSync = false;
-            for (final pending in _pendingAttendanceEvents) {
-              _attendanceController.add(pending);
-            }
-            _pendingAttendanceEvents.clear();
-          }
-          Log.i('[WS] full_state_sync: $totalPresent present / $totalStudents total');
+          _handleFullStateSync(message);
           break;
-
         case 'ATTENDANCE_MARKED':
-          final event = AttendanceMarkedEvent.fromJson(message);
-          if (_isWaitingForFullSync) {
-            _pendingAttendanceEvents.add(event);
-          } else {
-            _attendanceController.add(event);
-          }
-          Log.i('[WS] ATTENDANCE_MARKED: ${event.studentId}');
+          _handleAttendanceMarked(message);
           break;
-
         case 'session_ended':
-          final event = SessionEndedEvent.fromJson(message);
-          _sessionEndedController.add(event);
-          Log.i('[WS] session_ended: ${event.sessionId} status=${event.status}');
+          _handleSessionEnded(message);
           break;
-
         case 'session_activated':
           Log.i('[WS] session_activated: ${message['session_id']} status=${message['status']}');
+          break;
+
+        case 'session_preparing':
+          Log.i('[WS] session_preparing: ${message['session_id']}');
+          _sessionState.applyState(SessionState(
+            sessionId: message['session_id'] as String,
+            state: 'PREPARING',
+            courseName: message['course_name'] as String?,
+            facultyName: message['faculty_name'] as String?,
+            sectionId: message['section_id'] as String?,
+            startTime: message['start_time'] as String?,
+          ));
+          break;
+
+        case 'session_igniting':
+          Log.i('[WS] session_igniting: ${message['session_id']}');
+          _sessionState.applyState(SessionState(
+            sessionId: message['session_id'] as String,
+            state: 'IGNITING',
+            courseName: message['course_name'] as String?,
+            facultyName: message['faculty_name'] as String?,
+          ));
+          break;
+
+        case 'attendance_open':
+          Log.i('[WS] attendance_open: ${message['session_id']}');
+          _sessionState.applyState(SessionState(
+            sessionId: message['session_id'] as String,
+            state: 'ACTIVE',
+            version: message['version'] as int? ?? 0,
+            sessionSecretHalf1: message['session_secret_half1'] as String?,
+            websocketToken: message['websocket_token'] as String?,
+          ));
+          break;
+
+        case 'attendance_updated':
+          final event = AttendanceUpdatedEvent.fromJson(message);
+          _sessionState.updateCounts(event.present, event.absent);
+          _attendanceUpdatedController.add(event);
+          Log.i('[WS] attendance_updated: ${event.present} present ${event.absent} absent');
+          break;
+
+        case 'student_verified':
+          final event = StudentVerifiedEvent.fromJson(message);
+          _sessionState.notifyStudentVerified(event.seat);
+          _studentVerifiedController.add(event);
+          Log.i('[WS] student_verified: ${event.studentId} seat=${event.seat}');
+          break;
+
+        case 'attendance_closed':
+          Log.i('[WS] attendance_closed');
+          _sessionState.applyState(SessionState(
+            sessionId: _sessionState.currentState.sessionId,
+            state: 'CLOSED',
+            presentCount: message['present'] as int? ?? _sessionState.currentState.presentCount,
+          ));
           break;
 
         default:
           Log.d('[WS] Unknown message type: $type');
       }
     } catch (e) {
-      Log.w('[WS] Failed to parse message: $e — $rawMessage');
+      Log.w('[WS] Failed to parse message: $e $rawMessage');
     }
   }
 
+  void _handleFullStateSync(Map<String, dynamic> message) {
+    final roster = message['roster'] as List<dynamic>?;
+    final presentList = message['present_students'] as List<dynamic>?;
+    final sourceList = roster ?? presentList ?? [];
+    final students = sourceList
+        .map((e) => PresentStudent.fromJson(e as Map<String, dynamic>))
+        .toList();
+    final presentCount = students.where((s) => s.status.toUpperCase() == 'PRESENT').length;
+    final totalStudents = message['total_students'] as int? ?? students.length;
+    final totalPresent = message['total_present'] as int? ?? presentCount;
+    final sessionId = message['session_id'] as String? ?? _sessionId ?? '';
+    _syncController.add(FullStateSync(
+      sessionId: sessionId,
+      totalPresent: totalPresent,
+      totalStudents: totalStudents,
+      presentStudents: students,
+    ));
+    if (_isWaitingForFullSync) {
+      _isWaitingForFullSync = false;
+      for (final pending in _pendingAttendanceEvents) {
+        _attendanceController.add(pending);
+      }
+      _pendingAttendanceEvents.clear();
+    }
+    Log.i('[WS] full_state_sync: $totalPresent present / $totalStudents total');
+  }
+
+  void _handleAttendanceMarked(Map<String, dynamic> message) {
+    final event = AttendanceMarkedEvent.fromJson(message);
+    if (_isWaitingForFullSync) {
+      _pendingAttendanceEvents.add(event);
+    } else {
+      _attendanceController.add(event);
+    }
+    Log.i('[WS] ATTENDANCE_MARKED: ${event.studentId}');
+  }
+
+  void _handleSessionEnded(Map<String, dynamic> message) {
+    final event = SessionEndedEvent.fromJson(message);
+    _sessionEndedController.add(event);
+    _sessionState.applyState(SessionState(
+      sessionId: event.sessionId,
+      state: 'CLOSED',
+    ));
+    Log.i('[WS] session_ended: ${event.sessionId} status=${event.status}');
+  }
+
   void _scheduleReconnect() {
-    if (_disposed || _sessionId == null) return;
+    if (_disposed || (_boardId == null && _sessionId == null)) return;
 
     _reconnectTimer?.cancel();
     _reconnectAttempt++;
@@ -310,6 +439,7 @@ class WebsocketService {
     _isWaitingForFullSync = false;
     _pendingAttendanceEvents.clear();
     _connectionStateController.add(false);
+    _sessionState.setConnected(false);
   }
 
   void disconnect() {
@@ -326,5 +456,7 @@ class WebsocketService {
     _attendanceController.close();
     _sessionEndedController.close();
     _connectionStateController.close();
+    _studentVerifiedController.close();
+    _attendanceUpdatedController.close();
   }
 }

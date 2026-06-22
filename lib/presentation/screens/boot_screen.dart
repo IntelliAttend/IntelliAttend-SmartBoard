@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_theme.dart';
 import 'registration_screen.dart';
-import 'idle_screen.dart';
+import 'session_orchestrator_screen.dart';
 import 'settings_screen.dart';
 import '../../data/repositories/device_repository.dart';
 import '../../services/api_service.dart';
@@ -44,11 +44,12 @@ class _BootScreenState extends State<BootScreen> {
       }
 
       // Step 2: Instant UI Transition
-      // We trust the local Isar cache to provide immediate dashboard access
-      Log.i('[Boot] Local identity confirmed for ${registration.smartBoardId}. Entering Idle state.');
+      // Navigate to SessionOrchestratorScreen which checks server state and
+      // renders the appropriate screen (IDLE, PREPARING, IGNITING, ACTIVE, CLOSED).
+      Log.i('[Boot] Local identity confirmed for ${registration.smartBoardId}. Entering Orchestrator.');
       if (mounted) {
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => IdleScreen(registration: registration)),
+          MaterialPageRoute(builder: (context) => SessionOrchestratorScreen(registration: registration)),
         );
       }
 
@@ -66,12 +67,12 @@ class _BootScreenState extends State<BootScreen> {
 
   Future<void> _backgroundSync(IDeviceRepository repository) async {
     try {
-      // Try to refresh the timetable and check for server-side revocation
-      await repository.syncTimetable(fullSync: false);
-      Log.i('[Boot] Background sync completed successfully.');
+      // Full hydration — downloads timetable + rosters + profile in one call.
+      // Uses manifest_hash to skip re-processing if nothing changed.
+      await repository.hydrateFromServer();
+      Log.i('[Boot] Background hydration completed successfully.');
     } catch (e) {
-      // If network fails, we stay in "Degraded" mode but REMAIN logged in locally
-      Log.w('[Boot] Background sync failed. Operating in Offline Mode: $e');
+      Log.w('[Boot] Background hydration failed. Operating in Offline Mode: $e');
     }
   }
 

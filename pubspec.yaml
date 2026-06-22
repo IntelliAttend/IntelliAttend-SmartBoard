@@ -30,14 +30,8 @@ dependencies:
   flutter_secure_storage: ^10.1.0
   shared_preferences: ^2.2.2
   
-  # Firebase — native cloud_firestore .snapshots() for cost-effective
-  # real-time updates. Firestore bills 1 read per doc change, NOT per poll
-  # cycle (see _initFirebase() in main.dart for the full rationale).
-  #
-  # firebase_auth deliberately excluded — its C++ plugin calls abort() on
-  # Windows when AuthStateListener/IdTokenListener callbacks fire on a
-  # worker thread. Auth is handled by FirebaseRestAuth (Identity Toolkit +
-  # Secure Token API over HTTPS) via lib/core/security/firebase_rest_auth.dart.
+  # Firebase Auth uses FirebaseRestAuth (Identity Toolkit + Secure Token API
+  # over HTTPS) — no Flutter Firebase plugins are needed on-device.
 
   # Environment Variables
   flutter_dotenv: ^6.0.1
@@ -71,13 +65,11 @@ dependencies:
   device_info_plus: ^12.4.0
   package_info_plus: ^9.0.1
   web_socket_channel: ^3.0.3
-  firebase_core: ^4.9.0
-  cloud_firestore: ^6.4.1
+  lottie: ^3.3.3
   # firebase_auth deliberately NOT included — the Windows C++ plugin calls
   # abort() when AuthStateListener / IdTokenListener callbacks fire on a
   # worker thread. Replaced by lib/core/security/firebase_rest_auth.dart
-  # (Identity Toolkit + Secure Token API over HTTPS). cloud_firestore
-  # snapshots work fine without it.
+  # (Identity Toolkit + Secure Token API over HTTPS).
 
 dev_dependencies:
   flutter_test:
@@ -93,6 +85,7 @@ flutter:
     - assets/background.png
     - assets/logo.png
     - assets/logo_square.png
+    - assets/Errorfailure.lottie
     - assets/sample.pdf
     - assets/orimi_sample.pdf
     - assets/sample.txt

@@ -115,6 +115,10 @@ class _IdleScreenState extends State<IdleScreen>
   // 10s timer does not spam KioskService.setMode on every tick.
   final Set<String> _t0RestoredSlots = {};
 
+  // Tracks which slots have already triggered cooldown so the 10s timer
+  // does not re-enter the T-5 or class-end path after the first 120s cycle.
+  final Set<String> _cooldownFiredSlots = {};
+
   bool _isUpcomingClassCheckRunning = false;
 
   /// Tracks which slots have completed warm-up successfully.
@@ -210,6 +214,11 @@ class _IdleScreenState extends State<IdleScreen>
 
       await _refreshTimetable();
       _checkCrashRecovery();
+      // Clear any stale completed sessions from previous days/weeks that
+      // might have the same slot IDs as today's classes. Without this,
+      // _completedSlotIds blocks the OTP card (via isBedrockCompleted)
+      // even when the faculty has not yet taken attendance today.
+      await SessionManager.clearCompletedSessionsForDay(0);
       // Load completed slots before starting the 10s timer so the first
       // _checkUpcomingClass() tick sees accurate data. Without this, a
       // release-build AOT race (debug JIT overhead hides it) leaves the
@@ -523,6 +532,7 @@ class _IdleScreenState extends State<IdleScreen>
           '📅 [Idle] Day changed from $_lastQueryDay to $today. Refreshing from cache...');
       _lastQueryDay = today;
       _t0RestoredSlots.clear();
+      _cooldownFiredSlots.clear();
       _preAllocatedSessionId = null;
       _upcomingAllocatedSessionId = null;
       _warmUpTriggeredSlotId = null;
@@ -595,12 +605,14 @@ class _IdleScreenState extends State<IdleScreen>
       _lastBedrockSlotId = null;
       _preFlightSessionSubscription?.cancel();
 
-      // Start 2-minute hard cooldown only if attendance was NOT taken.
-      // If attendance WAS taken, skip the freeze — the next 10s tick handles
-      // the transition naturally. The _cooldownState guard also prevents
-      // double-firing if T-5 already started the cooldown proactively.
-      if (!widget.completedSession && _cooldownState == CooldownState.none) {
+      // Start 2-minute hard cooldown only if attendance was NOT taken and
+      // the cooldown hasn't already fired for this slot (prevents T-5 + class-end
+      // double-fire and guards against 10s-timer re-entry after the first cycle).
+      if (!widget.completedSession &&
+          _cooldownState == CooldownState.none &&
+          !_cooldownFiredSlots.contains(endedSlotId)) {
         if (!WindowOrchestratorService().hasTakenAttendance(endedSlotId)) {
+          _cooldownFiredSlots.add(endedSlotId);
           _startCooldown();
         }
       }
@@ -649,6 +661,8 @@ class _IdleScreenState extends State<IdleScreen>
     //
     // Also skip when minDiff <= 3 — the next class T-3 window is active or
     // imminent; the cooldown would block the warm-up and create a loop.
+    Log.iThrottled('t5_check',
+        '[Idle T-5] bedrock=$_bedrockEntry cooldown=$_cooldownState preAlloc=$_preAllocatedSessionId upAlloc=$_upcomingAllocatedSessionId minDiff=$minDiff endTime=${_bedrockEntry?.endTime} now=$currentMinutes');
     if (_bedrockEntry != null &&
         _cooldownState != CooldownState.locked &&
         _preAllocatedSessionId == null &&
@@ -660,11 +674,17 @@ class _IdleScreenState extends State<IdleScreen>
         final diffToEnd = endMinutes - currentMinutes;
         if (diffToEnd <= 5 && diffToEnd > 0) {
           final slotId = _bedrockEntry!.slotId;
-          if (!WindowOrchestratorService().hasTakenAttendance(slotId)) {
+          if (!_cooldownFiredSlots.contains(slotId) &&
+              !WindowOrchestratorService().hasTakenAttendance(slotId)) {
+            _cooldownFiredSlots.add(slotId);
             Log.w('[Idle] T-5 proactive cooldown for slot $slotId — attendance not taken.');
             _startCooldown();
             return;
+          } else {
+            Log.i('[Idle T-5] Blocked: alreadyFired=${_cooldownFiredSlots.contains(slotId)} attendanceTaken=${WindowOrchestratorService().hasTakenAttendance(slotId)}');
           }
+        } else {
+          Log.i('[Idle T-5] Not in window: diffToEnd=$diffToEnd');
         }
       }
     }
@@ -802,9 +822,10 @@ class _IdleScreenState extends State<IdleScreen>
   // ── 2-Minute Hard Cooldown ────────────────────────────────────────────────
 
   /// Enters the locked cooldown state and starts a 120-second countdown.
-  /// The cooldown prevents class-overlap data contamination by deferring
-  /// the full cache cleanse to [_onCooldownComplete].
+  /// Clears all previous-class state immediately so the cooldown phase shows
+  /// a clean slate. The next-class T-3 re-evaluation happens on completion.
   void _startCooldown() {
+    _fullCleanup();
     _cooldownState = CooldownState.locked;
     _cooldownSecondsRemaining = 120;
     _forceShowCard = false;
@@ -824,9 +845,10 @@ class _IdleScreenState extends State<IdleScreen>
   }
 
   /// Called when the 120-second cooldown expires.
-  /// Performs full cache cleanse then immediately evaluates the next class.
+  /// Unlocks the cooldown state then evaluates the next class T-3 window.
+  /// Full cache cleanse already happened at [_startCooldown].
   void _onCooldownComplete() {
-    _fullCleanup();
+    _cooldownState = CooldownState.none;
     _evaluateNextClass();
     if (mounted) setState(() {});
     Log.i('[Idle] Cooldown complete. Cache cleansed, next-link evaluated.');
@@ -1206,9 +1228,9 @@ class _IdleScreenState extends State<IdleScreen>
 
           final isBedrockCompleted =
               _bedrockEntry != null && _completedSlotIds.contains(_bedrockEntry!.slotId);
-          final bool showCardContextually = (_forceShowCard || _bedrockEntry != null) &&
+          final bool showCardContextually = (_forceShowCard || _bedrockEntry != null || _showStartingSoon) &&
               _cooldownState != CooldownState.locked &&
-              !isBedrockCompleted;
+              (_forceShowCard || !isBedrockCompleted);
 
           final cardOpacity = showCardContextually ? 1.0 : 0.0;
           final lockOpacity = showCardContextually ? 0.0 : 1.0;
@@ -1997,7 +2019,7 @@ class _IdleScreenState extends State<IdleScreen>
     if (isWiping) {
       final minutes = (_cooldownSecondsRemaining / 60).floor();
       final seconds = _cooldownSecondsRemaining % 60;
-      label = 'WIPING SESSION\n${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+      label = 'COOLDOWN PHASE\n${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
     } else if (isSlotCompleted) {
       label = 'COMPLETED';
     } else if (isUnlocked) {
@@ -2011,6 +2033,7 @@ class _IdleScreenState extends State<IdleScreen>
           ? () {
               setState(() {
                 _forceShowCard = true;
+                _isKeypadExpanded = true;
               });
               _resetInactivityTimer();
             }
@@ -2034,8 +2057,8 @@ class _IdleScreenState extends State<IdleScreen>
                   child: CircularProgressIndicator(
                     value: _cooldownSecondsRemaining / 120.0,
                     strokeWidth: 3,
-                    valueColor: const AlwaysStoppedAnimation<Color>(AppColors.warningAmber),
-                    backgroundColor: color.withValues(alpha: 0.1),
+                    valueColor: const AlwaysStoppedAnimation<Color>(AppColors.error),
+                    backgroundColor: AppColors.error.withValues(alpha: 0.1),
                   ),
                 ),
               Container(
@@ -2046,7 +2069,7 @@ class _IdleScreenState extends State<IdleScreen>
                       : isUnlocked
                           ? AppColors.successLime.withValues(alpha: 0.15)
                           : isWiping
-                              ? AppColors.warningAmber.withValues(alpha: 0.1)
+                              ? AppColors.error.withValues(alpha: 0.15)
                               : color.withValues(alpha: 0.05),
                   shape: BoxShape.circle,
                   border: Border.all(
@@ -2070,7 +2093,7 @@ class _IdleScreenState extends State<IdleScreen>
                       : isUnlocked
                           ? AppColors.successLime
                           : isWiping
-                              ? AppColors.warningAmber
+                              ? AppColors.error
                               : color.withValues(alpha: 0.5),
                   size: 32,
                 ),
@@ -2087,7 +2110,7 @@ class _IdleScreenState extends State<IdleScreen>
                   : isUnlocked
                       ? AppColors.successLime
                       : isWiping
-                          ? AppColors.warningAmber
+                          ? AppColors.error
                           : color.withValues(alpha: 0.3),
               fontSize: 10,
               fontWeight: FontWeight.bold,

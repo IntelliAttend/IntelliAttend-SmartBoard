@@ -26,6 +26,7 @@ class AttendanceScreen extends StatefulWidget {
   final TotpEngine totpEngine;
   final WebsocketService websocketService;
   final String accessToken;
+  final int initialPresentCount;
   final bool isOffline;
 
   const AttendanceScreen({
@@ -38,6 +39,7 @@ class AttendanceScreen extends StatefulWidget {
     required this.totpEngine,
     required this.websocketService,
     required this.accessToken,
+    this.initialPresentCount = 0,
     this.sectionId,
     this.slotId,
     this.isOffline = false,
@@ -82,6 +84,12 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   StreamSubscription? _wsAttendanceSubscription;
   StreamSubscription? _wsSyncSubscription;
   StreamSubscription? _wsSessionEndedSubscription;
+  StreamSubscription? _wsStudentVerifiedSubscription;
+  StreamSubscription? _wsAttendanceUpdatedSubscription;
+
+  // Pulse animation for seat verification
+  final Set<int> _pulsingSeatIndices = {};
+  Timer? _pulseTimer;
 
   @override
   void initState() {
@@ -90,6 +98,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     KioskService.setMode(KioskMode.absoluteLocked);
     _totpEngine = widget.totpEngine;
     _wsService = widget.websocketService;
+    _presentCount = widget.initialPresentCount;
 
     // v6.4: The session countdown is the total window duration (e.g. 5–10 min),
     // NOT the 30s rotation interval.
@@ -118,7 +127,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   void _connectWebSocket() {
-    _wsService.connect(widget.sessionId, widget.accessToken);
+    _wsService.connectAttendance(widget.sessionId, widget.accessToken);
 
     _wsSyncSubscription = _wsService.onFullStateSync.listen((sync) {
       if (!mounted) return;
@@ -147,13 +156,38 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         final email = (event.studentEmail ?? event.studentId).toLowerCase();
         final index = _emailToSeatIndex[email];
         if (index != null) {
-          if (!_presentSeatIndices.contains(index)) {
-            _presentSeatIndices.add(index);
-            _presentCount++;
-          }
+          _presentSeatIndices.add(index);
         }
       });
       Log.i('[Attendance] WebSocket: ${event.studentId} marked present.');
+    });
+
+    _wsStudentVerifiedSubscription = _wsService.onStudentVerified.listen((event) {
+      if (!mounted) return;
+      final email = event.studentId.toLowerCase();
+      final index = _emailToSeatIndex[email];
+      if (index != null && !_presentSeatIndices.contains(index)) {
+        setState(() {
+          _presentSeatIndices.add(index);
+          _pulsingSeatIndices.add(index);
+        });
+        _pulseTimer?.cancel();
+        _pulseTimer = Timer(const Duration(milliseconds: 1500), () {
+          if (mounted) {
+            setState(() => _pulsingSeatIndices.clear());
+          }
+        });
+      }
+      Log.i('[Attendance] student_verified: ${event.studentId} seat=${event.seat}');
+    });
+
+    _wsAttendanceUpdatedSubscription = _wsService.onAttendanceUpdated.listen((event) {
+      if (!mounted) return;
+      setState(() {
+        _presentCount = event.present;
+        _totalStudents = _totalStudents > 0 ? _totalStudents : event.present + event.absent;
+      });
+      Log.i('[Attendance] Server update: ${event.present} present ${event.absent} absent');
     });
 
     _wsSessionEndedSubscription = _wsService.onSessionEnded.listen((event) {
@@ -525,6 +559,9 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     _wsAttendanceSubscription?.cancel();
     _wsSyncSubscription?.cancel();
     _wsSessionEndedSubscription?.cancel();
+    _wsStudentVerifiedSubscription?.cancel();
+    _wsAttendanceUpdatedSubscription?.cancel();
+    _pulseTimer?.cancel();
     _wsService.disconnect();
 
     _killSwitchJTimer?.cancel();
@@ -778,31 +815,52 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               ),
               itemCount: _totalStudents > 0 ? _totalStudents : widget.capacity,
               itemBuilder: (context, index) {
-                // Determine if this seat is present
                 final isPresent = _presentSeatIndices.contains(index);
+                final isPulsing = _pulsingSeatIndices.contains(index);
 
-                // Get display info for this seat
                 final isLoaded = index < _students.length;
                 final displayLabel = isLoaded
                     ? _students[index].rollNumber
                     : RollNumberUtils.generateSeatCode(index);
 
-                return Container(
+                final bgColor = isPresent
+                    ? (isDark
+                        ? AppColors.successLime.withValues(alpha: isPulsing ? 0.3 : 0.1)
+                        : (isPulsing ? const Color(0xFFDCFCE7) : const Color(0xFFF1F9E6)))
+                    : (isDark
+                        ? Colors.white.withValues(alpha: 0.03)
+                        : const Color(0xFFF1F5F9));
+
+                final borderColor = isPresent
+                    ? AppColors.successLime
+                    : (isDark ? Colors.white10 : const Color(0xFFE2E8F0));
+
+                final borderWidth = isPresent ? (isPulsing ? 3.0 : 2.0) : 1.5;
+
+                final textColor = isPresent
+                    ? (isDark
+                        ? AppColors.successLime
+                        : const Color(0xFF1A2E05))
+                    : (isDark
+                        ? Colors.white24
+                        : const Color(0xFF94A3B8));
+
+                Widget seatWidget = AnimatedContainer(
+                  duration: const Duration(milliseconds: 600),
                   decoration: BoxDecoration(
-                    color: isPresent
-                        ? (isDark
-                            ? AppColors.successLime.withValues(alpha: 0.1)
-                            : const Color(0xFFF1F9E6))
-                        : (isDark
-                            ? Colors.white.withValues(alpha: 0.03)
-                            : const Color(0xFFF1F5F9)),
+                    color: bgColor,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: isPresent
-                          ? AppColors.successLime
-                          : (isDark ? Colors.white10 : const Color(0xFFE2E8F0)),
-                      width: isPresent ? 2 : 1.5,
+                      color: borderColor,
+                      width: borderWidth,
                     ),
+                    boxShadow: isPulsing
+                        ? [BoxShadow(
+                            color: AppColors.successLime.withValues(alpha: 0.3),
+                            blurRadius: 8,
+                            spreadRadius: 1,
+                          )]
+                        : null,
                   ),
                   child: Center(
                     child: FittedBox(
@@ -812,18 +870,28 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.bold,
-                          color: isPresent
-                              ? (isDark
-                                  ? AppColors.successLime
-                                  : const Color(0xFF1A2E05))
-                              : (isDark
-                                  ? Colors.white24
-                                  : const Color(0xFF94A3B8)),
+                          color: textColor,
                         ),
                       ),
                     ),
                   ),
                 );
+
+                if (isPulsing) {
+                  seatWidget = TweenAnimationBuilder<double>(
+                    tween: Tween(begin: 1.0, end: 0.95),
+                    duration: const Duration(milliseconds: 600),
+                    builder: (context, scale, child) {
+                      return Transform.scale(
+                        scale: 1.0 + (0.05 * (1.0 - scale)),
+                        child: child,
+                      );
+                    },
+                    child: seatWidget,
+                  );
+                }
+
+                return seatWidget;
               },
             ),
           ),

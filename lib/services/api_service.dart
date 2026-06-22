@@ -13,6 +13,7 @@ import '../core/security/ssl_pinning_service.dart';
 import '../core/circuit_breaker.dart';
 import 'time_sync_service.dart';
 import '../core/auth/token_manager.dart';
+import '../core/config/api_schema.dart';
 
 class ApiException implements Exception {
   final String userMessage;
@@ -223,23 +224,27 @@ class ApiService {
   // ─── Time & Context ───────────────────────────────────────────────────────
 
   static Future<int> syncTime() async {
-    final clientSent = DateTime.now().millisecondsSinceEpoch;
-    final response = await _request('GET', 'api/v1/board/time',
-        headers: await _authHeaders());
+    final t0 = DateTime.now().millisecondsSinceEpoch;
+    final response = await _request(
+      'POST',
+      'api/v1/board/time',
+      headers: await _authHeaders(),
+      body: jsonEncode({'client_timestamp_ms': t0}),
+    );
     if (response.statusCode != 200) throw _apiError('Time sync', response);
 
     final data = jsonDecode(response.body);
-    final dynamic payload = data['data'] ?? data;
-    final serverTs = payload['server_timestamp_ms'] is int
-        ? payload['server_timestamp_ms']
-        : DateTime.now().millisecondsSinceEpoch;
+    final t3 = DateTime.now().millisecondsSinceEpoch;
 
-    final clientReceived = DateTime.now().millisecondsSinceEpoch;
-    final rtt = clientReceived - clientSent;
-    final skew = serverTs - (clientReceived - (rtt ~/ 2));
-    TimeSyncService.setSkew(skew);
+    // NTP-style compensation using server_received_at_ms
+    final serverReceivedMs = data['server_received_at_ms'] as int;
+    final sentMs = data['server_timestamp_ms'] as int;
 
-    return serverTs;
+    final rtt = t3 - t0;
+    final offset = serverReceivedMs - (t0 + rtt ~/ 2);
+    TimeSyncService.setSkew(offset);
+
+    return sentMs;
   }
 
   // ─── Session Operations ───────────────────────────────────────────────────
@@ -256,6 +261,46 @@ class ApiService {
       throw _apiError('Session initiation', response);
     }
     return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  // ─── Recovery & Boot (Session Orchestration) ────────────────────────────
+
+  static Future<Map<String, dynamic>> getCurrentState() async {
+    final response = await _request(
+      'GET',
+      'api/v1/session/current-state',
+      headers: await _authHeaders(),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    Log.w('[ApiService] current-state returned ${response.statusCode}');
+    return {};
+  }
+
+  static Future<Map<String, dynamic>> boardBoot({
+    required String boardId,
+    required String hardwareId,
+    required String appVersion,
+  }) async {
+    final response = await _request(
+      'POST',
+      'smartboard/boot',
+      headers: await _authHeaders(),
+      body: jsonEncode({
+        'board_id': boardId,
+        'hardware_id': hardwareId,
+        'app_version': appVersion,
+        'timestamp': TimeSyncService.timeNow.toUtc().toIso8601String(),
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    Log.w('[ApiService] Boot returned ${response.statusCode}');
+    return {};
   }
 
   static Future<void> syncVault({
@@ -371,6 +416,52 @@ class ApiService {
     if (response.statusCode != 200) throw _apiError('Ready check', response);
   }
 
+  // ─── Timetable ───────────────────────────────────────────────────────────
+
+  // ─── Students ──────────────────────────────────────────────────────────────
+
+  /// Fetch students by section ID.
+  static Future<List<Map<String, dynamic>>> getStudentsBySection(
+      String sectionId) async {
+    final response = await _request(
+      'GET',
+      'api/v1/students',
+      headers: await _authHeaders(),
+      queryParameters: {'section_id': sectionId, 'status': ApiSchema.statusActive},
+    );
+
+    if (response.statusCode != 200) {
+      throw _apiError('Students fetch', response);
+    }
+
+    final decoded = jsonDecode(response.body);
+    final raw = decoded is List
+        ? decoded
+        : (decoded[ApiSchema.responseData] as List? ?? []);
+    return raw.cast<Map<String, dynamic>>();
+  }
+
+  /// Fetch students by class ID.
+  static Future<List<Map<String, dynamic>>> getStudentsByClass(
+      String classId) async {
+    final response = await _request(
+      'GET',
+      'api/v1/students',
+      headers: await _authHeaders(),
+      queryParameters: {'class_id': classId, 'status': ApiSchema.statusActive},
+    );
+
+    if (response.statusCode != 200) {
+      throw _apiError('Students fetch', response);
+    }
+
+    final decoded = jsonDecode(response.body);
+    final raw = decoded is List
+        ? decoded
+        : (decoded[ApiSchema.responseData] as List? ?? []);
+    return raw.cast<Map<String, dynamic>>();
+  }
+
   static Future<bool> boardReady() async {
     try {
       final response = await _request(
@@ -388,6 +479,20 @@ class ApiService {
       Log.d('[ApiService] Board ready check failed: $e');
       return false;
     }
+  }
+
+  // ─── Hydration ──────────────────────────────────────────────────────────
+
+  /// Fetch full hydration payload from the server.
+  static Future<Map<String, dynamic>> getHydrationPayload() async {
+    final response = await _request(
+      'GET',
+      'api/v1/board/hydrate',
+      headers: await _authHeaders(),
+      maxRetries: 2,
+    );
+    if (response.statusCode != 200) throw _apiError('Hydration', response);
+    return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
   static Future<void> sendHardwareTelemetry(Map<String, dynamic> data) async {

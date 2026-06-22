@@ -17,6 +17,7 @@ class SecureStorageService {
   static const String _keyIsarEncrypt = 'isar_encrypt_key';
   static const String _keyBoardEmail = 'board_email';
   static const String _keyBoardPassword = 'board_password';
+  static const String _keyBoardManifestHash = 'board_manifest_hash';
 
   static const _secure = FlutterSecureStorage(
     aOptions: AndroidOptions(),
@@ -177,6 +178,14 @@ class SecureStorageService {
     await _delete(_keyBoardEmail);
     await _delete(_keyBoardPassword);
   }
+
+  // Hydration manifest hash — used for cache-first strategy
+  static Future<void> storeManifestHash(String hash) =>
+      _write(_keyBoardManifestHash, hash);
+  static Future<String?> getManifestHash() =>
+      _read(_keyBoardManifestHash);
+  static Future<void> clearManifestHash() =>
+      _delete(_keyBoardManifestHash);
 
   static Future<void> clearAll() async {
     await _delete(_keyApiKey);

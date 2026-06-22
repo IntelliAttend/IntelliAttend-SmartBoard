@@ -2,11 +2,11 @@ import 'dart:async';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../core/auth/token_manager.dart';
+import '../core/utils/logger.dart';
+import '../core/state/board_state_machine.dart';
 import '../data/repositories/device_repository.dart';
 import 'api_service.dart';
 import 'time_sync_service.dart';
-import '../core/utils/logger.dart';
-import '../core/state/board_state_machine.dart';
 
 class HeartbeatSessionInfo {
   final String? sessionId;
@@ -27,7 +27,7 @@ class HeartbeatService {
 
   static bool _started = false;
   static int _consecutiveNullSessions = 0;
-  static const int _maxNullSessionsBeforeForceEnd = 2;
+  static const int _maxNullSessionsBeforeForceEnd = 3;
 
   static int _heartbeatCount = 0;
 
@@ -65,8 +65,8 @@ class HeartbeatService {
     }
 
     _send();
-    _timer = Timer.periodic(const Duration(minutes: 5), (_) => _send());
-    Log.i('[Heartbeat] Started — immediate beat, then every 5 m (version: $_cachedVersion).');
+    _timer = Timer.periodic(const Duration(seconds: 15), (_) => _send());
+    Log.i('[Heartbeat] Started — immediate beat, then every 15 s (version: $_cachedVersion).');
   }
 
   static Future<void> stop() async {
@@ -152,9 +152,9 @@ class HeartbeatService {
         }
         _sessionController.add(HeartbeatSessionInfo());
         final machine = BoardStateMachine();
-        if (machine.currentState == BoardState.attendance) {
+        if (machine.currentState == BoardState.active) {
           Log.w('[Heartbeat] $_consecutiveNullSessions consecutive null sessions — force-ending');
-          machine.forceTransitionTo(BoardState.summary);
+          machine.forceTransitionTo(BoardState.closed);
         }
       }
     } catch (e) {
@@ -164,7 +164,20 @@ class HeartbeatService {
         return;
       }
 
-      Log.w('[Heartbeat] Send failed (will retry in 5m): $e');
+      Log.w('[Heartbeat] Send failed (will retry in 15s): $e');
+      return;
+    }
+
+    // After successful heartbeat, trigger a lightweight re-hydration check.
+    // The HydrationService compares manifest_hash; if unchanged it returns
+    // immediately without any Isar writes.
+    try {
+      final reg = await _deviceRepository?.getRegistration();
+      if (reg != null) {
+        await _deviceRepository?.hydrateFromServer();
+      }
+    } catch (e) {
+      Log.d('[Heartbeat] Re-hydration check failed (non-critical): $e');
     }
   }
 
@@ -173,14 +186,14 @@ class HeartbeatService {
     final current = machine.currentState;
 
     if (info.isActive && current == BoardState.idle) {
-      Log.i('[Heartbeat] Active session exists — triggering PRE-FLIGHT');
-      machine.transitionTo(BoardState.preFlight);
-    } else if (info.isCompleted && current == BoardState.attendance) {
-      Log.i('[Heartbeat] Session completed — transitioning to SUMMARY');
-      machine.transitionTo(BoardState.summary);
-    } else if (info.isEmpty && current == BoardState.attendance) {
+      Log.i('[Heartbeat] Active session exists — triggering PREPARING');
+      machine.transitionTo(BoardState.preparing);
+    } else if (info.isCompleted && current == BoardState.active) {
+      Log.i('[Heartbeat] Session completed — transitioning to CLOSED');
+      machine.transitionTo(BoardState.closed);
+    } else if (info.isEmpty && current == BoardState.active) {
       Log.w('[Heartbeat] Session null on server — force-ending');
-      machine.forceTransitionTo(BoardState.summary);
+      machine.forceTransitionTo(BoardState.closed);
     }
   }
 }
