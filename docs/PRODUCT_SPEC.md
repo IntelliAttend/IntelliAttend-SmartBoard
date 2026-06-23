@@ -30,6 +30,13 @@ To provide a friction-less, tamper-proof, and automated attendance management sy
 
 ## ✅ Core Requirements
 
+### 0. Canonical Attendance Lifecycle
+- The Attendance Session Lifecycle is defined in [`docs/product/ATTENDANCE_SESSION_LIFECYCLE_PRD.md`](product/ATTENDANCE_SESSION_LIFECYCLE_PRD.md).
+- The server is the only authority for session state: `IDLE -> PREPARING -> IGNITING -> ACTIVE -> CLOSED`.
+- Every client must hydrate current state from `GET /api/v1/session/current-state` on open, reconnect, app resume, and WebSocket recovery.
+- WebSocket only accelerates updates; it does not own lifecycle business logic.
+- Any actor may join late and must render the current server state immediately.
+
 ### 1. Security & Integrity
 - **Dynamic QR:** 5-7s rotation cycle to prevent photo/video sharing.
 - **Multi-Factor:** convergence of GPS (30m), Wi-Fi BSSID, and QR Token.

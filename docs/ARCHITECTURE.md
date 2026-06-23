@@ -81,15 +81,20 @@ backend/python/
 
 ## 🔄 Communication Flow
 
-1.  **Handshake:** SmartBoard performs pre-flight check and hardware binding.
-2.  **Auth:** Device registers with OTP -> Server issues API Key + JWT (v5.4).
-3.  **Sync:** Board listens to Firestore `.snapshots()` for timetable/notifications.
-4.  **Active Session:**
-    -   Board requests Session Start.
-    -   Board generates/rotates **QR v7.0** tokens every 5s.
+The canonical product contract for attendance state is
+[`docs/product/ATTENDANCE_SESSION_LIFECYCLE_PRD.md`](product/ATTENDANCE_SESSION_LIFECYCLE_PRD.md).
+
+1.  **Hydration:** Every actor calls `GET /api/v1/session/current-state` on boot, open, foreground resume, reconnect, or WebSocket recovery.
+2.  **Handshake:** SmartBoard performs pre-flight check and hardware binding.
+3.  **Auth:** Device registers with OTP -> Server issues API Key + JWT (v5.4).
+4.  **Sync:** Clients subscribe to WebSocket/Firebase updates only after hydration.
+5.  **Active Session:**
+    -   Faculty starts the session; server transitions `PREPARING -> IGNITING` and generates OTP/session credentials.
+    -   SmartBoard verifies OTP; server transitions `IGNITING -> ACTIVE`.
+    -   SmartBoard renders rotating QR and live roster when the server says `ACTIVE`.
     -   Student scans -> Mobile app submits to Backend.
-    -   Backend validates signals -> Updates Firestore.
-    -   Board reflects live count via real-time listener.
+    -   Backend validates signals -> persists attendance -> broadcasts update hints.
+    -   Faculty, SmartBoard, Student, and Admin render the same server state. Missed WebSocket events are recovered through `current-state`.
 
 ---
 

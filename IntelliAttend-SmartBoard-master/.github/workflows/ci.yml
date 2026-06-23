@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Create .env file for tests
+        run: echo "API_BASE_URL=https://api-dev.balaseetharamanjaneyulu.com" > .env
+
+      - name: Dependency audit (Flutter)
+        run: dart pub audit || echo "::warning::dart pub audit found issues"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Dependency audit (Python)
+        working-directory: backend/python
+        run: |
+          pip install pip-audit
+          pip-audit --requirement requirements.txt 2>&1 || echo "::warning::pip-audit found issues"
+
+      - name: Analyze project code
+        run: dart analyze lib/ test/
+
+      - name: Run tests
+        run: flutter test
