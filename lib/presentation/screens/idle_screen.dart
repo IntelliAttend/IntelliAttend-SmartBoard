@@ -4,6 +4,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
@@ -22,6 +23,8 @@ import '../../models/isar_schemas.dart';
 import '../widgets/glass_container.dart';
 import '../widgets/pin_input.dart';
 import '../widgets/timeline_slot.dart';
+import '../widgets/notification_bell.dart';
+import '../../services/notification_listener_service.dart';
 import 'registration_screen.dart';
 import 'attendance_screen.dart';
 import 'settings_screen.dart';
@@ -32,7 +35,6 @@ import '../../services/time_sync_service.dart';
 import '../../services/timetable_cache.dart';
 import 'package:video_player/video_player.dart';
 import '../../services/pre_flight_service.dart';
-import '../../services/totp_engine.dart';
 import '../../services/websocket_service.dart';
 import '../../core/platform/kiosk_service.dart';
 import '../../core/platform/window_orchestrator_service.dart';
@@ -126,18 +128,18 @@ class _IdleScreenState extends State<IdleScreen>
   /// re-triggering warm-up when [_preFlightStatus] is transiently `connecting`.
   final Set<String> _completedWarmUpSlots = {};
 
-  /// Monotonic clock started at warm-up time. Combined with [_serverWarmUpTime]
-  /// to provide a server-corrected time that never jumps backwards.
-  Stopwatch? _monotonicWarmUpClock;
-
-  /// Server time (epoch ms) captured from the last successful warm-up response.
-  DateTime? _serverWarmUpTime;
-
   /// 2-minute hard cooldown state machine between classes.
   /// Prevents class-overlap data contamination and provides a clean boundary.
   CooldownState _cooldownState = CooldownState.none;
   int _cooldownSecondsRemaining = 120;
   Timer? _cooldownTimer;
+
+  /// Break countdown timer for bio/lunch break gaps between classes.
+  /// Runs continuously from break start → T-3 → class start.
+  /// At T-3 the ring colour transitions from teal → green (same progress).
+  int _breakSecondsRemaining = 0;
+  int _breakDurationSeconds = 0;
+  Timer? _breakTimer;
 
   // Listens to the global TimetableCache — every Firestore snapshot update
   // triggers _onTimetableCacheChanged which re-reads today's entries from RAM
@@ -326,6 +328,12 @@ class _IdleScreenState extends State<IdleScreen>
     return _isBioBreak() || _isLunchBreak();
   }
 
+  /// Independent gap check for the break timer — NOT gated by [enableVideoBreaks]
+  /// so the timer ring still shows during breaks even when video backgrounds
+  /// are disabled. Returns true whenever we are in a >=5-minute gap between
+  /// consecutive timetable entries.
+  bool _isBreakGap() => _currentGapMinutes() >= 5;
+
   int _toMinutes(String time) {
     final parts = time.split(':');
     if (parts.length != 2) return 0;
@@ -344,8 +352,9 @@ class _IdleScreenState extends State<IdleScreen>
       final nextStart = _toMinutes(sorted[i + 1].startTime);
       int gap = nextStart - prevEnd;
       if (gap < _midnightWrapThreshold) gap += _minutesPerDay;
-      if (gap >= 5 && nowMinutes >= prevEnd && nowMinutes < nextStart)
+      if (gap >= 5 && nowMinutes >= prevEnd && nowMinutes < nextStart) {
         return gap;
+      }
     }
     return 0;
   }
@@ -428,6 +437,7 @@ class _IdleScreenState extends State<IdleScreen>
     _inactivityTimer?.cancel();
     _preClassTimer?.cancel();
     _cooldownTimer?.cancel();
+    _breakTimer?.cancel();
     _preFlightSessionSubscription?.cancel();
     _cinematicController.dispose();
     super.dispose();
@@ -531,6 +541,7 @@ class _IdleScreenState extends State<IdleScreen>
       Log.i(
           '📅 [Idle] Day changed from $_lastQueryDay to $today. Refreshing from cache...');
       _lastQueryDay = today;
+      _stopBreakTimer();
       _t0RestoredSlots.clear();
       _cooldownFiredSlots.clear();
       _preAllocatedSessionId = null;
@@ -692,12 +703,16 @@ class _IdleScreenState extends State<IdleScreen>
     // ── Cooldown guard ─────────────────────────────────────────────────────
     // During the 2-minute hard freeze, all T-3/T-0 processing is skipped.
     // After cooldown completes, _evaluateNextClass handles the next-link chain.
-    if (_cooldownState == CooldownState.locked) return;
+    if (_cooldownState == CooldownState.locked) {
+      _stopBreakTimer();
+      return;
+    }
 
     // ── Current Class State ───────────────────────────────────────────────────
     // Manages the OTP card visibility and session transfer for the active class.
     // Warm-up at T-3 is handled exclusively by the upcoming-class block below.
     if (_bedrockEntry != null) {
+      _stopBreakTimer();
       final currentSlotId = _bedrockEntry!.slotId;
       final isBedrockCompleted = _completedSlotIds.contains(currentSlotId);
       if (isBedrockCompleted) {
@@ -816,6 +831,26 @@ class _IdleScreenState extends State<IdleScreen>
           });
         }
       }
+
+      // ── Break Timer Management ─────────────────────────────────────────────
+      // Start the break countdown when we are in a gap between classes (minDiff
+      // > 3, so outside the T-3 window). The timer runs continuously through
+      // the T-3 transition so the ring progress carries over without resetting.
+      if (_bedrockEntry == null &&
+          _cooldownState == CooldownState.none &&
+          !_showStartingSoon) {
+        if (_isBreakGap() && nextEntry != null) {
+          final nextStartMinutes = _toMinutes(nextEntry.startTime);
+          final remainingSeconds =
+              (nextStartMinutes - currentMinutes) * 60;
+          if (remainingSeconds > 0 && _breakTimer == null) {
+            final totalGapSeconds = _currentGapMinutes() * 60;
+            _startBreakTimer(totalGapSeconds, remainingSeconds);
+          }
+        } else if (_breakTimer != null) {
+          _stopBreakTimer();
+        }
+      }
     }
   }
 
@@ -850,8 +885,48 @@ class _IdleScreenState extends State<IdleScreen>
   void _onCooldownComplete() {
     _cooldownState = CooldownState.none;
     _evaluateNextClass();
+    // Start break timer immediately so there is no ~10s dead gap while waiting
+    // for the next periodic _checkUpcomingClass tick.
+    _kickstartBreakTimerIfNeeded();
     if (mounted) setState(() {});
     Log.i('[Idle] Cooldown complete. Cache cleansed, next-link evaluated.');
+  }
+
+  /// Starts the break timer right now (instead of waiting for the next 10s
+  /// timer tick) when we are in a >=5-minute gap between classes and not
+  /// already in the T-3 window.
+  void _kickstartBreakTimerIfNeeded() {
+    if (_showStartingSoon || _breakTimer != null || _todayTimeline.isEmpty) {
+      return;
+    }
+    if (_cooldownState != CooldownState.none) return;
+    if (_bedrockEntry != null) return;
+
+    final now = TimeSyncService.timeNow;
+    final currentMinutes = now.hour * 60 + now.minute;
+
+    TimetableEntry? nextEntry;
+    int minDiff = 9999;
+    for (final entry in _todayTimeline) {
+      final parts = entry.startTime.split(':');
+      if (parts.length != 2) continue;
+      int entryMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
+      int diff = entryMinutes - currentMinutes;
+      if (diff < _midnightWrapThreshold) diff += _minutesPerDay;
+      if (diff > 0 && diff < minDiff) {
+        minDiff = diff;
+        nextEntry = entry;
+      }
+    }
+
+    if (_isBreakGap() && nextEntry != null && minDiff > 3) {
+      final nextStartMinutes = _toMinutes(nextEntry.startTime);
+      final remainingSeconds = (nextStartMinutes - currentMinutes) * 60;
+      if (remainingSeconds > 0) {
+        final totalGapSeconds = _currentGapMinutes() * 60;
+        _startBreakTimer(totalGapSeconds, remainingSeconds);
+      }
+    }
   }
 
   /// Full cache cleanse — wipes all warm-up state, session IDs, and tracking
@@ -869,6 +944,38 @@ class _IdleScreenState extends State<IdleScreen>
     _upcomingAllocatedSessionId = null;
     _cooldownState = CooldownState.none;
     _otpController.clear();
+    _stopBreakTimer();
+  }
+
+  // ── Break Countdown Timer ──────────────────────────────────────────────────
+
+  /// Starts the break countdown timer that runs from break start through T-3
+  /// until the next class begins. The progress ring continues seamlessly into
+  /// the T-3 green state without resetting.
+  void _startBreakTimer(int totalSeconds, int remainingSeconds) {
+    _breakTimer?.cancel();
+    _breakDurationSeconds = totalSeconds;
+    _breakSecondsRemaining = remainingSeconds;
+    _breakTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() {
+        _breakSecondsRemaining--;
+        if (_breakSecondsRemaining <= 0) {
+          _breakTimer?.cancel();
+          _breakSecondsRemaining = 0;
+        }
+      });
+    });
+    if (mounted) setState(() {});
+    Log.i('[Idle] Break timer started: ${totalSeconds}s total, ${remainingSeconds}s remaining.');
+  }
+
+  /// Stops and resets the break countdown timer.
+  void _stopBreakTimer() {
+    _breakTimer?.cancel();
+    _breakTimer = null;
+    _breakSecondsRemaining = 0;
+    _breakDurationSeconds = 0;
   }
 
   /// Evaluates the next upcoming class after cooldown and immediately enters
@@ -951,17 +1058,6 @@ class _IdleScreenState extends State<IdleScreen>
           // Mark this slot as completed so the 10-second timer stops
           // re-triggering warm-up.
           _completedWarmUpSlots.add(slotId);
-
-          // Capture server time and start a monotonic reference clock.
-          // This gives us a server-corrected time that never jumps backwards
-          // (unlike wall-clock-based drift correction).
-          final serverTs =
-              (result['server_timestamp'] ?? result['server_timestamp_ms'] ?? 0)
-                  as int;
-          if (serverTs > 0) {
-            _serverWarmUpTime = DateTime.fromMillisecondsSinceEpoch(serverTs);
-            (_monotonicWarmUpClock ??= Stopwatch()).start();
-          }
 
           if (isForUpcoming) {
             setState(() {
@@ -1054,8 +1150,14 @@ class _IdleScreenState extends State<IdleScreen>
 
   Future<void> _handleVerifyOtp() async {
     final otp = _otpController.text.trim();
-    if (otp.length != 6) {
-      setState(() => _errorMessage = 'Please enter a valid 6-digit PIN');
+    if (otp.length != 4) {
+      setState(() => _errorMessage = 'Please enter a valid 4-digit PIN');
+      return;
+    }
+
+    // DEBUG: OTP 0000 bypasses server verification
+    if (otp == '0000') {
+      await _enterDebugSession();
       return;
     }
 
@@ -1145,22 +1247,19 @@ class _IdleScreenState extends State<IdleScreen>
 
       // Session is now live — clear the in-memory pre-allocated IDs so they
       // cannot be accidentally reused if the board returns to IdleScreen.
-      if (mounted) setState(() {
-        _preAllocatedSessionId = null;
-        _upcomingAllocatedSessionId = null;
-      });
+      if (mounted) {
+        setState(() {
+          _preAllocatedSessionId = null;
+          _upcomingAllocatedSessionId = null;
+        });
+      }
 
       if (mounted) {
-        final engine = TotpEngine(
-          sessionId: sessionId,
-          sessionSecret: sessionSecret,
-        );
         final wsService = WebsocketService(AppConfig.baseUrl);
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (context) => AttendanceScreen(
               sessionId: sessionId,
-              totpEngine: engine,
               websocketService: wsService,
               accessToken: accessToken ?? '',
               capacity: widget.registration.capacity,
@@ -1196,6 +1295,43 @@ class _IdleScreenState extends State<IdleScreen>
     }
   }
 
+  Future<void> _enterDebugSession() async {
+    Log.i('[IdleScreen] DEBUG: OTP 0000 entered — creating mock session.');
+    final debugSessionId = 'DEBUG_${DateTime.now().millisecondsSinceEpoch}';
+    final debugSecret = 'debug_secret_0000000000000000';
+
+    await SessionManager.saveSession(
+      sessionId: debugSessionId,
+      rosterCount: 0,
+      facultyName: 'Debug Faculty',
+      courseName: 'Debug Course',
+      sectionId: 'debug',
+      endTime: TimeSyncService.timeNow.add(const Duration(hours: 1)),
+    );
+
+    await SecureStorageService.storeSessionSecret(
+        debugSessionId, debugSecret);
+
+    if (mounted) {
+      final wsService = WebsocketService(AppConfig.baseUrl);
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => AttendanceScreen(
+            sessionId: debugSessionId,
+            websocketService: wsService,
+            accessToken: '',
+            capacity: widget.registration.capacity,
+            courseName: 'Debug Course',
+            facultyName: 'Debug Faculty',
+            sectionId: 'debug',
+            roomName: widget.registration.roomName,
+            slotId: null,
+          ),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -1228,7 +1364,7 @@ class _IdleScreenState extends State<IdleScreen>
 
           final isBedrockCompleted =
               _bedrockEntry != null && _completedSlotIds.contains(_bedrockEntry!.slotId);
-          final bool showCardContextually = (_forceShowCard || _bedrockEntry != null || _showStartingSoon) &&
+          final bool showCardContextually = (_forceShowCard || _bedrockEntry != null) &&
               _cooldownState != CooldownState.locked &&
               (_forceShowCard || !isBedrockCompleted);
 
@@ -1401,16 +1537,6 @@ class _IdleScreenState extends State<IdleScreen>
         : AppColors.primaryTeal;
   }
 
-  /// Returns a server-corrected monotonic time by adding the elapsed time
-  /// since warm-up to the server's timestamp. Falls back to [TimeSyncService]
-  /// if no warm-up has completed yet.
-  DateTime get _warmUpServerTime {
-    if (_serverWarmUpTime != null && (_monotonicWarmUpClock?.isRunning ?? false)) {
-      return _serverWarmUpTime!.add(_monotonicWarmUpClock!.elapsed);
-    }
-    return TimeSyncService.timeNow;
-  }
-
   Widget _buildNavLinks(Color color) {
     final activeColor =
         color == Colors.white ? Colors.white : AppColors.primaryTeal;
@@ -1466,12 +1592,50 @@ class _IdleScreenState extends State<IdleScreen>
     final iconColor = color == Colors.white ? Colors.white70 : Colors.black54;
     return Row(
       children: [
-        IconButton(
-            onPressed: () {
-              Navigator.of(context).push(MaterialPageRoute(
-                  builder: (context) => const NotificationsScreen()));
-            },
-            icon: Icon(Icons.notifications_none, color: iconColor)),
+        NotificationBell(
+          iconColor: iconColor,
+          isBreak: _isAnyBreak(),
+          onViewAll: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (context) => const NotificationsScreen())),
+        ),
+        if (kDebugMode) ...[
+          SizedBox(
+            height: 36,
+            child: TextButton.icon(
+              onPressed: () => NotificationListenerService().injectEmergencyForDebug(),
+              style: TextButton.styleFrom(
+                backgroundColor: const Color(0xFFC72C31).withValues(alpha: 0.15),
+                foregroundColor: const Color(0xFFC72C31),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  side: BorderSide(color: const Color(0xFFC72C31).withValues(alpha: 0.3)),
+                ),
+              ),
+              icon: const Icon(Icons.warning_rounded, size: 16),
+              label: const Text('Emergency', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+            ),
+          ),
+          const SizedBox(width: 6),
+          SizedBox(
+            height: 36,
+            child: TextButton.icon(
+              onPressed: () => NotificationListenerService().injectPriority1ForDebug(),
+              style: TextButton.styleFrom(
+                backgroundColor: const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                foregroundColor: const Color(0xFFF59E0B),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  side: BorderSide(color: const Color(0xFFF59E0B).withValues(alpha: 0.3)),
+                ),
+              ),
+              icon: const Icon(Icons.blur_on, size: 16),
+              label: const Text('P1 Blur', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+            ),
+          ),
+          const SizedBox(width: 6),
+        ],
         IconButton(
             onPressed: () {
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -2012,24 +2176,87 @@ class _IdleScreenState extends State<IdleScreen>
     final activeSlotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
     final isSlotCompleted =
         activeSlotId != null && _completedSlotIds.contains(activeSlotId);
-    final isUnlocked = _showStartingSoon && !isSlotCompleted && _upcomingAllocatedSessionId != null;
+    final isUnlocked =
+        _showStartingSoon && !isSlotCompleted && _upcomingAllocatedSessionId != null;
+    final isWarmingUp =
+        _showStartingSoon && !isSlotCompleted && !isUnlocked;
     final isWiping = _cooldownState == CooldownState.locked;
+    final isBreakTimerActive = _breakTimer != null &&
+        _breakSecondsRemaining > 0 &&
+        !isWiping &&
+        !isSlotCompleted &&
+        !isUnlocked &&
+        !isWarmingUp;
 
+    // ── Ring progress & colour ──────────────────────────────────────────────
+    double ringValue = 0.0;
+    Color ringColor = Colors.transparent;
+    bool showRing = false;
+
+    if (isWiping) {
+      ringValue = _cooldownSecondsRemaining / 120.0;
+      ringColor = AppColors.error;
+      showRing = true;
+    } else if (isSlotCompleted) {
+      ringValue = 1.0;
+      ringColor = AppColors.warningAmber;
+      showRing = true;
+    } else if (isUnlocked || isWarmingUp) {
+      // T-3 / Warming-up: continue ring from break timer, or full green if no
+      // break timer. When the break timer expires (remaining == 0) but the next
+      // class hasn't started yet, show a full ring rather than 0%.
+      if (_breakDurationSeconds > 0 && _breakSecondsRemaining > 0) {
+        ringValue = _breakSecondsRemaining / _breakDurationSeconds;
+      } else {
+        ringValue = 1.0;
+      }
+      ringColor = AppColors.successLime;
+      showRing = true;
+    } else if (isBreakTimerActive) {
+      ringValue = _breakSecondsRemaining / _breakDurationSeconds;
+      ringColor = AppColors.primaryTeal;
+      showRing = true;
+    }
+
+    // ── Label ───────────────────────────────────────────────────────────────
     String label;
     if (isWiping) {
       final minutes = (_cooldownSecondsRemaining / 60).floor();
       final seconds = _cooldownSecondsRemaining % 60;
-      label = 'COOLDOWN PHASE\n${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+      label =
+          'COOLDOWN PHASE\n${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
     } else if (isSlotCompleted) {
       label = 'COMPLETED';
     } else if (isUnlocked) {
       label = 'TAP TO START';
+    } else if (isWarmingUp) {
+      label = 'WARMING UP...';
+    } else if (isBreakTimerActive) {
+      final breakLabel = _isBioBreak() ? 'BIO BREAK' : 'LUNCH BREAK';
+      final minutes = (_breakSecondsRemaining / 60).floor();
+      final seconds = _breakSecondsRemaining % 60;
+      label =
+          '$breakLabel\n${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
     } else {
       label = 'SESSION LOCKED';
     }
 
+    // ── Theme colours per state ─────────────────────────────────────────────
+    Color themeColor;
+    if (isSlotCompleted) {
+      themeColor = AppColors.warningAmber;
+    } else if (isUnlocked || isWarmingUp) {
+      themeColor = AppColors.successLime;
+    } else if (isWiping) {
+      themeColor = AppColors.error;
+    } else if (isBreakTimerActive) {
+      themeColor = AppColors.primaryTeal;
+    } else {
+      themeColor = color.withValues(alpha: 0.5);
+    }
+
     return InkWell(
-      onTap: isUnlocked && !isWiping
+      onTap: isUnlocked && !isWiping && !isWarmingUp
           ? () {
               setState(() {
                 _forceShowCard = true;
@@ -2050,15 +2277,15 @@ class _IdleScreenState extends State<IdleScreen>
           Stack(
             alignment: Alignment.center,
             children: [
-              if (isWiping)
+              if (showRing)
                 SizedBox(
                   width: 66,
                   height: 66,
                   child: CircularProgressIndicator(
-                    value: _cooldownSecondsRemaining / 120.0,
+                    value: ringValue,
                     strokeWidth: 3,
-                    valueColor: const AlwaysStoppedAnimation<Color>(AppColors.error),
-                    backgroundColor: AppColors.error.withValues(alpha: 0.1),
+                    valueColor: AlwaysStoppedAnimation<Color>(ringColor),
+                    backgroundColor: ringColor.withValues(alpha: 0.1),
                   ),
                 ),
               Container(
@@ -2066,18 +2293,20 @@ class _IdleScreenState extends State<IdleScreen>
                 decoration: BoxDecoration(
                   color: isSlotCompleted
                       ? AppColors.warningAmber.withValues(alpha: 0.15)
-                      : isUnlocked
+                      : isUnlocked || isWarmingUp
                           ? AppColors.successLime.withValues(alpha: 0.15)
                           : isWiping
                               ? AppColors.error.withValues(alpha: 0.15)
-                              : color.withValues(alpha: 0.05),
+                              : isBreakTimerActive
+                                  ? AppColors.primaryTeal.withValues(alpha: 0.15)
+                                  : color.withValues(alpha: 0.05),
                   shape: BoxShape.circle,
                   border: Border.all(
                     color: isSlotCompleted
                         ? AppColors.warningAmber.withValues(alpha: 0.3)
-                        : isUnlocked
+                        : isUnlocked || isWarmingUp
                             ? AppColors.successLime.withValues(alpha: 0.3)
-                            : isWiping
+                            : isWiping || isBreakTimerActive
                                 ? Colors.transparent
                                 : color.withValues(alpha: 0.1),
                   ),
@@ -2087,14 +2316,10 @@ class _IdleScreenState extends State<IdleScreen>
                       ? Icons.check_circle_outline
                       : isUnlocked
                           ? Icons.lock_open_outlined
-                          : Icons.lock_outline,
-                  color: isSlotCompleted
-                      ? AppColors.warningAmber
-                      : isUnlocked
-                          ? AppColors.successLime
-                          : isWiping
-                              ? AppColors.error
-                              : color.withValues(alpha: 0.5),
+                          : isWarmingUp
+                              ? Icons.lock_outline
+                              : Icons.lock_outline,
+                  color: themeColor,
                   size: 32,
                 ),
               ),
@@ -2105,13 +2330,7 @@ class _IdleScreenState extends State<IdleScreen>
             label,
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: isSlotCompleted
-                  ? AppColors.warningAmber
-                  : isUnlocked
-                      ? AppColors.successLime
-                      : isWiping
-                          ? AppColors.error
-                          : color.withValues(alpha: 0.3),
+              color: themeColor,
               fontSize: 10,
               fontWeight: FontWeight.bold,
               letterSpacing: 2,
@@ -2153,7 +2372,7 @@ class _IdleScreenState extends State<IdleScreen>
             });
           }
         } else {
-          if (_otpController.text.length < 6) {
+          if (_otpController.text.length < 4) {
             setState(() {
               _otpController.text += label;
               _resetInactivityTimer();

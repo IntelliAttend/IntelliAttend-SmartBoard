@@ -1,19 +1,17 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
-import '../../services/totp_engine.dart';
 import '../../services/api_service.dart';
-import '../../services/websocket_service.dart';
 import '../../services/student_service.dart';
+import '../../services/websocket_service.dart';
 import '../../services/heartbeat_service.dart';
 import '../../core/platform/kiosk_service.dart';
 import '../../core/utils/roll_number_utils.dart';
 import '../../core/utils/logger.dart';
 import 'summary_screen.dart';
 import '../widgets/glass_container.dart';
-import '../widgets/fluid_qr_view.dart';
 
 class AttendanceScreen extends StatefulWidget {
   final String sessionId;
@@ -23,11 +21,10 @@ class AttendanceScreen extends StatefulWidget {
   final String roomName;
   final String? sectionId;
   final String? slotId;
-  final TotpEngine totpEngine;
+
   final WebsocketService websocketService;
   final String accessToken;
   final int initialPresentCount;
-  final bool isOffline;
 
   const AttendanceScreen({
     super.key,
@@ -36,13 +33,11 @@ class AttendanceScreen extends StatefulWidget {
     required this.courseName,
     required this.facultyName,
     required this.roomName,
-    required this.totpEngine,
     required this.websocketService,
     required this.accessToken,
     this.initialPresentCount = 0,
     this.sectionId,
     this.slotId,
-    this.isOffline = false,
   });
 
   @override
@@ -50,20 +45,13 @@ class AttendanceScreen extends StatefulWidget {
 }
 
 class _AttendanceScreenState extends State<AttendanceScreen>
-    with SingleTickerProviderStateMixin {
-  late TotpEngine _totpEngine;
-  // ignore: unused_field — kept for future WebSocket integration
+    with TickerProviderStateMixin {
   late WebsocketService _wsService;
-  String _currentQrData = '';
-  late AnimationController _progressController;
   bool _isSessionEnding = false;
-  // ignore: prefer_final_fields - mutated when WS re-enabled
   int _presentCount = 0;
   int _totalStudents = 0;
-  // ignore: prefer_final_fields - mutated when WS re-enabled
-  Set<int> _presentSeatIndices = {};
-  int _secondsRemaining = 0;
-  Timer? _countdownTimer;
+  final Set<int> _presentSeatIndices = {};
+  final Set<int> _absentSeatIndices = {};
 
   static const int _endSessionCooldownSeconds = 7;
   bool _canEndSession = false;
@@ -71,8 +59,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   Timer? _endSessionCooldownTimer;
 
   bool _isRosterLoaded = false;
+  bool _isCommitted = false;
 
-  // Kill switch: Ctrl+Shift held + triple-J to escape absoluteLocked mode
   int _killSwitchJCount = 0;
   Timer? _killSwitchJTimer;
   final FocusNode _killSwitchFocusNode = FocusNode();
@@ -80,50 +68,47 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   List<StudentInfo> _students = [];
   final Map<String, int> _emailToSeatIndex = {};
 
-  // WebSocket subscriptions
   StreamSubscription? _wsAttendanceSubscription;
   StreamSubscription? _wsSyncSubscription;
   StreamSubscription? _wsSessionEndedSubscription;
   StreamSubscription? _wsStudentVerifiedSubscription;
   StreamSubscription? _wsAttendanceUpdatedSubscription;
 
-  // Pulse animation for seat verification
   final Set<int> _pulsingSeatIndices = {};
   Timer? _pulseTimer;
+
+  int _pendingTapIndex = -1;
+  int _pendingRowTapIndex = -1;
+  Timer? _tapTimer;
+
+  static const int _gridColumns = 10;
 
   @override
   void initState() {
     super.initState();
 
-    KioskService.setMode(KioskMode.absoluteLocked);
-    _totpEngine = widget.totpEngine;
+    KioskService.setMode(KioskMode.locked);
     _wsService = widget.websocketService;
     _presentCount = widget.initialPresentCount;
 
-    // v6.4: The session countdown is the total window duration (e.g. 5–10 min),
-    // NOT the 30s rotation interval.
-    _secondsRemaining = _totpEngine.windowDuration.inSeconds;
-
-    _progressController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 3500),
-    )..repeat();
-
-    _totpEngine.qrStream.listen((token) {
-      if (mounted) {
-        setState(() => _currentQrData = token);
-      }
-    }, onError: (e) {
-      Log.e('[Attendance] TOTP stream error: $e');
-    });
-
-    _totpEngine.start();
-    _startCountdown();
     _startEndSessionCooldown();
     _loadClassRoster();
 
-    // Hook up WebSocket for real-time sync.
     _connectWebSocket();
+  }
+
+  void _loadClassRoster() {
+    _students = List.generate(widget.capacity, (index) {
+      final code = RollNumberUtils.generateSeatCode(index);
+      return StudentInfo(
+        rollNumber: code,
+        name: '',
+        email: '',
+        sectionId: '',
+        classId: '',
+      );
+    });
+    _isRosterLoaded = true;
   }
 
   void _connectWebSocket() {
@@ -136,7 +121,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         int presentCount = 0;
         for (final student in sync.presentStudents) {
           if (student.status.toUpperCase() != 'PRESENT') continue;
-          final email = (student.studentEmail ?? student.studentId).toLowerCase();
+          final email =
+              (student.studentEmail ?? student.studentId).toLowerCase();
           final index = _emailToSeatIndex[email];
           if (index != null) {
             _presentSeatIndices.add(index);
@@ -157,18 +143,21 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         final index = _emailToSeatIndex[email];
         if (index != null) {
           _presentSeatIndices.add(index);
+          _absentSeatIndices.remove(index);
         }
       });
       Log.i('[Attendance] WebSocket: ${event.studentId} marked present.');
     });
 
-    _wsStudentVerifiedSubscription = _wsService.onStudentVerified.listen((event) {
+    _wsStudentVerifiedSubscription =
+        _wsService.onStudentVerified.listen((event) {
       if (!mounted) return;
       final email = event.studentId.toLowerCase();
       final index = _emailToSeatIndex[email];
       if (index != null && !_presentSeatIndices.contains(index)) {
         setState(() {
           _presentSeatIndices.add(index);
+          _absentSeatIndices.remove(index);
           _pulsingSeatIndices.add(index);
         });
         _pulseTimer?.cancel();
@@ -178,89 +167,26 @@ class _AttendanceScreenState extends State<AttendanceScreen>
           }
         });
       }
-      Log.i('[Attendance] student_verified: ${event.studentId} seat=${event.seat}');
+      Log.i(
+          '[Attendance] student_verified: ${event.studentId} seat=${event.seat}');
     });
 
-    _wsAttendanceUpdatedSubscription = _wsService.onAttendanceUpdated.listen((event) {
+    _wsAttendanceUpdatedSubscription =
+        _wsService.onAttendanceUpdated.listen((event) {
       if (!mounted) return;
       setState(() {
         _presentCount = event.present;
-        _totalStudents = _totalStudents > 0 ? _totalStudents : event.present + event.absent;
+        _totalStudents =
+            _totalStudents > 0 ? _totalStudents : event.present + event.absent;
       });
-      Log.i('[Attendance] Server update: ${event.present} present ${event.absent} absent');
+      Log.i(
+          '[Attendance] Server update: ${event.present} present ${event.absent} absent');
     });
 
     _wsSessionEndedSubscription = _wsService.onSessionEnded.listen((event) {
       if (!mounted) return;
       Log.i('[Attendance] WebSocket: Session ended by server.');
       _handleSessionEnd();
-    });
-  }
-
-  /// Loads students and builds a mapping of Email -> Seat Index.
-  /// This allows the board to know which grid box to highlight when the database updates.
-  Future<void> _loadClassRoster() async {
-    if (!mounted) return;
-
-    if (widget.sectionId != null && widget.sectionId!.isNotEmpty) {
-      try {
-        final students =
-            await StudentService().getStudentsBySection(widget.sectionId!);
-        if (mounted && students.isNotEmpty) {
-          setState(() {
-            _students = students;
-            _emailToSeatIndex.clear();
-            // Map emails to indices 0..N
-            for (int i = 0; i < students.length; i++) {
-              final email = students[i].email.trim().toLowerCase();
-              if (email.isNotEmpty) {
-                _emailToSeatIndex[email] = i;
-              }
-            }
-            _isRosterLoaded = true;
-          });
-          Log.i(
-              '[Attendance] Loaded ${_students.length} students for display.');
-          return;
-        }
-      } catch (e) {
-        Log.w('[Attendance] Failed to load students, using fallback: $e');
-      }
-    }
-    // Fallback if no sectionId or fetch failed
-    _generateFallbackRoster();
-  }
-
-  void _generateFallbackRoster() {
-    if (mounted) {
-      setState(() {
-        _students = List.generate(widget.capacity, (index) {
-          final code = RollNumberUtils.generateSeatCode(index);
-          return StudentInfo(
-            rollNumber: code,
-            name: 'Seat $code',
-            email: '',
-            sectionId: '',
-            classId: '',
-          );
-        });
-        _isRosterLoaded = true;
-      });
-    }
-  }
-
-  void _startCountdown() {
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_secondsRemaining > 0) {
-        if (mounted) setState(() => _secondsRemaining--);
-      } else {
-        timer.cancel();
-        // v6.4: On timer zero, we automatically end the locked session
-        if (!_isSessionEnding) {
-          Log.i('⏰ [Attendance] Countdown hit zero. Terminating session.');
-          _handleEndAttendance();
-        }
-      }
     });
   }
 
@@ -276,14 +202,51 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     });
   }
 
-  String _formatTime(int seconds) {
-    final mins = (seconds / 60).floor().toString().padLeft(2, '0');
-    final secs = (seconds % 60).toString().padLeft(2, '0');
-    return "$mins:$secs";
+  void _handleCellTapDown(int index) {
+    _tapTimer?.cancel();
+    if (_pendingTapIndex == index) {
+      _pendingTapIndex = -1;
+      if (_absentSeatIndices.contains(index)) {
+        _absentSeatIndices.remove(index);
+      } else {
+        _absentSeatIndices.add(index);
+        _presentSeatIndices.remove(index);
+      }
+      if (mounted) setState(() {});
+    } else {
+      _pendingTapIndex = index;
+      _tapTimer = Timer(const Duration(milliseconds: 300), () {
+        if (_pendingTapIndex == index) {
+          _pendingTapIndex = -1;
+          if (_presentSeatIndices.contains(index)) {
+            _presentSeatIndices.remove(index);
+          } else {
+            _presentSeatIndices.add(index);
+            _absentSeatIndices.remove(index);
+          }
+          if (mounted) setState(() {});
+        }
+      });
+    }
   }
 
-  /// Secret kill switch: hold Ctrl+Shift and press J three times
-  /// within 3 seconds to trigger emergency exit from absoluteLocked mode.
+  void _handleRowTapDown(int rowIndex, int rowStart, int rowEnd) {
+    _tapTimer?.cancel();
+    if (_pendingRowTapIndex == rowIndex) {
+      _pendingRowTapIndex = -1;
+      for (int i = rowStart; i < rowEnd; i++) {
+        _presentSeatIndices.add(i);
+        _absentSeatIndices.remove(i);
+      }
+      if (mounted) setState(() {});
+    } else {
+      _pendingRowTapIndex = rowIndex;
+      _tapTimer = Timer(const Duration(milliseconds: 300), () {
+        _pendingRowTapIndex = -1;
+      });
+    }
+  }
+
   void _onKillSwitchKeyEvent(KeyEvent event) {
     if (event is! KeyDownEvent) return;
 
@@ -298,7 +261,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     final isJ = event.logicalKey == LogicalKeyboardKey.keyJ;
 
     if (!ctrl || !shift || !isJ) {
-      // If user releases modifiers or presses wrong key, reset counter
       if (_killSwitchJCount > 0) {
         _killSwitchJCount = 0;
         _killSwitchJTimer?.cancel();
@@ -306,7 +268,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       return;
     }
 
-    // Ctrl+Shift+J detected
     _killSwitchJCount++;
     _killSwitchJTimer?.cancel();
 
@@ -316,7 +277,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       return;
     }
 
-    // Reset counter if next J doesn't come within 3 seconds
     _killSwitchJTimer = Timer(const Duration(seconds: 3), () {
       _killSwitchJCount = 0;
     });
@@ -420,29 +380,18 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     );
   }
 
-  /// Emergency kill switch: performs a cascading application teardown and
-  /// terminates the process cleanly.
   Future<void> _handleKillSwitch() async {
     if (_isSessionEnding) return;
     _isSessionEnding = true;
-
     Log.w('🚨 [KillSwitch] Emergency exit triggered by secret tap pattern.');
-
-    _countdownTimer?.cancel();
     _endSessionCooldownTimer?.cancel();
-    _totpEngine.stop();
-    _progressController.stop();
-
     await KioskService.executeAdministrativeShutdown();
   }
 
-  // ignore: unused_element — reserved for WebSocket reconnection
   Future<void> _handleSessionEnd() async {
     if (_isSessionEnding) return;
     _isSessionEnding = true;
-    _countdownTimer?.cancel();
-    _totpEngine.stop();
-    _progressController.stop();
+    _endSessionCooldownTimer?.cancel();
     KioskService.setMode(KioskMode.fullscreen);
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
@@ -537,8 +486,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                                 elevation: 0,
                               ),
                               child: const Text('END SESSION',
-                                  style:
-                                      TextStyle(fontWeight: FontWeight.bold)),
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.bold)),
                             ),
                           ),
                         ],
@@ -566,10 +515,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
     _killSwitchJTimer?.cancel();
     _killSwitchFocusNode.dispose();
-    _countdownTimer?.cancel();
     _endSessionCooldownTimer?.cancel();
-    _totpEngine.stop();
-    _progressController.dispose();
+    _tapTimer?.cancel();
     super.dispose();
   }
 
@@ -577,9 +524,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     if (_isSessionEnding) return;
     _isSessionEnding = true;
 
-    _countdownTimer?.cancel();
-    _totpEngine.stop();
-    _progressController.stop();
+    _endSessionCooldownTimer?.cancel();
     KioskService.setMode(KioskMode.fullscreen);
 
     try {
@@ -630,17 +575,21 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               children: [
                 _buildHeader(isDark),
                 Expanded(
-                  child: Row(
-                    children: [
-                      Expanded(
-                        flex: 4,
-                        child: _buildSeatingSection(isDark),
-                      ),
-                      Expanded(
-                        flex: 6,
-                        child: _buildQrArena(isDark, size),
-                      ),
-                    ],
+                  child: Center(
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 600),
+                      switchInCurve: Curves.easeOut,
+                      switchOutCurve: Curves.easeIn,
+                      transitionBuilder: (child, animation) {
+                        return FadeTransition(
+                          opacity: animation,
+                          child: child,
+                        );
+                      },
+                      child: _isCommitted
+                          ? _buildResultsView(isDark)
+                          : _buildInteractionGrid(isDark),
+                    ),
                   ),
                 ),
                 _buildFooter(isDark),
@@ -653,6 +602,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   Widget _buildHeader(bool isDark) {
+    final absentCount = _absentSeatIndices.length;
+    final total = _totalStudents > 0 ? _totalStudents : widget.capacity;
+    final presentLocal = _presentSeatIndices.length;
+
     return Container(
       height: 72,
       padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -711,69 +664,81 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                       style: TextStyle(
                           fontSize: 12,
                           color: isDark ? Colors.white38 : Colors.black38)),
+                  const SizedBox(width: 16),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: AppColors.successLime.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(100),
+                    ),
+                    child: Text('$presentLocal / $total',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.successLime)),
+                  ),
+                  if (absentCount > 0) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: AppColors.error.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(100),
+                      ),
+                      child: Text('$absentCount absent',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.error)),
+                    ),
+                  ],
                 ],
               ),
             ],
           ),
           const Spacer(),
-          Row(
-            children: [
-              IconButton(
-                  onPressed: () {},
-                  icon: const Icon(Icons.notifications_none, size: 20)),
-              IconButton(
-                  onPressed: () {},
-                  icon: const Icon(Icons.help_outline, size: 20)),
-              const SizedBox(width: 16),
-              ElevatedButton(
-                onPressed: _canEndSession ? _handlePhysicalTapEnd : null,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor:
-                      _canEndSession ? AppColors.primaryTeal : Colors.grey,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size(120, 44),
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-                child: Text(
-                  _canEndSession
-                      ? 'End Session'
-                      : 'End Session (${_endSessionCountdown}s)',
-                  style: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.bold),
-                ),
-              ),
-              const SizedBox(width: 16),
-              CircleAvatar(
-                radius: 18,
-                backgroundColor: isDark
-                    ? Colors.white10
-                    : Colors.black.withValues(alpha: 0.05),
-                child: Icon(Icons.person,
-                    size: 20, color: isDark ? Colors.white54 : Colors.black54),
-              ),
-            ],
+          ElevatedButton(
+            onPressed: _canEndSession ? _handlePhysicalTapEnd : null,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _canEndSession
+                  ? AppColors.primaryTeal
+                  : Colors.grey,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(120, 44),
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+            child: Text(
+              _canEndSession
+                  ? 'End Session'
+                  : 'End Session (${_endSessionCountdown}s)',
+              style: const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(width: 16),
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: isDark
+                ? Colors.white10
+                : Colors.black.withValues(alpha: 0.05),
+            child: Icon(Icons.person,
+                size: 20,
+                color: isDark ? Colors.white54 : Colors.black54),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildSeatingSection(bool isDark) {
+  Widget _buildInteractionGrid(bool isDark) {
     if (!_isRosterLoaded) {
-      return Container(
-        padding: const EdgeInsets.all(32),
-        decoration: BoxDecoration(
-          color: isDark
-              ? Colors.black.withValues(alpha: 0.2)
-              : Colors.white.withValues(alpha: 0.5),
-          border: Border(
-              right:
-                  BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
-        ),
+      return Center(
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
           children: [
             const SizedBox(
               width: 40,
@@ -793,268 +758,313 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       );
     }
 
-    return Container(
-      padding: const EdgeInsets.all(32),
-      decoration: BoxDecoration(
-        color: isDark
-            ? Colors.black.withValues(alpha: 0.2)
-            : Colors.white.withValues(alpha: 0.5),
-        border: Border(
-            right: BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
-      ),
-      child: Column(
-        children: [
-          Expanded(
-            child: GridView.builder(
-              padding: const EdgeInsets.all(8),
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 60,
-                mainAxisSpacing: 12,
-                crossAxisSpacing: 12,
-                childAspectRatio: 1,
+    final itemCount = _students.length;
+    if (itemCount == 0) {
+      return Center(
+        child: Text('No students in roster.',
+            style: TextStyle(
+                fontSize: 16,
+                color: isDark ? Colors.white38 : Colors.black38)),
+      );
+    }
+
+    final rows = (itemCount / _gridColumns).ceil();
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxW = constraints.maxWidth;
+        final maxH = constraints.maxHeight;
+
+        final rowHeaderW = 70.0;
+        final gap = 6.0;
+        final hPadding = 16.0;
+
+        final usableW = min(maxW * 0.85, 1100.0) - rowHeaderW - hPadding * 2;
+        final cellW = (usableW - gap * (_gridColumns - 1)) / _gridColumns;
+        final cellH = min(cellW * 0.85, (maxH - 40) / rows);
+        final gridW = rowHeaderW + hPadding * 2 + usableW;
+
+        return SingleChildScrollView(
+          child: Center(
+            child: SizedBox(
+              width: gridW,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (int row = 0; row < rows; row++) ...[
+                    if (row > 0) SizedBox(height: gap),
+                    _buildGridRow(row, rows, itemCount, cellW, cellH, gap,
+                        rowHeaderW, isDark),
+                  ],
+                ],
               ),
-              itemCount: _totalStudents > 0 ? _totalStudents : widget.capacity,
-              itemBuilder: (context, index) {
-                final isPresent = _presentSeatIndices.contains(index);
-                final isPulsing = _pulsingSeatIndices.contains(index);
-
-                final isLoaded = index < _students.length;
-                final displayLabel = isLoaded
-                    ? _students[index].rollNumber
-                    : RollNumberUtils.generateSeatCode(index);
-
-                final bgColor = isPresent
-                    ? (isDark
-                        ? AppColors.successLime.withValues(alpha: isPulsing ? 0.3 : 0.1)
-                        : (isPulsing ? const Color(0xFFDCFCE7) : const Color(0xFFF1F9E6)))
-                    : (isDark
-                        ? Colors.white.withValues(alpha: 0.03)
-                        : const Color(0xFFF1F5F9));
-
-                final borderColor = isPresent
-                    ? AppColors.successLime
-                    : (isDark ? Colors.white10 : const Color(0xFFE2E8F0));
-
-                final borderWidth = isPresent ? (isPulsing ? 3.0 : 2.0) : 1.5;
-
-                final textColor = isPresent
-                    ? (isDark
-                        ? AppColors.successLime
-                        : const Color(0xFF1A2E05))
-                    : (isDark
-                        ? Colors.white24
-                        : const Color(0xFF94A3B8));
-
-                Widget seatWidget = AnimatedContainer(
-                  duration: const Duration(milliseconds: 600),
-                  decoration: BoxDecoration(
-                    color: bgColor,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: borderColor,
-                      width: borderWidth,
-                    ),
-                    boxShadow: isPulsing
-                        ? [BoxShadow(
-                            color: AppColors.successLime.withValues(alpha: 0.3),
-                            blurRadius: 8,
-                            spreadRadius: 1,
-                          )]
-                        : null,
-                  ),
-                  child: Center(
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Text(
-                        displayLabel,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                          color: textColor,
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-
-                if (isPulsing) {
-                  seatWidget = TweenAnimationBuilder<double>(
-                    tween: Tween(begin: 1.0, end: 0.95),
-                    duration: const Duration(milliseconds: 600),
-                    builder: (context, scale, child) {
-                      return Transform.scale(
-                        scale: 1.0 + (0.05 * (1.0 - scale)),
-                        child: child,
-                      );
-                    },
-                    child: seatWidget,
-                  );
-                }
-
-                return seatWidget;
-              },
             ),
           ),
-          const SizedBox(height: 24),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-            decoration: BoxDecoration(
-              color:
-                  isDark ? Colors.white.withValues(alpha: 0.03) : Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                  color: isDark
-                      ? Colors.white10
-                      : Colors.black.withValues(alpha: 0.05)),
-              boxShadow: [
-                BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.05),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4)),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildLegendItem('PRESENT', AppColors.successLime, isDark),
-                const SizedBox(width: 32),
-                _buildLegendItem('EMPTY',
-                    isDark ? Colors.white24 : const Color(0xFFE2E8F0), isDark),
-              ],
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
-  Widget _buildLegendItem(String label, Color color, bool isDark) {
+  Widget _buildGridRow(int row, int rows, int itemCount, double cellW,
+      double cellH, double gap, double rowHeaderW, bool isDark) {
+    final start = row * _gridColumns;
+    final end = min(start + _gridColumns, itemCount);
+
     return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
-          width: 16,
-          height: 16,
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: BorderRadius.circular(4),
+        SizedBox(
+          width: rowHeaderW,
+          height: cellH,
+          child: GestureDetector(
+            onTapDown: (_) => _handleRowTapDown(row, start, end),
+            child: Container(
+              decoration: BoxDecoration(
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.03)
+                    : Colors.black.withValues(alpha: 0.02),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                    color: isDark ? Colors.white10 : Colors.black12),
+              ),
+              child: Center(
+                child: Text(
+                  '${row + 1}',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white38 : Colors.black38,
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
         const SizedBox(width: 8),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.bold,
-            color: isDark ? Colors.white38 : Colors.black38,
-            letterSpacing: 1.5,
-          ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: List.generate(_gridColumns, (col) {
+            final index = start + col;
+            if (index >= itemCount) return SizedBox(width: cellW);
+            return Padding(
+              padding: EdgeInsets.only(right: col < _gridColumns - 1 ? gap : 0),
+              child: _buildStudentCell(index, isDark, cellW, cellH),
+            );
+          }),
         ),
       ],
     );
   }
 
-  Widget _buildQrArena(bool isDark, Size size) {
-    return Container(
-      padding: const EdgeInsets.all(48),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            decoration: BoxDecoration(
-              color: AppColors.successLime.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(100),
-              border: Border.all(
-                  color: AppColors.successLime.withValues(alpha: 0.3)),
+  Widget _buildStudentCell(
+      int index, bool isDark, double cellW, double cellH) {
+    final isPresent = _presentSeatIndices.contains(index);
+    final isAbsent = _absentSeatIndices.contains(index);
+    final isPulsing = _pulsingSeatIndices.contains(index);
+    final label = index < _students.length
+        ? _students[index].rollNumber
+        : RollNumberUtils.generateSeatCode(index);
+
+    Color bgColor;
+    Color borderColor;
+    Color textColor;
+    double borderWidth;
+
+    if (isPresent) {
+      bgColor = isDark
+          ? AppColors.successLime.withValues(alpha: isPulsing ? 0.3 : 0.15)
+          : (isPulsing
+              ? const Color(0xFFDCFCE7)
+              : const Color(0xFFF1F9E6));
+      borderColor = AppColors.successLime;
+      borderWidth = isPulsing ? 3.0 : 2.0;
+      textColor =
+          isDark ? AppColors.successLime : const Color(0xFF1A2E05);
+    } else if (isAbsent) {
+      bgColor = isDark
+          ? AppColors.error.withValues(alpha: 0.15)
+          : AppColors.error.withValues(alpha: 0.08);
+      borderColor = AppColors.error;
+      borderWidth = 2.0;
+      textColor =
+          isDark ? Colors.red.shade300 : const Color(0xFF7F1D1D);
+    } else {
+      bgColor = isDark
+          ? Colors.white.withValues(alpha: 0.03)
+          : const Color(0xFFF1F5F9);
+      borderColor = isDark ? Colors.white10 : const Color(0xFFE2E8F0);
+      borderWidth = 1.5;
+      textColor =
+          isDark ? Colors.white24 : const Color(0xFF94A3B8);
+    }
+
+    Widget cell = GestureDetector(
+      onTapDown: (_) => _handleCellTapDown(index),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        width: cellW,
+        height: cellH,
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: borderColor, width: borderWidth),
+          boxShadow: isPulsing
+              ? [
+                  BoxShadow(
+                    color: AppColors.successLime.withValues(alpha: 0.3),
+                    blurRadius: 8,
+                    spreadRadius: 1,
+                  )
+                ]
+              : null,
+        ),
+        child: Center(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: textColor,
+              ),
             ),
+          ),
+        ),
+      ),
+    );
+
+    if (isPulsing) {
+      cell = TweenAnimationBuilder<double>(
+        tween: Tween(begin: 1.0, end: 0.95),
+        duration: const Duration(milliseconds: 600),
+        builder: (context, scale, child) {
+          return Transform.scale(
+            scale: 1.0 + (0.05 * (1.0 - scale)),
+            child: child,
+          );
+        },
+        child: cell,
+      );
+    }
+
+    return cell;
+  }
+
+  Widget _buildResultsView(bool isDark) {
+    final presentIndices = <int>[];
+    final absentIndices = <int>[];
+
+    for (int i = 0; i < _students.length; i++) {
+      if (_presentSeatIndices.contains(i)) {
+        presentIndices.add(i);
+      } else if (_absentSeatIndices.contains(i)) {
+        absentIndices.add(i);
+      }
+    }
+
+    if (presentIndices.isEmpty && absentIndices.isEmpty) {
+      return Center(
+        child: Text('No attendance recorded.',
+            style: TextStyle(
+                fontSize: 16,
+                color: isDark ? Colors.white38 : Colors.black38)),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxW = constraints.maxWidth;
+        final maxH = constraints.maxHeight;
+        final paneW = min(maxW * 0.9, 1200.0);
+        final tileW = 80.0;
+        final tileH = 70.0;
+        final tileGap = 6.0;
+
+        return Center(
+          child: SizedBox(
+            width: paneW,
+            height: maxH * 0.85,
             child: Row(
-              mainAxisSize: MainAxisSize.min,
               children: [
+                Expanded(child: _buildResultPane(presentIndices, true, isDark,
+                    tileW, tileH, tileGap)),
                 Container(
-                  width: 8,
-                  height: 8,
-                  decoration: const BoxDecoration(
-                      shape: BoxShape.circle, color: AppColors.successLime),
+                  width: 2,
+                  margin: const EdgeInsets.symmetric(vertical: 20),
+                  decoration: BoxDecoration(
+                    color: isDark ? Colors.white12 : Colors.black12,
+                    borderRadius: BorderRadius.circular(1),
+                  ),
                 ),
-                const SizedBox(width: 10),
-                const Text(
-                  'LIVE SESSION ACTIVE',
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.successLime,
-                      letterSpacing: 1),
-                ),
+                Expanded(
+                    child: _buildResultPane(absentIndices, false, isDark,
+                        tileW, tileH, tileGap)),
               ],
             ),
           ),
-          const SizedBox(height: 48),
+        );
+      },
+    );
+  }
 
-          // Pulsing QR Arena with white quiet zone for optimal scanning
-          AnimatedBuilder(
-            animation: _progressController,
-            builder: (context, child) {
-              return Container(
-                padding: const EdgeInsets.all(48),
-                decoration: BoxDecoration(
-                  color: isDark
-                      ? Colors.black.withValues(alpha: 0.3)
-                      : Colors.white,
-                  borderRadius: BorderRadius.circular(32),
-                  border: Border.all(
-                    color: AppColors.successLime.withValues(
-                        alpha: 0.2 + (0.3 * _progressController.value)),
-                    width: 8,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.successLime
-                          .withValues(alpha: 0.1 * _progressController.value),
-                      blurRadius: 40 * _progressController.value,
-                      spreadRadius: 10 * _progressController.value,
-                    ),
-                  ],
+  Widget _buildResultPane(List<int> indices, bool isPresent, bool isDark,
+      double tileW, double tileH, double gap) {
+    if (indices.isEmpty) {
+      return Center(
+        child: Text(
+          isPresent ? 'No present' : 'No absent',
+          style: TextStyle(
+              fontSize: 14,
+              color: isDark ? Colors.white24 : Colors.black26),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                isPresent ? 'PRESENT' : 'ABSENT',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 2,
+                  color: isPresent
+                      ? AppColors.successLime
+                      : AppColors.error,
                 ),
-                child: child,
-              );
-            },
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
               ),
-              padding: const EdgeInsets.all(24),
-              child: _currentQrData.isNotEmpty
-                  ? FluidQrView(
-                      data: _currentQrData,
-                      size: 320,
-                      color: Colors.black,
-                    )
-                  : const CircularProgressIndicator(color: Colors.black54),
             ),
           ),
-
-          const SizedBox(height: 48),
-          Column(
-            children: [
-              const Text(
-                'TIME REMAINING',
-                style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey,
-                    letterSpacing: 3),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                _formatTime(_secondsRemaining),
-                style: GoogleFonts.jetBrainsMono(
-                  fontSize: 56,
-                  fontWeight: FontWeight.bold,
-                  color: isDark ? Colors.white : AppColors.textPrimaryLight,
-                ),
-              ),
-            ],
+          SliverGrid(
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 6,
+              mainAxisSpacing: gap,
+              crossAxisSpacing: gap,
+              childAspectRatio: tileW / tileH,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, slot) {
+                final index = indices[slot];
+                final label = index < _students.length
+                    ? _students[index].rollNumber
+                    : RollNumberUtils.generateSeatCode(index);
+                return _AnimatedResultTile(
+                  index: slot,
+                  label: label,
+                  isPresent: isPresent,
+                  isDark: isDark,
+                );
+              },
+              childCount: indices.length,
+            ),
           ),
         ],
       ),
@@ -1063,9 +1073,11 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
   Widget _buildFooter(bool isDark) {
     final total = _totalStudents > 0 ? _totalStudents : widget.capacity;
-    final attendanceRate = total > 0
-        ? (_presentCount / total * 100).toInt()
-        : 0;
+    final absentCount = _absentSeatIndices.length;
+    final presentLocal = _presentSeatIndices.length;
+    final unmarkedCount = total - presentLocal - absentCount;
+    final attendanceRate =
+        total > 0 ? (presentLocal / total * 100).toInt() : 0;
 
     return Container(
       height: 72,
@@ -1077,128 +1089,186 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       ),
       child: Row(
         children: [
-          Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('ATTENDANCE RATE',
-                  style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey,
-                      letterSpacing: 2)),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text('$_presentCount',
-                      style: const TextStyle(
-                          fontSize: 24, fontWeight: FontWeight.bold)),
-                  Text(' / ${total}',
-                      style: const TextStyle(fontSize: 16, color: Colors.grey)),
-                  const SizedBox(width: 12),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: AppColors.successLime.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(100),
-                    ),
-                    child: Text('$attendanceRate%',
-                        style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.successLime)),
-                  ),
-                ],
-              ),
-            ],
-          ),
+          _buildFooterBadge(
+              'PRESENT', AppColors.successLime, '$presentLocal'),
+          const SizedBox(width: 24),
+          _buildFooterBadge('ABSENT', AppColors.error, '$absentCount'),
+          if (unmarkedCount > 0) ...[
+            const SizedBox(width: 24),
+            _buildFooterBadge('UNMARKED', Colors.grey, '$unmarkedCount'),
+          ],
           const SizedBox(width: 48),
           Container(
               width: 1,
               height: 24,
               color: isDark ? Colors.white10 : Colors.black12),
           const Spacer(),
-          Row(
-            children: [
-              _buildAvatarStack(),
-              const SizedBox(width: 12),
-              Text('$_presentCount Students Present',
+          if (!_isCommitted)
+            ElevatedButton.icon(
+              onPressed: () => setState(() => _isCommitted = true),
+              icon: const Icon(Icons.check_circle, size: 20),
+              label: const Text('COMMIT ATTENDANCE',
                   style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.grey)),
-            ],
+                      fontSize: 12, fontWeight: FontWeight.bold)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.successLime,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(180, 44),
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+              ),
+            ),
+          if (!_isCommitted) const SizedBox(width: 24),
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: attendanceRate >= 80
+                  ? AppColors.successLime.withValues(alpha: 0.1)
+                  : AppColors.warningAmber.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(100),
+            ),
+            child: Text(
+              '$attendanceRate% ATTENDING',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1,
+                color: attendanceRate >= 80
+                    ? AppColors.successLime
+                    : AppColors.warningAmber,
+              ),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildAvatarStack() {
-    final displayed = _students.take(3).toList();
-    final remaining = _students.length > 3 ? _students.length - 3 : 0;
-
-    return SizedBox(
-      width: 120,
-      height: 32,
-      child: Stack(
-        children: [
-          for (var i = 0; i < displayed.length; i++)
-            Positioned(
-              left: i * 20.0,
-              child: Container(
-                padding: const EdgeInsets.all(2),
-                decoration: const BoxDecoration(
-                    color: Colors.white, shape: BoxShape.circle),
-                child: CircleAvatar(
-                  radius: 14,
-                  backgroundColor: _avatarColor(i),
-                  child: Text(
-                    _initials(displayed[i].name),
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ),
-            ),
-          if (remaining > 0)
-            Positioned(
-              left: 3 * 20.0,
-              child: Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  color: AppColors.primaryTeal,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                ),
-                child: Center(
-                  child: Text('+$remaining',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold)),
-                ),
-              ),
-            ),
-        ],
-      ),
+  Widget _buildFooterBadge(String label, Color color, String count) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          '$label $count',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+      ],
     );
   }
+}
 
-  Color _avatarColor(int index) {
-    const colors = [Color(0xFF4CAF50), Color(0xFF2196F3), Color(0xFFFF9800)];
-    return colors[index % colors.length];
+class _AnimatedResultTile extends StatefulWidget {
+  final int index;
+  final String label;
+  final bool isPresent;
+  final bool isDark;
+
+  const _AnimatedResultTile({
+    required this.index,
+    required this.label,
+    required this.isPresent,
+    required this.isDark,
+  });
+
+  @override
+  State<_AnimatedResultTile> createState() => _AnimatedResultTileState();
+}
+
+class _AnimatedResultTileState extends State<_AnimatedResultTile>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<Offset> _slideAnim;
+  late Animation<double> _fadeAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 400),
+      vsync: this,
+    );
+
+    final fromX = widget.isPresent ? -0.2 : 0.2;
+    _slideAnim = Tween<Offset>(
+      begin: Offset(fromX, 0),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutCubic,
+    ));
+
+    _fadeAnim = Tween<double>(begin: 0, end: 1).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
+    );
+
+    Future.delayed(Duration(milliseconds: widget.index * 30), () {
+      if (mounted) _controller.forward();
+    });
   }
 
-  String _initials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+'));
-    if (parts.length >= 2) {
-      return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
-    }
-    return name.isNotEmpty ? name[0].toUpperCase() : '?';
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isPresent = widget.isPresent;
+    final isDark = widget.isDark;
+
+    final bgColor = isPresent
+        ? (isDark
+            ? AppColors.successLime.withValues(alpha: 0.15)
+            : const Color(0xFFF1F9E6))
+        : (isDark
+            ? AppColors.error.withValues(alpha: 0.15)
+            : AppColors.error.withValues(alpha: 0.08));
+    final borderColor = isPresent ? AppColors.successLime : AppColors.error;
+    final textColor = isPresent
+        ? (isDark ? AppColors.successLime : const Color(0xFF1A2E05))
+        : (isDark ? Colors.red.shade300 : const Color(0xFF7F1D1D));
+
+    return SlideTransition(
+      position: _slideAnim,
+      child: FadeTransition(
+        opacity: _fadeAnim,
+        child: Container(
+          decoration: BoxDecoration(
+            color: bgColor,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: borderColor, width: 1.5),
+          ),
+          child: Center(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                widget.label,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: textColor,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../core/platform/power_command_service.dart';
 import '../core/utils/logger.dart';
 import 'session_state_service.dart';
 import 'time_sync_service.dart';
@@ -21,7 +22,7 @@ class PresentStudent {
     required this.studentName,
     required this.status,
     this.trustScore = 100,
-    this.markedBy = 'qr_scan',
+    this.markedBy = 'smartboard',
     required this.recordedAt,
   });
 
@@ -53,7 +54,7 @@ class AttendanceMarkedEvent {
     required this.studentId,
     this.studentEmail,
     required this.studentName,
-    this.markedBy = 'qr_scan',
+    this.markedBy = 'smartboard',
     required this.status,
     required this.trustScore,
     required this.recordedAt,
@@ -127,6 +128,34 @@ class StudentVerifiedEvent {
   }
 }
 
+class SystemCommandEvent {
+  final String command;
+  final String? reason;
+  final int delaySeconds;
+  final String commandId;
+  final DateTime issuedAt;
+
+  SystemCommandEvent({
+    required this.command,
+    this.reason,
+    this.delaySeconds = 60,
+    required this.commandId,
+    required this.issuedAt,
+  });
+
+  factory SystemCommandEvent.fromJson(Map<String, dynamic> json) {
+    return SystemCommandEvent(
+      command: json['command'] as String? ?? 'shutdown',
+      reason: json['reason'] as String?,
+      delaySeconds: json['delay_seconds'] as int? ?? 60,
+      commandId: json['command_id'] as String? ?? '',
+      issuedAt: json['issued_at'] != null
+          ? DateTime.parse(json['issued_at'] as String)
+          : TimeSyncService.timeNow,
+    );
+  }
+}
+
 class AttendanceUpdatedEvent {
   final int present;
   final int absent;
@@ -171,6 +200,8 @@ class WebsocketService {
       StreamController<StudentVerifiedEvent>.broadcast();
   final StreamController<AttendanceUpdatedEvent> _attendanceUpdatedController =
       StreamController<AttendanceUpdatedEvent>.broadcast();
+  final StreamController<SystemCommandEvent> _systemCommandController =
+      StreamController<SystemCommandEvent>.broadcast();
 
   Stream<FullStateSync> get onFullStateSync => _syncController.stream;
   Stream<AttendanceMarkedEvent> get onAttendanceMarked =>
@@ -182,6 +213,8 @@ class WebsocketService {
       _studentVerifiedController.stream;
   Stream<AttendanceUpdatedEvent> get onAttendanceUpdated =>
       _attendanceUpdatedController.stream;
+  Stream<SystemCommandEvent> get onSystemCommand =>
+      _systemCommandController.stream;
   bool get isConnected => _channel != null;
 
   final SessionStateService _sessionState = SessionStateService();
@@ -246,6 +279,8 @@ class WebsocketService {
       _reconnectAttempt = 0;
       _startPingTimer();
 
+      PowerCommandService().setWebsocketService(this);
+
       _messageSubscription = _channel!.stream.listen(
         (msg) {
           connectTimer?.cancel();
@@ -269,6 +304,14 @@ class WebsocketService {
       Log.e('[WS] Connection failed: $e');
       _cleanup();
       _scheduleReconnect();
+    }
+  }
+
+  void send(Map<String, dynamic> message) {
+    try {
+      _channel?.sink.add(jsonEncode(message));
+    } catch (e) {
+      Log.w('[WS] Send failed: $e');
     }
   }
 
@@ -358,6 +401,13 @@ class WebsocketService {
             state: 'CLOSED',
             presentCount: message['present'] as int? ?? _sessionState.currentState.presentCount,
           ));
+          break;
+
+        case 'system_command':
+          final event = SystemCommandEvent.fromJson(message);
+          Log.w('[WS] system_command: ${event.command} id=${event.commandId} delay=${event.delaySeconds}s reason=${event.reason}');
+          _systemCommandController.add(event);
+          PowerCommandService().handleSystemCommand(event);
           break;
 
         default:
@@ -458,5 +508,6 @@ class WebsocketService {
     _connectionStateController.close();
     _studentVerifiedController.close();
     _attendanceUpdatedController.close();
+    _systemCommandController.close();
   }
 }

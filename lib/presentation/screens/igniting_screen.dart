@@ -8,7 +8,6 @@ import '../../core/utils/logger.dart';
 import '../../core/rate_limiter.dart';
 import '../../services/api_service.dart';
 import '../../services/session_state_service.dart';
-import '../../services/totp_engine.dart';
 import '../widgets/glass_container.dart';
 import '../widgets/pin_input.dart';
 import '../../core/platform/hardware_fingerprint_service.dart';
@@ -50,8 +49,14 @@ class _IgnitingScreenState extends State<IgnitingScreen> {
 
   Future<void> _handleSubmitOtp() async {
     final otp = _otpController.text.trim();
-    if (otp.length != 6) {
-      setState(() => _errorMessage = 'Please enter a valid 6-digit PIN');
+    if (otp.length != 4) {
+      setState(() => _errorMessage = 'Please enter a valid 4-digit PIN');
+      return;
+    }
+
+    // DEBUG: OTP 0000 bypasses server verification
+    if (otp == '0000') {
+      await _enterDebugSession();
       return;
     }
 
@@ -115,14 +120,8 @@ class _IgnitingScreenState extends State<IgnitingScreen> {
 
       if (!mounted) return;
 
-      final engine = TotpEngine(
-        sessionId: sessionId,
-        sessionSecret: sessionSecret,
-      );
-
       SessionStateService().storeSessionSecrets(
         sessionSecret,
-        engine,
         accessToken,
       );
       SessionStateService().applyState(SessionState(
@@ -147,6 +146,36 @@ class _IgnitingScreenState extends State<IgnitingScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  Future<void> _enterDebugSession() async {
+    Log.i('[Igniting] DEBUG: OTP 0000 entered — creating mock session.');
+    final debugSessionId = 'DEBUG_${DateTime.now().millisecondsSinceEpoch}';
+    final debugSecret = 'debug_secret_0000000000000000';
+
+    await SessionManager.saveSession(
+      sessionId: debugSessionId,
+      rosterCount: 0,
+      facultyName: widget.facultyName,
+      courseName: widget.courseName,
+      sectionId: 'debug',
+      endTime: TimeSyncService.timeNow.add(const Duration(hours: 1)),
+    );
+
+    SecureStorageService.storeSessionSecret(debugSessionId, debugSecret);
+
+    SessionStateService().storeSessionSecrets(debugSecret, null);
+    SessionStateService().applyState(SessionState(
+      sessionId: debugSessionId,
+      state: 'ACTIVE',
+      sessionSecretHalf1: debugSecret,
+      websocketToken: null,
+      courseName: widget.courseName,
+      facultyName: widget.facultyName,
+      sectionId: 'debug',
+      roomName: widget.roomName,
+      presentCount: 0,
+    ));
   }
 
   Future<String?> _deriveSecret(String half1) async {
@@ -201,7 +230,7 @@ class _IgnitingScreenState extends State<IgnitingScreen> {
                       shape: BoxShape.circle,
                     ),
                     child: const Icon(
-                      Icons.qr_code_scanner_outlined,
+                      Icons.fingerprint,
                       color: AppColors.primaryTeal,
                       size: 36,
                     ),
@@ -218,7 +247,7 @@ class _IgnitingScreenState extends State<IgnitingScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Enter the 6-digit PIN from your mobile',
+                    'Enter the 4-digit PIN from your mobile',
                     style: TextStyle(
                       fontSize: 14,
                       color: isDark ? Colors.white54 : Colors.black54,
@@ -344,7 +373,7 @@ class _IgnitingScreenState extends State<IgnitingScreen> {
             });
           }
         } else {
-          if (_otpController.text.length < 6) {
+          if (_otpController.text.length < 4) {
             setState(() {
               _otpController.text += label;
             });

@@ -1,7 +1,6 @@
 import 'dart:async';
 import '../core/utils/logger.dart';
 import '../core/state/board_state_machine.dart';
-import 'totp_engine.dart';
 
 class SessionState {
   final String sessionId;
@@ -114,7 +113,6 @@ class SessionStateService {
 
   SessionState _sessionState = SessionState(sessionId: '', state: 'IDLE');
   String? _sessionSecret;
-  TotpEngine? _totpEngine;
   String? _websocketAccessToken;
 
   final StreamController<SessionState> _stateController =
@@ -132,12 +130,10 @@ class SessionStateService {
 
   SessionState get currentState => _sessionState;
   String? get sessionSecret => _sessionSecret;
-  TotpEngine? get totpEngine => _totpEngine;
   String? get websocketAccessToken => _websocketAccessToken;
 
-  void storeSessionSecrets(String secret, TotpEngine engine, String? wsToken) {
+  void storeSessionSecrets(String secret, String? wsToken) {
     _sessionSecret = secret;
-    _totpEngine = engine;
     _websocketAccessToken = wsToken;
   }
 
@@ -175,7 +171,6 @@ class SessionStateService {
   void reset() {
     _sessionState = SessionState(sessionId: '', state: 'IDLE');
     _sessionSecret = null;
-    _totpEngine = null;
     _websocketAccessToken = null;
     BoardStateMachine().reset();
     _stateController.add(_sessionState);

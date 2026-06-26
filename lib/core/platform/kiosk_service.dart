@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import '../utils/logger.dart';
-import 'hardware_fingerprint_service.dart';
 import '../../services/session_manager.dart';
 
 enum KioskMode {
@@ -18,12 +17,7 @@ enum KioskMode {
   /// — the app stays active in the background fetching session data.
   locked,
 
-  /// AbsoluteLocked: QR scanning phase. Same as locked PLUS:
-  ///   - Minimize is intercepted and blocked (window jumps back to fullscreen)
-  ///   - Display brightness forced to 100%
-  ///   - Screen capture (screenshot/recording/share) blocked via WDA_MONITOR
-  ///   - No escape until session ends or capacity reached.
-  absoluteLocked,
+
 
   /// Suspended: Minimized between sessions by the orchestrator.
   suspended,
@@ -38,13 +32,6 @@ class KioskService {
   static const _kioskChannel = MethodChannel('com.intelliattend/kiosk');
 
   static bool _enabled = false;
-  static bool _screenCaptureFailed = false;
-
-  static final StreamController<bool> _screenCapController =
-      StreamController<bool>.broadcast();
-  static Stream<bool> get onScreenCaptureWarning => _screenCapController.stream;
-  static bool get isScreenCaptureCompromised => _screenCaptureFailed;
-
   // Use a sentinel value so the very first setMode() call always applies.
   static KioskMode? _currentMode;
 
@@ -191,21 +178,6 @@ class KioskService {
           await windowManager.setFullScreen(true);
           break;
 
-        // ── ABSOLUTE LOCKED (QR scanning) ──────────────────────────────────
-        case KioskMode.absoluteLocked:
-          await windowManager.setResizable(false);
-          await windowManager.setAlwaysOnTop(true);
-          await windowManager.show();
-          await windowManager.focus();
-          await windowManager.setFullScreen(true);
-          if (Platform.isWindows) {
-            await windowManager.setPreventClose(true);
-            await windowManager.setSkipTaskbar(true);
-          }
-          await _maximizeBrightness();
-          await _preventScreenCapture();
-          break;
-
         // ── SUSPENDED ────────────────────────────────────────────────────────
         case KioskMode.suspended:
           // Remember the mode we're suspending from so onWindowRestore can
@@ -226,26 +198,18 @@ class KioskService {
           break;
       }
 
-      // Restore screen capture + brightness when leaving absoluteLocked
-      if (prev == KioskMode.absoluteLocked &&
-          mode != KioskMode.absoluteLocked) {
-        await _allowScreenCapture();
-        await _restoreBrightness();
-      }
-
       _currentMode = mode;
 
       // Sync the C++ blocking flags with the current mode.
       // close_blocked_ is always active during any kiosk mode (including
       // suspended) so the window cannot be killed from the taskbar.
-      //   block_sys_commands_ blocks SC_MAXIMIZE during fullscreen/locked/
-      //   absoluteLocked but is released during suspended so the user can
+      //   block_sys_commands_ blocks SC_MAXIMIZE during fullscreen/locked
+      //   but is released during suspended so the user can
       //   restore the window from the taskbar.
       if (Platform.isWindows) {
         switch (mode) {
           case KioskMode.fullscreen:
           case KioskMode.locked:
-          case KioskMode.absoluteLocked:
             await _setBlockSysCommands(true);
             await _setBlockCloseCommands(true);
             break;
@@ -273,7 +237,7 @@ class KioskService {
 
   /// Tells the C++ runner whether to absorb WM_CLOSE and WM_SYSCOMMAND
   /// SC_CLOSE at the native message-pump level.  This flag stays true
-  /// whenever kiosk hardening is active (fullscreen, locked, absoluteLocked,
+  /// whenever kiosk hardening is active (fullscreen, locked,
   /// AND suspended) so the window cannot be killed from the taskbar context
   /// menu or via Alt+F4 while minimized.  Only set to false by
   /// [forceRelease] or during early boot.
@@ -282,46 +246,6 @@ class KioskService {
       await _kioskChannel.invokeMethod('setBlockCloseCommands', block);
     } catch (e) {
       Log.d('[Kiosk] setBlockCloseCommands($block) failed: $e');
-    }
-  }
-
-  static Future<void> _maximizeBrightness() async {
-    try {
-      await HardwareFingerprintService.maximizeBrightness();
-      Log.i('💡 [Kiosk] Display brightness set to 100%.');
-    } catch (e) {
-      Log.w('⚠️ [Kiosk] Brightness set failed: $e');
-    }
-  }
-
-  static Future<void> _restoreBrightness() async {
-    try {
-      await HardwareFingerprintService.restoreBrightness();
-      Log.i('💡 [Kiosk] Display brightness restored.');
-    } catch (e) {
-      Log.w('⚠️ [Kiosk] Brightness restore failed: $e');
-    }
-  }
-
-  static Future<void> _preventScreenCapture() async {
-    try {
-      await HardwareFingerprintService.preventScreenCapture();
-      _screenCaptureFailed = false;
-      _screenCapController.add(false);
-      Log.i('🛡️ [Kiosk] Screen capture blocked (WDA_MONITOR).');
-    } catch (e) {
-      _screenCaptureFailed = true;
-      _screenCapController.add(true);
-      Log.w('⚠️ [Kiosk] Screen capture prevention failed: $e');
-    }
-  }
-
-  static Future<void> _allowScreenCapture() async {
-    try {
-      await HardwareFingerprintService.allowScreenCapture();
-      Log.i('🛡️ [Kiosk] Screen capture restored (WDA_NONE).');
-    } catch (e) {
-      Log.w('⚠️ [Kiosk] Screen capture restore failed: $e');
     }
   }
 
@@ -415,11 +339,6 @@ class _KioskWindowListener extends WindowListener {
 
   @override
   void onWindowMinimize() {
-    final mode = KioskService.currentMode;
-    if (mode == KioskMode.absoluteLocked) {
-      // QR scanning phase — window is not allowed to minimize.
-      // Immediately restore fullscreen.
-      KioskService.setMode(KioskMode.absoluteLocked);
-    }
+    // No-op: minimize is always allowed in current modes.
   }
 }

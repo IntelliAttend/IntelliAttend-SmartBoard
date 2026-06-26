@@ -26,13 +26,9 @@ class AppConfig {
       dotenv.env['AMBIENT_VIDEO_URL'] ??
       'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4';
 
-  /// QR Attendance countdown window in seconds. Set OTP_ROTATION_WINDOW_SECONDS in .env.
-  static int get otpRotationWindowSeconds =>
-      int.tryParse(dotenv.env['OTP_ROTATION_WINDOW_SECONDS'] ?? '') ?? 300;
-
-  /// QR code generation interval in milliseconds. Set QR_ROTATION_FREQUENCY_MS in .env.
-  static int get qrRotationFrequencyMs =>
-      int.tryParse(dotenv.env['QR_ROTATION_FREQUENCY_MS'] ?? '') ?? 5000;
+  /// Session attendance window in seconds. Set SESSION_WINDOW_SECONDS in .env.
+  static int get sessionWindowSeconds =>
+      int.tryParse(dotenv.env['SESSION_WINDOW_SECONDS'] ?? '') ?? 300;
 
   /// Enable document sharing (prototyping mode only).
   /// PDFs open in the built-in pdfrx viewer.

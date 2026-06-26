@@ -75,6 +75,32 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
   }
 
+  Color _colorForPriority(NotificationPriority p) {
+    switch (p) {
+      case NotificationPriority.emergency:
+        return const Color(0xFFC72C31);
+      case NotificationPriority.high:
+        return const Color(0xFFF59E0B);
+      case NotificationPriority.normal:
+        return AppColors.primaryTeal;
+      case NotificationPriority.low:
+        return AppColors.primaryTeal;
+    }
+  }
+
+  String _labelForPriority(NotificationPriority p) {
+    switch (p) {
+      case NotificationPriority.emergency:
+        return 'EMERGENCY';
+      case NotificationPriority.high:
+        return 'IMPORTANT';
+      case NotificationPriority.normal:
+        return 'BREAK';
+      case NotificationPriority.low:
+        return '';
+    }
+  }
+
   String _timeAgo(DateTime dt) {
     final diff = DateTime.now().difference(dt);
     if (diff.inMinutes < 1) return 'Just now';
@@ -240,19 +266,41 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   onTap: hasDoc && !isDownloading
                       ? () => _openAttachment(notification)
                       : null,
-                  child: Container(
+                    child: Container(
                     padding: const EdgeInsets.all(24),
                     decoration: BoxDecoration(
                       color: isDark
                           ? Colors.white.withValues(alpha: 0.03)
                           : Colors.white,
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: hasDoc
-                            ? AppColors.primaryTeal.withValues(alpha: isDark ? 0.2 : 0.15)
-                            : isDark
-                                ? Colors.white10
-                                : Colors.black.withValues(alpha: 0.05),
+                      border: Border(
+                        left: BorderSide(
+                          color: notification.priority != NotificationPriority.low
+                              ? _colorForPriority(notification.priority)
+                              : Colors.transparent,
+                          width: 4,
+                        ),
+                        top: BorderSide(
+                          color: hasDoc
+                              ? AppColors.primaryTeal.withValues(alpha: isDark ? 0.2 : 0.15)
+                              : isDark
+                                  ? Colors.white10
+                                  : Colors.black.withValues(alpha: 0.05),
+                        ),
+                        right: BorderSide(
+                          color: hasDoc
+                              ? AppColors.primaryTeal.withValues(alpha: isDark ? 0.2 : 0.15)
+                              : isDark
+                                  ? Colors.white10
+                                  : Colors.black.withValues(alpha: 0.05),
+                        ),
+                        bottom: BorderSide(
+                          color: hasDoc
+                              ? AppColors.primaryTeal.withValues(alpha: isDark ? 0.2 : 0.15)
+                              : isDark
+                                  ? Colors.white10
+                                  : Colors.black.withValues(alpha: 0.05),
+                        ),
                       ),
                     ),
                     child: Column(
@@ -269,7 +317,27 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                 color: _colorForType(notification.type),
                               ),
                             ),
-                            const SizedBox(width: 20),
+                            const SizedBox(width: 16),
+                            if (notification.priority != NotificationPriority.low)
+                              Container(
+                                margin: const EdgeInsets.only(right: 8),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: _colorForPriority(notification.priority)
+                                      .withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  _labelForPriority(notification.priority),
+                                  style: GoogleFonts.inter(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    color: _colorForPriority(notification.priority),
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                              ),
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,

@@ -12,8 +12,6 @@ dependencies:
   # State Management & UI
   provider: ^6.1.1
   google_fonts: ^8.1.0
-  qr_flutter: ^4.1.0
-  qr: ^3.0.2
   video_player: ^2.9.1
   
   # Networking
@@ -47,6 +45,7 @@ dependencies:
   
   # Notifications
   flutter_local_notifications: ^21.0.0
+  url_launcher: ^6.3.1
 
   # Windows Registry (for Startup)
   win32_registry: ^2.1.0

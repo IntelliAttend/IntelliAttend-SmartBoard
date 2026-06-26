@@ -6,6 +6,13 @@ import '../core/config/api_schema.dart';
 import '../core/utils/logger.dart';
 import 'time_sync_service.dart';
 
+enum NotificationPriority {
+  emergency, // 0 — full screen takeover, no dismiss
+  high,      // 1 — blur overlay, 60s minimum timer
+  normal,    // 2 — break auto-pop in bell dropdown
+  low,       // 3 — regular tap-to-open in bell dropdown
+}
+
 class BoardNotification {
   final String id;
   final String title;
@@ -17,6 +24,11 @@ class BoardNotification {
   final String? attachmentName;
   final String? attachmentType;
   final int? attachmentSize;
+  final NotificationPriority priority;
+  final List<String>? precautionarySteps;
+  final String? location;
+  final String? safeExit;
+  final String? assemblyPoint;
 
   BoardNotification({
     required this.id,
@@ -29,6 +41,11 @@ class BoardNotification {
     this.attachmentName,
     this.attachmentType,
     this.attachmentSize,
+    this.priority = NotificationPriority.low,
+    this.precautionarySteps,
+    this.location,
+    this.safeExit,
+    this.assemblyPoint,
   });
 
   bool get hasAttachment => attachmentUrl != null && attachmentUrl!.isNotEmpty;
@@ -40,6 +57,21 @@ class BoardNotification {
       return segments.last;
     }
     return 'document';
+  }
+
+  static NotificationPriority _parsePriority(dynamic value) {
+    if (value is int) {
+      return NotificationPriority.values[value.clamp(0, 3)];
+    }
+    if (value is String) {
+      switch (value.toLowerCase()) {
+        case 'emergency': return NotificationPriority.emergency;
+        case 'high': return NotificationPriority.high;
+        case 'normal': return NotificationPriority.normal;
+        case 'low': return NotificationPriority.low;
+      }
+    }
+    return NotificationPriority.low;
   }
 
   factory BoardNotification.fromMap(String id, Map<String, dynamic> data) {
@@ -65,6 +97,12 @@ class BoardNotification {
       attachmentName: data[ApiSchema.fieldAttachmentName]?.toString(),
       attachmentType: data[ApiSchema.fieldAttachmentType]?.toString(),
       attachmentSize: parseSize(data[ApiSchema.fieldAttachmentSize]),
+      priority: _parsePriority(data[ApiSchema.fieldPriority]),
+      precautionarySteps: (data[ApiSchema.fieldPrecautionarySteps] as List<dynamic>?)
+          ?.map((e) => e.toString()).toList(),
+      location: data[ApiSchema.fieldLocation]?.toString(),
+      safeExit: data[ApiSchema.fieldSafeExit]?.toString(),
+      assemblyPoint: data[ApiSchema.fieldAssemblyPoint]?.toString(),
     );
   }
 }
@@ -195,6 +233,25 @@ class NotificationListenerService {
   List<BoardNotification> _cachedNotifications = [];
   String? _currentBoardId;
 
+  // ── Priority filter helpers ────────────────────────────────────
+
+  List<BoardNotification> get emergencyNotifications =>
+      _cachedNotifications
+          .where((n) => n.priority == NotificationPriority.emergency)
+          .toList();
+
+  List<BoardNotification> get highPriorityNotifications =>
+      _cachedNotifications
+          .where((n) => n.priority == NotificationPriority.high)
+          .toList();
+
+  List<BoardNotification> get bellNotifications =>
+      _cachedNotifications.where((n) =>
+          n.priority == NotificationPriority.normal ||
+          n.priority == NotificationPriority.low).toList();
+
+  // ── Cache access ────────────────────────────────────────────────
+
   List<BoardNotification> get cachedNotifications =>
       List.unmodifiable(_cachedNotifications);
 
@@ -231,6 +288,48 @@ class NotificationListenerService {
     } catch (e) {
       Log.w('[NotificationListener] Force sync failed: $e');
     }
+  }
+
+  /// Removes a notification from the cache by [id] and emits the updated list.
+  void removeNotification(String id) {
+    _cachedNotifications.removeWhere((n) => n.id == id);
+    _notificationsController.add(_cachedNotifications);
+  }
+
+  // ── Debug injection helpers ──────────────────────────────────────
+
+  void injectEmergencyForDebug() {
+    _cachedNotifications.insert(0, BoardNotification(
+      id: 'debug-emergency-${DateTime.now().millisecondsSinceEpoch}',
+      title: 'FIRE EMERGENCY',
+      body: 'Fire reported in Block B, 2nd Floor. Evacuate immediately.',
+      type: 'emergency',
+      timestamp: TimeSyncService.timeNow,
+      priority: NotificationPriority.emergency,
+      location: 'Block B, Room 204',
+      safeExit: 'NORTH-EAST',
+      assemblyPoint: 'Main Ground Assembly Point',
+      precautionarySteps: [
+        'Remain Calm — Do not panic or run',
+        'Alert Others — Inform nearby students and staff',
+        'Exit Immediately — Use nearest fire exit',
+        'Do Not Use Elevators — Use stairwell only',
+        'Report to Assembly Point — Main ground area',
+      ],
+    ));
+    _notificationsController.add(_cachedNotifications);
+  }
+
+  void injectPriority1ForDebug() {
+    _cachedNotifications.insert(0, BoardNotification(
+      id: 'debug-p1-${DateTime.now().millisecondsSinceEpoch}',
+      title: 'Faculty Meeting Reminder',
+      body: 'All faculty members are requested to attend the urgent meeting in Conference Room A at 12:00 PM.',
+      type: 'alert',
+      timestamp: TimeSyncService.timeNow,
+      priority: NotificationPriority.high,
+    ));
+    _notificationsController.add(_cachedNotifications);
   }
 
   void stop() {

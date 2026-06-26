@@ -138,7 +138,7 @@ class _LottiePreviewScreenState extends State<LottiePreviewScreen> with TickerPr
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFFFF5252).withOpacity(0.08),
+                    color: const Color(0xFFFF5252).withValues(alpha: 0.08),
                     blurRadius: 100,
                   ),
                 ],
@@ -179,15 +179,15 @@ class _LottiePreviewScreenState extends State<LottiePreviewScreen> with TickerPr
                       width: 340,
                       height: 340,
                       decoration: BoxDecoration(
-                        color: const Color(0xFF1E1B30).withOpacity(0.7),
+                        color: const Color(0xFF1E1B30).withValues(alpha: 0.7),
                         borderRadius: BorderRadius.circular(28),
                         border: Border.all(
-                          color: const Color(0xFFFFFFFF).withOpacity(0.08),
+                          color: const Color(0xFFFFFFFF).withValues(alpha: 0.08),
                           width: 1.5,
                         ),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.4),
+                            color: Colors.black.withValues(alpha: 0.4),
                             blurRadius: 24,
                             offset: const Offset(0, 12),
                           ),
@@ -266,10 +266,10 @@ class _LottiePreviewScreenState extends State<LottiePreviewScreen> with TickerPr
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                               decoration: BoxDecoration(
-                                color: Colors.black.withOpacity(0.5),
+                                color: Colors.black.withValues(alpha: 0.5),
                                 borderRadius: BorderRadius.circular(12),
                                 border: Border.all(
-                                  color: Colors.white.withOpacity(0.1),
+                                  color: Colors.white.withValues(alpha: 0.1),
                                 ),
                               ),
                               child: Text(
@@ -294,7 +294,7 @@ class _LottiePreviewScreenState extends State<LottiePreviewScreen> with TickerPr
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(20),
                         side: BorderSide(
-                          color: const Color(0xFFFFFFFF).withOpacity(0.05),
+                          color: const Color(0xFFFFFFFF).withValues(alpha: 0.05),
                         ),
                       ),
                       child: Padding(

@@ -187,6 +187,10 @@ class SecureStorageService {
   static Future<void> clearManifestHash() =>
       _delete(_keyBoardManifestHash);
 
+  static Future<void> write(String key, String value) => _write(key, value);
+  static Future<String?> read(String key) => _read(key);
+  static Future<void> delete(String key) => _delete(key);
+
   static Future<void> clearAll() async {
     await _delete(_keyApiKey);
     await _delete(_keyAccessToken);

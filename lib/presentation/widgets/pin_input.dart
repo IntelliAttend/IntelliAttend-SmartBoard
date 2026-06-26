@@ -9,7 +9,7 @@ class PinInput extends StatelessWidget {
 
   const PinInput({
     super.key,
-    this.length = 6,
+    this.length = 4,
     required this.value,
     this.obscureText = false,
   });

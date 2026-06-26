@@ -154,6 +154,12 @@ class HeartbeatV2Request(BaseModel):
     appVersion: str = "unknown"
     timestamp: str = ""
 
+class PowerCommandRequest(BaseModel):
+    action: str = "shutdown"
+    reason: str = ""
+    delay_seconds: int = 60
+    command_id: str = ""
+
 # ─── WebSocket Ticket (in-memory store) ────────────────────────────────────
 
 _tickets: dict[str, dict] = {}
@@ -185,6 +191,43 @@ class ConnectionManager:
                 self._connections.get(session_id, set()).discard(ws)
 
 manager = ConnectionManager()
+
+class BoardConnectionManager:
+    """Tracks board_id → WebSocket for admin commands (1-to-1)."""
+    def __init__(self):
+        self._connections: dict[str, WebSocket] = {}
+        self._pending: dict[str, list[dict]] = {}
+
+    async def connect(self, board_id: str, ws: WebSocket):
+        await ws.accept()
+        self._connections[board_id] = ws
+        queued = self._pending.pop(board_id, [])
+        for cmd in queued:
+            try:
+                await ws.send_json(cmd)
+            except Exception:
+                pass
+
+    async def disconnect(self, board_id: str):
+        self._connections.pop(board_id, None)
+
+    async def send_command(self, board_id: str, command: dict) -> bool:
+        ws = self._connections.get(board_id)
+        if ws is None:
+            return False
+        try:
+            await ws.send_json(command)
+            return True
+        except Exception:
+            self._connections.pop(board_id, None)
+            return False
+
+    def queue_command(self, board_id: str, command: dict):
+        if board_id not in self._pending:
+            self._pending[board_id] = []
+        self._pending[board_id].append(command)
+
+board_manager = BoardConnectionManager()
 
 # --- Shared Logic (PostgreSQL) ---
 async def _initiate_session_logic_pg(request: SessionInitiateRequest, board_data: dict, pg_session: AsyncSession, is_offline_fallback: bool = False):
@@ -347,6 +390,41 @@ async def session_websocket(websocket: WebSocket, session_id: str, ticket: str =
         logger.info(f"🔌 [WS] Board disconnected from session {session_id}")
     finally:
         await manager.disconnect(session_id, websocket)
+
+@app.websocket("/api/v1/websocket/board/{board_id}")
+async def board_websocket(websocket: WebSocket, board_id: str, ticket: str = ""):
+    ticket_data = _tickets.pop(ticket, None)
+    if ticket_data is None:
+        await websocket.close(code=1008, reason="Invalid or expired ticket")
+        return
+    if datetime.now(timezone.utc) > ticket_data["expires_at"]:
+        await websocket.close(code=1008, reason="Ticket expired")
+        return
+    if ticket_data.get("board_id") != board_id:
+        await websocket.close(code=1008, reason="Board ID mismatch")
+        return
+
+    await board_manager.connect(board_id, websocket)
+    logger.info(f"🔌 [BoardWS] Board {board_id} connected for admin commands")
+
+    try:
+        while True:
+            raw = await asyncio.wait_for(websocket.receive_text(), timeout=300)
+            try:
+                data = json.loads(raw)
+                msg_type = data.get("type")
+                if msg_type == "ping":
+                    await websocket.send_json({"type": "pong"})
+                elif msg_type == "system_command_ack":
+                    logger.info(f"🔌 [BoardWS] ACK from {board_id}: {data}")
+            except json.JSONDecodeError:
+                pass
+    except asyncio.TimeoutError:
+        logger.warning(f"🔌 [BoardWS] Client timeout — {board_id}")
+    except WebSocketDisconnect:
+        logger.info(f"🔌 [BoardWS] Board {board_id} disconnected")
+    finally:
+        await board_manager.disconnect(board_id)
 
 # --- Standard API Router (api/v1/board) ---
 api_router = APIRouter(prefix="/api/v1/board")
@@ -708,6 +786,43 @@ async def get_stale_boards(
         "stale_count": len(stale),
         "boards": stale,
     }
+
+@admin_router.post("/board/{board_id}/power")
+async def admin_board_power(
+    board_id: str,
+    command: PowerCommandRequest,
+    admin_data: dict = Depends(AuthService.require_role(["admin"])),
+):
+    """Send a shutdown/restart command to a smart board."""
+    import uuid
+    cmd_id = command.command_id or str(uuid.uuid4())
+    payload = {
+        "type": "system_command",
+        "command_id": cmd_id,
+        "action": command.action,
+        "reason": command.reason or "",
+        "delay_seconds": max(5, min(600, command.delay_seconds)),
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    sent = await board_manager.send_command(board_id, payload)
+    if sent:
+        logger.info(f"⚡ [Admin] Power command {cmd_id} sent to board {board_id}")
+        return {
+            "status": "sent",
+            "command_id": cmd_id,
+            "board_id": board_id,
+            "board_online": True,
+        }
+    else:
+        board_manager.queue_command(board_id, payload)
+        logger.info(f"⚡ [Admin] Power command {cmd_id} queued for offline board {board_id}")
+        return {
+            "status": "queued",
+            "command_id": cmd_id,
+            "board_id": board_id,
+            "board_online": False,
+        }
 
 app.include_router(admin_router)
 

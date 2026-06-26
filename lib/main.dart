@@ -31,6 +31,11 @@ import 'data/repositories/auth_repository.dart';
 import 'data/repositories/device_repository.dart';
 import 'core/network/api_client.dart';
 import 'presentation/providers/registration_provider.dart';
+import 'presentation/widgets/shutdown_countdown_overlay.dart';
+import 'presentation/widgets/emergency_overlay.dart';
+import 'presentation/widgets/priority_one_overlay.dart';
+import 'core/platform/power_command_service.dart';
+import 'services/websocket_service.dart';
 
 /// Global kill switch: tracks Ctrl+Shift+JJJ sequence from any screen.
 /// When triggered, releases kiosk mode and navigates to BootScreen.
@@ -451,9 +456,10 @@ Future<void> _initWindow() async {
         // window exits cleanly and DWM recovers naturally instead of
         // leaving the desktop frozen with a hidden taskbar and no visible
         // window.
-        const WindowOptions(
+        WindowOptions(
           titleBarStyle: TitleBarStyle.hidden,
           skipTaskbar: false,
+          backgroundColor: AppColors.bgLight,
         ),
         () async {
           try {
@@ -522,6 +528,20 @@ void _initTier3() {
 /// and if multiple services touch native platform channels simultaneously
 /// during startup the Flutter engine can lose its connection.
 Future<void> startBackgroundProtocols() async {
+  // TEMP DEMO: auto-trigger shutdown overlay after 6 seconds
+  // regardless of registration state, so you can see the UI even in debug mode.
+  Future.delayed(const Duration(seconds: 6), () {
+    PowerCommandService().handleSystemCommand(
+      SystemCommandEvent(
+        command: 'shutdown',
+        delaySeconds: 60,
+        reason: 'End of day — scheduled shutdown',
+        commandId: 'demo-cmd-001',
+        issuedAt: DateTime.now(),
+      ),
+    );
+  });
+
   try {
     final registration = await globalDeviceRepository.getRegistration();
     if (registration == null) return;
@@ -530,21 +550,17 @@ Future<void> startBackgroundProtocols() async {
     SyncManager().init(queryId);
     final boardId = registration.smartBoardId;
 
-    // Prime the in-memory timetable cache from Isar (last known state).
-    // Gives the UI immediate data while the sync happens.
     TimetableCache()
         .updateAll(await globalDeviceRepository.getWeeklyTimeline());
 
-    // Full hydration — downloads timetable + rosters + profile in one call.
-    // Uses manifest_hash to skip re-processing if nothing changed.
     await globalDeviceRepository.hydrateFromServer();
 
-    // Notifications listener (in-memory cache, REST-backed).
     NotificationListenerService().start(boardId);
     if (AppConfig.enableDocuments) {
       await NotificationListenerService().injectSampleData();
     }
 
+    PowerCommandService().init();
     PreFlightService().startCountdownWatcher();
     WindowOrchestratorService().start();
     _startPeriodicTimeSync();
@@ -679,6 +695,13 @@ class IntelliAttendApp extends StatelessWidget {
       darkTheme: AppTheme.darkTheme,
       themeMode: ThemeMode.light,
       home: const BootScreen(),
+      builder: (context, child) {
+        return EmergencyOverlay(
+          child: PriorityOneOverlay(
+            child: ShutdownCountdownOverlay(child: child!),
+          ),
+        );
+      },
     );
   }
 }

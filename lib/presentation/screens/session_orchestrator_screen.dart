@@ -11,7 +11,6 @@ import '../../models/isar_schemas.dart';
 import '../../services/session_state_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/api_service.dart';
-import '../../services/totp_engine.dart';
 import '../../core/security/secure_storage_service.dart';
 import 'idle_screen.dart';
 import 'preparing_screen.dart';
@@ -81,8 +80,7 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
           }
 
           if (secret != null && stateStr == 'ACTIVE') {
-            final engine = TotpEngine(sessionId: sessionId, sessionSecret: secret);
-            _sessionState.storeSessionSecrets(secret, engine,
+            _sessionState.storeSessionSecrets(secret,
                 stateResponse['websocket_token'] as String?);
           }
         }
@@ -141,7 +139,7 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
   }
 
   Future<void> _prepareActiveSession(SessionState state) async {
-    if (_sessionState.totpEngine != null) return;
+    if (_sessionState.sessionSecret != null) return;
 
     String? secret = _sessionState.sessionSecret;
     secret ??= await SecureStorageService.getSessionSecret(state.sessionId);
@@ -153,8 +151,7 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
       return;
     }
 
-    final engine = TotpEngine(sessionId: state.sessionId, sessionSecret: secret);
-    _sessionState.storeSessionSecrets(secret, engine, state.websocketToken);
+    _sessionState.storeSessionSecrets(secret, state.websocketToken);
 
     final accessToken = state.websocketToken ?? '';
     _wsAccessToken = accessToken;
@@ -207,13 +204,8 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
         );
       case BoardState.active:
         final state = _sessionState.currentState;
-        final engine = _sessionState.totpEngine;
-        if (engine == null) {
-          return const SizedBox();
-        }
         return AttendanceScreen(
           sessionId: state.sessionId,
-          totpEngine: engine,
           websocketService: _wsService ?? WebsocketService(AppConfig.baseUrl),
           accessToken: _wsAccessToken,
           initialPresentCount: state.presentCount,

@@ -37,24 +37,34 @@ class _BootScreenState extends State<BootScreen> {
         Log.i('[Boot] No local registration found. Redirecting to Registration.');
         if (mounted) {
           Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (context) => const RegistrationScreen()),
+            PageRouteBuilder(
+              pageBuilder: (_, __, ___) => const RegistrationScreen(),
+              transitionsBuilder: (_, a, __, child) => FadeTransition(opacity: a, child: child),
+              transitionDuration: const Duration(milliseconds: 400),
+            ),
           );
         }
         return;
       }
 
-      // Step 2: Instant UI Transition
-      // Navigate to SessionOrchestratorScreen which checks server state and
-      // renders the appropriate screen (IDLE, PREPARING, IGNITING, ACTIVE, CLOSED).
-      Log.i('[Boot] Local identity confirmed for ${registration.smartBoardId}. Entering Orchestrator.');
+      // Step 2: Minimum splash display + wait just long enough for the logo
+      // to render and the user to register it.
+      Log.i('[Boot] Local identity confirmed for ${registration.smartBoardId}. Splash display.');
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+
+      // Step 3: Smooth fade transition to the orchestrator
+      Log.i('[Boot] Splash complete. Entering Orchestrator.');
       if (mounted) {
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => SessionOrchestratorScreen(registration: registration)),
+          PageRouteBuilder(
+            pageBuilder: (_, __, ___) => SessionOrchestratorScreen(registration: registration),
+            transitionsBuilder: (_, a, __, child) => FadeTransition(opacity: a, child: child),
+            transitionDuration: const Duration(milliseconds: 400),
+          ),
         );
       }
 
-      // Step 3: Background Resynchronization
-      // We perform network tasks asynchronously to ensure zero-lag startup
+      // Step 4: Background Resynchronization (runs in background, not blocking)
       _backgroundSync(deviceRepository);
 
     } catch (e) {
@@ -146,16 +156,15 @@ class _BootScreenState extends State<BootScreen> {
                 children: [
                   GestureDetector(
                     onLongPress: () => _showWipeConfirmation(),
-                    child: Container(
-                      padding: const EdgeInsets.all(32),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary.withValues(alpha: 0.1),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.settings_input_antenna_rounded,
-                        size: 80,
-                        color: AppColors.primary,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(20),
+                      child: Image.asset(
+                        'assets/logo_square.png',
+                        width: 500,
+                        height: 500,
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) =>
+                            const Icon(Icons.broken_image, size: 80, color: Colors.red),
                       ),
                     ),
                   ),
@@ -310,6 +319,9 @@ class _BootScreenState extends State<BootScreen> {
 
                 setDialogState(() => isVerifying = true);
                 
+                final repo = context.read<IDeviceRepository>();
+                final navigator = Navigator.of(context);
+                
                 final isValid = await ApiService.verifyAdminPin(pin);
                 
                 if (!isValid) {
@@ -325,14 +337,13 @@ class _BootScreenState extends State<BootScreen> {
                   await ApiService.deregisterBoard();
                 } catch (e) {
                   Log.w('⚠️ [Boot] Server-side revocation failed: $e');
-                  // We continue with local wipe anyway to ensure device is cleared
                 }
 
-                await context.read<IDeviceRepository>().clearRegistration();
-                
+                await repo.clearRegistration();
+
                 if (mounted) {
-                  Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(builder: (context) => const RegistrationScreen()),
+                  navigator.pushReplacement(
+                    MaterialPageRoute(builder: (_) => const RegistrationScreen()),
                   );
                 }
               },
