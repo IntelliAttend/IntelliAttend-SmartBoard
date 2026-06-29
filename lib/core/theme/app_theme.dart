@@ -93,7 +93,7 @@ class AppTheme {
       style: ElevatedButton.styleFrom(
         backgroundColor: bg,
         foregroundColor: fg,
-        minimumSize: const Size(double.infinity, 60),
+        minimumSize: const Size(0, 48),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         textStyle: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w700, letterSpacing: 1),
         elevation: 0,

@@ -42,6 +42,17 @@ class WindowOrchestratorService {
   /// Used by IdleScreen to decide whether to skip the 2-min cooldown.
   bool hasTakenAttendance(String slotId) => _attendanceTakenSlots.contains(slotId);
 
+  /// Called during cooldown to reset all attendance tracking so the next
+  /// class starts with a clean slate.
+  void resetAttendanceTracking() {
+    _attendanceTakenSlots.clear();
+    _t3FiredSlots.clear();
+    _t0FiredSlots.clear();
+    _backPressureFiredSlots.clear();
+    _endOfClassFiredSlots.clear();
+    Log.i('[Orchestrator] All attendance & slot tracking reset for cooldown.');
+  }
+
   void start() {
     _monitorTimer?.cancel();
     // Increased from 60s to 10s so T-3 / T-0 window events fire with

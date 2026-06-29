@@ -24,6 +24,7 @@ import '../widgets/glass_container.dart';
 import '../widgets/pin_input.dart';
 import '../widgets/timeline_slot.dart';
 import '../widgets/notification_bell.dart';
+import '../widgets/notification_popdown.dart';
 import '../../services/notification_listener_service.dart';
 import 'registration_screen.dart';
 import 'attendance_screen.dart';
@@ -31,6 +32,7 @@ import 'settings_screen.dart';
 import 'timetable_screen.dart';
 import 'analytics_screen.dart';
 import 'notifications_screen.dart';
+import 'workspace_screen.dart';
 import '../../services/time_sync_service.dart';
 import '../../services/timetable_cache.dart';
 import 'package:video_player/video_player.dart';
@@ -141,6 +143,23 @@ class _IdleScreenState extends State<IdleScreen>
   int _breakDurationSeconds = 0;
   Timer? _breakTimer;
 
+  /// Tracks whether a session is currently active (has been committed but not ended).
+  /// When set, an overlay panel with navigation options is shown on idle screen.
+  ActiveSession? _activeSession;
+
+  /// Queue of notifications to show as top-sliding popdown banners.
+  /// Drained one-by-one; each popdown auto-dismisses before the next shows.
+  final List<BoardNotification> _popdownQueue = [];
+  BoardNotification? _activePopdown;
+  StreamSubscription<BoardNotification>? _popdownSub;
+
+
+
+  /// All-clear detection — restores normal UI after emergency.
+  StreamSubscription<BoardNotification>? _allClearSub;
+  bool _showAllClearToast = false;
+  Timer? _allClearToastTimer;
+
   // Listens to the global TimetableCache — every Firestore snapshot update
   // triggers _onTimetableCacheChanged which re-reads today's entries from RAM
   // and calls setState, keeping the entire idle UI in sync without polling.
@@ -226,13 +245,66 @@ class _IdleScreenState extends State<IdleScreen>
       // release-build AOT race (debug JIT overhead hides it) leaves the
       // set empty, causing warm-up + OTP card to show for completed slots.
       await _loadCompletedSlots();
+      await _checkActiveSession();
       _startPreClassTimer();
       _startCinematicMonitor();
       if (AppConfig.enableVideoBreaks) {
         _initVideoBackground();
       }
 
-      // 4. If returning from a completed attendance session, show COMPLETED
+      // 4. Mark idle and drain any notifications that arrived during class.
+      final notifService = NotificationListenerService();
+      notifService.markIdle(true);
+      final drained = notifService.drainQueue();
+      if (drained.isNotEmpty) {
+        for (final n in drained) {
+          if (n.priority == NotificationPriority.emergency ||
+              n.priority == NotificationPriority.high) {
+            // Already handled by overlays — skip popdown
+          } else if (n.priority == NotificationPriority.low) {
+            setState(() {
+              _popdownQueue.add(n);
+              if (_activePopdown == null) {
+                _showNextPopdown();
+              }
+            });
+          }
+        }
+      }
+
+      // 5. Listen for real-time incoming notifications.
+      _popdownSub = notifService.onNotificationArrived.listen((n) {
+        if (!mounted) return;
+        // Route by priority:
+        // - emergency/high → handled by overlays, skip popdown
+        // - normal → handled by overlay (P-2), skip popdown
+        // - low → show popdown animation (during breaks or as general info)
+        if (n.priority == NotificationPriority.emergency ||
+            n.priority == NotificationPriority.high) {
+          // Overlays handle these — skip popdown
+          Log.d('[Idle] Emergency/high notification — overlay handles display.');
+        } else if (n.priority == NotificationPriority.low) {
+          // Low priority (P-3) → show popdown animation
+          setState(() {
+            _popdownQueue.add(n);
+            if (_activePopdown == null) {
+              _showNextPopdown();
+            }
+          });
+        }
+      });
+
+      // 6. Listen for all-clear events to restore normal UI.
+      _allClearSub = notifService.onAllClear.listen((n) {
+        if (!mounted) return;
+        setState(() => _showAllClearToast = true);
+        _allClearToastTimer?.cancel();
+        _allClearToastTimer = Timer(const Duration(seconds: 3), () {
+          if (mounted) setState(() => _showAllClearToast = false);
+        });
+      });
+
+      // 7. If returning from a completed attendance session, show COMPLETED
       //    status for 3 seconds then auto-minimize to the OS desktop.
       if (widget.completedSession) {
         await Future.delayed(const Duration(seconds: 3));
@@ -240,6 +312,14 @@ class _IdleScreenState extends State<IdleScreen>
         await KioskService.setMode(KioskMode.suspended);
       }
     });
+  }
+
+  void _showNextPopdown() {
+    if (_popdownQueue.isEmpty) {
+      setState(() => _activePopdown = null);
+      return;
+    }
+    setState(() => _activePopdown = _popdownQueue.removeAt(0));
   }
 
   void _startCinematicMonitor() {
@@ -411,7 +491,10 @@ class _IdleScreenState extends State<IdleScreen>
 
   Future<void> _loadInitialData() async {
     final deviceRepository = context.read<IDeviceRepository>();
-    final initialTimeline = await deviceRepository.getTodayTimeline();
+    var initialTimeline = await deviceRepository.getTodayTimeline();
+    if (initialTimeline.isEmpty) {
+      initialTimeline = TimetableCache().todayTimeline;
+    }
     if (mounted) {
       setState(() {
         _todayTimeline = initialTimeline;
@@ -439,6 +522,11 @@ class _IdleScreenState extends State<IdleScreen>
     _cooldownTimer?.cancel();
     _breakTimer?.cancel();
     _preFlightSessionSubscription?.cancel();
+    _popdownSub?.cancel();
+    _allClearSub?.cancel();
+    _allClearToastTimer?.cancel();
+    // Notifications arriving while on non-idle screens will be queued.
+    NotificationListenerService().markIdle(false);
     _cinematicController.dispose();
     super.dispose();
   }
@@ -462,7 +550,10 @@ class _IdleScreenState extends State<IdleScreen>
   /// subsequent reactive updates.
   Future<void> _refreshTimetable() async {
     final deviceRepository = context.read<IDeviceRepository>();
-    final entries = await deviceRepository.getTodayTimeline();
+    var entries = await deviceRepository.getTodayTimeline();
+    if (entries.isEmpty) {
+      entries = TimetableCache().todayTimeline;
+    }
     if (mounted) {
       setState(() {
         _todayTimeline = entries;
@@ -557,7 +648,17 @@ class _IdleScreenState extends State<IdleScreen>
     _lastQueryDay ??= today;
   }
 
+  Future<void> _checkActiveSession() async {
+    final session = await SessionManager.getResumeableSession();
+    if (session != null && mounted) {
+      setState(() => _activeSession = session);
+    } else if (session == null && mounted && _activeSession != null) {
+      setState(() => _activeSession = null);
+    }
+  }
+
   void _checkUpcomingClass() {
+    _checkActiveSession();
     if (_todayTimeline.isEmpty) return;
 
     final now = TimeSyncService.timeNow;
@@ -859,8 +960,12 @@ class _IdleScreenState extends State<IdleScreen>
   /// Enters the locked cooldown state and starts a 120-second countdown.
   /// Clears all previous-class state immediately so the cooldown phase shows
   /// a clean slate. The next-class T-3 re-evaluation happens on completion.
-  void _startCooldown() {
+  Future<void> _startCooldown() async {
     _fullCleanup();
+    // Wipe all persisted attendance & session data so the next class starts fresh
+    await SessionManager.clearAllActiveSessions();
+    await SessionManager.clearCompletedSessionsForDay(TimeSyncService.timeNow.weekday);
+    WindowOrchestratorService().resetAttendanceTracking();
     _cooldownState = CooldownState.locked;
     _cooldownSecondsRemaining = 120;
     _forceShowCard = false;
@@ -1208,8 +1313,6 @@ class _IdleScreenState extends State<IdleScreen>
       final courseName = data['course_name']?.toString() ?? 'Active Class';
       final sectionId =
           data['section_id']?.toString() ?? widget.registration.smartBoardId;
-      final accessToken = data['access_token']?.toString();
-
       if (sessionId == null || sessionSecret == null) {
         setState(() => _errorMessage =
             'Invalid server response: missing session data. Please try again with a new PIN.');
@@ -1261,7 +1364,6 @@ class _IdleScreenState extends State<IdleScreen>
             builder: (context) => AttendanceScreen(
               sessionId: sessionId,
               websocketService: wsService,
-              accessToken: accessToken ?? '',
               capacity: widget.registration.capacity,
               courseName: courseName,
               facultyName: facultyName,
@@ -1319,7 +1421,6 @@ class _IdleScreenState extends State<IdleScreen>
           builder: (context) => AttendanceScreen(
             sessionId: debugSessionId,
             websocketService: wsService,
-            accessToken: '',
             capacity: widget.registration.capacity,
             courseName: 'Debug Course',
             facultyName: 'Debug Faculty',
@@ -1470,9 +1571,74 @@ class _IdleScreenState extends State<IdleScreen>
             ],
           ));
 
-          // 5. Banner
+          // 5. Active Session Overlay
+          if (_activeSession != null) {
+            stackChildren.add(_buildActiveSessionOverlay(primaryTextColor, secondaryTextColor));
+          }
+
+          // 6. Banner
           if (_showStartingSoon && _upcomingSlot != null) {
             stackChildren.add(_buildStartingSoonBanner());
+          }
+
+          // 6. Notification popdown (top-sliding banner)
+          if (_activePopdown != null) {
+            stackChildren.add(
+              Positioned(
+                top: 82,
+                right: 40,
+                child: NotificationPopdown(
+                  key: ValueKey(_activePopdown!.id),
+                  notification: _activePopdown!,
+                  onDismiss: _showNextPopdown,
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                    builder: (context) => const NotificationsScreen(),
+                  )),
+                ),
+              ),
+            );
+          }
+
+          // 7. All-clear toast
+          if (_showAllClearToast) {
+            stackChildren.add(
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 16,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1B5E20),
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.3),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.check_circle, color: Colors.white, size: 20),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'All Clear — Emergency resolved',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
           }
 
           return Stack(children: stackChildren);
@@ -1491,28 +1657,39 @@ class _IdleScreenState extends State<IdleScreen>
       ),
       child: Row(
         children: [
-          Image.asset(
-            'assets/logo_square.png',
-            width: 36,
-            height: 36,
-            fit: BoxFit.contain,
-          ),
-          const SizedBox(width: 12),
-          Text(
-            'IntelliAttend SmartBoard',
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w900,
-              color: textColor == Colors.white
-                  ? Colors.white
-                  : AppColors.primaryTeal,
-              letterSpacing: -1,
-            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Image.asset(
+                'assets/logo_square.png',
+                width: 36,
+                height: 36,
+                fit: BoxFit.contain,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'IntelliAttend SmartBoard',
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w900,
+                  color: textColor == Colors.white
+                      ? Colors.white
+                      : AppColors.primaryTeal,
+                  letterSpacing: -1,
+                ),
+              ),
+            ],
           ),
           const Spacer(),
-          _buildNavLinks(textColor),
-          const SizedBox(width: 40),
-          _buildHeaderActions(textColor),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildNavLinks(textColor),
+              const SizedBox(width: 40),
+              _buildHeaderActions(textColor),
+            ],
+          ),
         ],
       ),
     );
@@ -1594,7 +1771,6 @@ class _IdleScreenState extends State<IdleScreen>
       children: [
         NotificationBell(
           iconColor: iconColor,
-          isBreak: _isAnyBreak(),
           onViewAll: () => Navigator.of(context).push(MaterialPageRoute(
               builder: (context) => const NotificationsScreen())),
         ),
@@ -1632,6 +1808,108 @@ class _IdleScreenState extends State<IdleScreen>
               ),
               icon: const Icon(Icons.blur_on, size: 16),
               label: const Text('P1 Blur', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+            ),
+          ),
+          const SizedBox(width: 6),
+          SizedBox(
+            height: 36,
+            child: TextButton.icon(
+              onPressed: () => NotificationListenerService().injectP2ForDebug(),
+              style: TextButton.styleFrom(
+                backgroundColor: const Color(0xFF3B82F6).withValues(alpha: 0.15),
+                foregroundColor: const Color(0xFF3B82F6),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  side: BorderSide(color: const Color(0xFF3B82F6).withValues(alpha: 0.3)),
+                ),
+              ),
+              icon: const Icon(Icons.notifications_outlined, size: 16),
+              label: const Text('P-2', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+            ),
+          ),
+          const SizedBox(width: 6),
+          SizedBox(
+            height: 36,
+            child: TextButton.icon(
+              onPressed: () => NotificationListenerService().injectDefaultForDebug(),
+              style: TextButton.styleFrom(
+                backgroundColor: const Color(0xFF6B7280).withValues(alpha: 0.15),
+                foregroundColor: const Color(0xFF6B7280),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  side: BorderSide(color: const Color(0xFF6B7280).withValues(alpha: 0.3)),
+                ),
+              ),
+              icon: const Icon(Icons.inbox_outlined, size: 16),
+              label: const Text('P3 Inbox', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+            ),
+          ),
+          const SizedBox(width: 6),
+          SizedBox(
+            height: 36,
+            child: TextButton.icon(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const WorkspaceScreen(
+                      sessionId: 'DEBUG_WS',
+                      courseName: 'Engineering Physics',
+                      facultyName: 'Dr. Sharma',
+                      roomName: 'Lab-101',
+                      sectionId: 'sec-b',
+                      presentCount: 38,
+                      totalCapacity: 42,
+                    ),
+                  ),
+                );
+              },
+              style: TextButton.styleFrom(
+                backgroundColor: AppColors.primaryTeal.withValues(alpha: 0.15),
+                foregroundColor: AppColors.primaryTeal,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  side: BorderSide(color: AppColors.primaryTeal.withValues(alpha: 0.3)),
+                ),
+              ),
+              icon: const Icon(Icons.dashboard_rounded, size: 16),
+              label: const Text('Workspace', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+            ),
+          ),
+          const SizedBox(width: 6),
+          SizedBox(
+            height: 36,
+            child: TextButton.icon(
+              onPressed: () {
+                final wsService = WebsocketService(AppConfig.baseUrl);
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => AttendanceScreen(
+                      sessionId: 'DEBUG_ATTENDANCE',
+                      websocketService: wsService,
+                      capacity: 42,
+                      courseName: 'Engineering Physics',
+                      facultyName: 'Dr. Sharma',
+                      sectionId: 'sec-b',
+                      roomName: 'Lab-101',
+                      slotId: null,
+                    ),
+                  ),
+                );
+              },
+              style: TextButton.styleFrom(
+                backgroundColor: const Color(0xFF8B5CF6).withValues(alpha: 0.15),
+                foregroundColor: const Color(0xFF8B5CF6),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  side: BorderSide(color: const Color(0xFF8B5CF6).withValues(alpha: 0.3)),
+                ),
+              ),
+              icon: const Icon(Icons.people_rounded, size: 16),
+              label: const Text('Attendance', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
             ),
           ),
           const SizedBox(width: 6),
@@ -1733,13 +2011,6 @@ class _IdleScreenState extends State<IdleScreen>
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                       color: primaryColor,
-                    ),
-                  ),
-                  Text(
-                    '${widget.registration.roomName} • ${widget.registration.department}',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: secondaryColor,
                     ),
                   ),
                 ],
@@ -2057,40 +2328,6 @@ class _IdleScreenState extends State<IdleScreen>
           children: [
             Column(
               mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.meeting_room_outlined,
-                        size: 16, color: AppColors.primaryTeal),
-                    const SizedBox(width: 8),
-                    Text(
-                      widget.registration.roomName,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: secondaryColor,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Capacity: ${widget.registration.capacity}',
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: secondaryColor.withValues(alpha: 0.6),
-                  ),
-                ),
-              ],
-            ),
-            Container(
-                margin: const EdgeInsets.symmetric(horizontal: 24),
-                height: 40,
-                width: 1,
-                color: secondaryColor.withValues(alpha: 0.1)),
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
@@ -2134,6 +2371,186 @@ class _IdleScreenState extends State<IdleScreen>
       'Dec'
     ];
     return "${dayNames[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}";
+  }
+
+  Widget _buildActiveSessionOverlay(Color primaryText, Color secondaryText) {
+    final session = _activeSession!;
+    return Positioned.fill(
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.3),
+        child: Center(
+          child: Container(
+            width: 560,
+            padding: const EdgeInsets.all(32),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: const Color(0x1A000000)),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 40, offset: const Offset(0, 12)),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 48, height: 48,
+                      decoration: BoxDecoration(
+                        color: const Color(0x2214B8A6),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0x3314B8A6)),
+                      ),
+                      child: const Icon(Icons.check_circle_rounded, color: Color(0xFF14B8A6), size: 24),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Session Active',
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: const Color(0xFF0F172A)),
+                          ),
+                          const SizedBox(height: 4),
+                          Text('${session.courseName} · ${session.facultyName}',
+                            style: TextStyle(fontSize: 13, color: const Color(0xFF475569)),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.close_rounded, color: const Color(0xFF94A3B8)),
+                      onPressed: () => setState(() => _activeSession = null),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 28),
+                Divider(height: 1, color: const Color(0x1A000000)),
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(child: _buildActionCard(
+                      icon: Icons.dashboard_rounded,
+                      label: 'Workspace',
+                      subtitle: 'Files & session tools',
+                      color: const Color(0xFF14B8A6),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => WorkspaceScreen(
+                          sessionId: session.sessionId,
+                          courseName: session.courseName,
+                          facultyName: session.facultyName,
+                          roomName: widget.registration.roomName,
+                          sectionId: session.sectionId,
+                          slotId: null,
+                          presentCount: session.presentIndices.length,
+                          totalCapacity: session.rosterCount,
+                        )),
+                      ),
+                    )),
+                    const SizedBox(width: 12),
+                    Expanded(child: _buildActionCard(
+                      icon: Icons.people_rounded,
+                      label: 'Attendance',
+                      subtitle: 'Mark present/absent',
+                      color: const Color(0xFF8B5CF6),
+                      onTap: () {
+                        final wsService = WebsocketService(AppConfig.baseUrl);
+                        Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => AttendanceScreen(
+                            sessionId: session.sessionId,
+                            websocketService: wsService,
+                            capacity: session.rosterCount,
+                            courseName: session.courseName,
+                            facultyName: session.facultyName,
+                            roomName: widget.registration.roomName,
+                            sectionId: session.sectionId,
+                            slotId: null,
+                            initialPresentCount: session.presentIndices.length,
+                          )),
+                        );
+                      },
+                    )),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(child: _buildActionCard(
+                      icon: Icons.analytics_outlined,
+                      label: 'Analytics',
+                      subtitle: 'Session statistics',
+                      color: const Color(0xFFF59E0B),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const AnalyticsScreen()),
+                      ),
+                    )),
+                    const SizedBox(width: 12),
+                    Expanded(child: _buildActionCard(
+                      icon: Icons.calendar_month_rounded,
+                      label: 'Timetable',
+                      subtitle: 'View schedule',
+                      color: const Color(0xFF3B82F6),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => TimetableScreen(
+                          weeklyTimeline: TimetableCache().weeklyTimeline,
+                        )),
+                      ),
+                    )),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActionCard({
+    required IconData icon,
+    required String label,
+    required String subtitle,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0x1A000000)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40, height: 40,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: color, size: 20),
+              ),
+              const SizedBox(height: 12),
+              Text(label,
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: const Color(0xFF0F172A)),
+              ),
+              const SizedBox(height: 2),
+              Text(subtitle,
+                style: TextStyle(fontSize: 11, color: const Color(0xFF94A3B8)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildStartingSoonBanner() {

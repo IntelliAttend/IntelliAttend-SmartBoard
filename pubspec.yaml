@@ -53,6 +53,9 @@ dependencies:
   # Logging
   logger: ^2.0.2+1
 
+  # Audio
+  audioplayers: ^6.4.0
+
   # Path & Files
   path_provider: ^2.1.2
   

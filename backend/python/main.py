@@ -160,6 +160,20 @@ class PowerCommandRequest(BaseModel):
     delay_seconds: int = 60
     command_id: str = ""
 
+class NotificationRequest(BaseModel):
+    notification_type: str = "info"
+    display_mode: str = "default"
+    priority: str = "P3"
+    title: str = ""
+    body: str = ""
+    duration_seconds: int | None = None
+    requires_acknowledgement: bool = False
+    notification_id: str = ""
+    attachment_url: str = ""
+    attachment_name: str = ""
+    attachment_type: str = ""
+    attachment_size: int = 0
+
 # ─── WebSocket Ticket (in-memory store) ────────────────────────────────────
 
 _tickets: dict[str, dict] = {}
@@ -338,6 +352,88 @@ async def get_websocket_ticket(request: Request):
     logger.info(f"🔑 [Ticket] Issued ticket {ticket[:16]}... for board {decoded.get('uid', 'unknown')}")
     return {"ticket": ticket, "expires_in": 10}
 
+async def _handle_attendance_submit(session_id: str, data: dict, ws: WebSocket) -> None:
+    """Process faculty-submitted attendance via WebSocket.
+
+    Expects:
+      - present_emails: list[str]
+      - absent_emails:  list[str]
+
+    Upserts SessionAttendee rows and broadcasts confirmation.
+    """
+    present_emails = data.get("present_emails", [])
+    absent_emails = data.get("absent_emails", [])
+    now = datetime.now(timezone.utc)
+
+    logger.info(
+        f"📋 [WS] attendance_submit for session {session_id}: "
+        f"{len(present_emails)} present, {len(absent_emails)} absent"
+    )
+
+    try:
+        async with async_session_factory() as pg_session:
+            for email in present_emails:
+                result = await pg_session.execute(
+                    select(SessionAttendee)
+                    .where(SessionAttendee.session_id == session_id)
+                    .where(SessionAttendee.student_id == email)
+                    .limit(1)
+                )
+                existing = result.scalar_one_or_none()
+                if existing:
+                    existing.status = AttendeeStatus.PRESENT
+                    existing.recorded_at = now
+                else:
+                    pg_session.add(SessionAttendee(
+                        session_id=session_id,
+                        student_id=email,
+                        student_name="",
+                        status=AttendeeStatus.PRESENT,
+                        recorded_at=now,
+                    ))
+
+            for email in absent_emails:
+                result = await pg_session.execute(
+                    select(SessionAttendee)
+                    .where(SessionAttendee.session_id == session_id)
+                    .where(SessionAttendee.student_id == email)
+                    .limit(1)
+                )
+                existing = result.scalar_one_or_none()
+                if existing:
+                    existing.status = AttendeeStatus.ABSENT
+                    existing.recorded_at = now
+                else:
+                    pg_session.add(SessionAttendee(
+                        session_id=session_id,
+                        student_id=email,
+                        student_name="",
+                        status=AttendeeStatus.ABSENT,
+                        recorded_at=now,
+                    ))
+
+            await pg_session.commit()
+
+        await manager.broadcast(session_id, {
+            "type": "attendance_submitted",
+            "session_id": session_id,
+            "present_count": len(present_emails),
+            "absent_count": len(absent_emails),
+            "timestamp": now.isoformat(),
+        })
+        logger.info(f"✅ [WS] Attendance submitted for session {session_id}")
+    except Exception as e:
+        logger.error(f"❌ [WS] attendance_submit error for {session_id}: {e}")
+        try:
+            await ws.send_json({
+                "type": "attendance_submit_error",
+                "session_id": session_id,
+                "error": str(e),
+            })
+        except Exception:
+            pass
+
+
 @app.websocket("/api/v1/websocket/session/{session_id}")
 async def session_websocket(websocket: WebSocket, session_id: str, ticket: str = ""):
     ticket_data = _tickets.pop(ticket, None)
@@ -380,8 +476,11 @@ async def session_websocket(websocket: WebSocket, session_id: str, ticket: str =
             raw = await asyncio.wait_for(websocket.receive_text(), timeout=300)
             try:
                 data = json.loads(raw)
-                if data.get("type") == "ping":
+                msg_type = data.get("type")
+                if msg_type == "ping":
                     await websocket.send_json({"type": "pong"})
+                elif msg_type == "attendance_submit":
+                    await _handle_attendance_submit(session_id, data, websocket)
             except json.JSONDecodeError:
                 pass
     except asyncio.TimeoutError:
@@ -576,6 +675,77 @@ async def terminate_session(
         })
 
     return {"status": "success"}
+
+class AttendanceSubmitRequest(BaseModel):
+    session_id: str
+    present_emails: list[str] = []
+    absent_emails: list[str] = []
+
+@api_router.post("/session/attendance/submit")
+async def submit_attendance_rest(
+    request: AttendanceSubmitRequest,
+    board_data: dict = Depends(get_current_board_pg),
+    pg_session: AsyncSession = Depends(get_pg_session),
+):
+    """REST fallback for attendance submission (primary path is WebSocket)."""
+    now = datetime.now(timezone.utc)
+    session_id = request.session_id
+    logger.info(
+        f"📋 [REST] attendance/submit for {session_id}: "
+        f"{len(request.present_emails)} present, {len(request.absent_emails)} absent"
+    )
+
+    for email in request.present_emails:
+        result = await pg_session.execute(
+            select(SessionAttendee)
+            .where(SessionAttendee.session_id == session_id)
+            .where(SessionAttendee.student_id == email)
+            .limit(1)
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            existing.status = AttendeeStatus.PRESENT
+            existing.recorded_at = now
+        else:
+            pg_session.add(SessionAttendee(
+                session_id=session_id,
+                student_id=email,
+                student_name="",
+                status=AttendeeStatus.PRESENT,
+                recorded_at=now,
+            ))
+
+    for email in request.absent_emails:
+        result = await pg_session.execute(
+            select(SessionAttendee)
+            .where(SessionAttendee.session_id == session_id)
+            .where(SessionAttendee.student_id == email)
+            .limit(1)
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            existing.status = AttendeeStatus.ABSENT
+            existing.recorded_at = now
+        else:
+            pg_session.add(SessionAttendee(
+                session_id=session_id,
+                student_id=email,
+                student_name="",
+                status=AttendeeStatus.ABSENT,
+                recorded_at=now,
+            ))
+
+    await pg_session.commit()
+
+    await manager.broadcast(session_id, {
+        "type": "attendance_submitted",
+        "session_id": session_id,
+        "present_count": len(request.present_emails),
+        "absent_count": len(request.absent_emails),
+        "timestamp": now.isoformat(),
+    })
+
+    return {"status": "success", "present": len(request.present_emails), "absent": len(request.absent_emails)}
 
 @api_router.post("/sync/vault")
 async def sync_vault(
@@ -824,7 +994,86 @@ async def admin_board_power(
             "board_online": False,
         }
 
+@admin_router.post("/board/{board_id}/notification")
+async def admin_board_notification(
+    board_id: str,
+    notification: NotificationRequest,
+    admin_data: dict = Depends(AuthService.require_role(["admin"])),
+):
+    """Send a notification to a smart board.
+
+    The notification is delivered via the board's existing WebSocket
+    connection using the Contract v1 notification schema. If the board
+    is offline, the notification is queued and delivered on reconnection.
+    """
+    import uuid
+
+    nid = notification.notification_id or str(uuid.uuid4())
+    payload_payload = {
+        "notification_id": nid,
+        "version": 1,
+        "priority": notification.priority,
+        "notification_type": notification.notification_type,
+        "display_mode": notification.display_mode,
+        "title": notification.title,
+        "body": notification.body,
+        "duration_seconds": notification.duration_seconds,
+        "requires_acknowledgement": notification.requires_acknowledgement,
+    }
+
+    # Include attachment metadata in the 'data' field if provided
+    if notification.attachment_url:
+        payload_payload["data"] = {
+            "attachment_url": notification.attachment_url,
+            "attachment_name": notification.attachment_name,
+            "attachment_type": notification.attachment_type,
+            "attachment_size": notification.attachment_size,
+        }
+
+    payload = {
+        "event_type": "notification",
+        "event_id": str(uuid.uuid4()),
+        "version": 1,
+        "institution_id": "",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "payload": payload_payload,
+    }
+
+    sent = await board_manager.send_command(board_id, payload)
+    if sent:
+        logger.info(f"🔔 [Admin] Notification {nid} sent to board {board_id}")
+        return {
+            "status": "sent",
+            "notification_id": nid,
+            "board_id": board_id,
+            "board_online": True,
+        }
+    else:
+        board_manager.queue_command(board_id, payload)
+        logger.info(f"🔔 [Admin] Notification {nid} queued for offline board {board_id}")
+        return {
+            "status": "queued",
+            "notification_id": nid,
+            "board_id": board_id,
+            "board_online": False,
+        }
+
 app.include_router(admin_router)
+
+# --- Resource Endpoints (stub — return empty lists until R2 integration) ---
+@app.get("/api/v1/resources/my")
+async def get_my_resources(
+    session_id: str = "",
+    section_id: str = "",
+    course_name: str = "",
+):
+    return []
+
+@app.get("/api/v1/resources/college")
+async def get_college_resources(
+    course_name: str = "",
+):
+    return []
 
 # --- Faculty Control ---
 @app.post("/v1/board/session/create", dependencies=[Depends(AuthService.require_role(["faculty", "admin"]))])

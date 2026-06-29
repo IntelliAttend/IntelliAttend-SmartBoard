@@ -1,0 +1,230 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Release Workflow — IntelliAttend SmartBoard
+#
+# Triggered when a tag matching `v*` is pushed. Builds a Windows MSI release,
+# uploads it as a GitHub Release artifact, and generates a version manifest
+# that boards can poll to discover the update.
+#
+# Required repository secrets:
+#   - WIX_SIGN_CERT_BASE64   Base64-encoded Authenticode signing certificate
+#   - WIX_SIGN_PASSWORD       Certificate password
+#
+# ── Workflow ────────────────────────────────────────────────────────────────
+#   1. Checkout + install Flutter
+#   2. Build `flutter build windows --release`
+#   3. Package MSI via candle + light (WiX Toolset)
+#   4. Authenticode-sign the MSI (if cert present)
+#   5. Compute SHA-256
+#   6. Upload MSI + SHA-256 as release assets
+#   7. Publish version manifest (latest.json)
+#   8. Create GitHub Release
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # e.g. v5.5.0, v5.5.1
+
+  # Allow manual trigger from the Actions tab for emergency hotfixes.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v5.5.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write   # required by softprops/action-gh-release to create releases
+
+env:
+  APP_NAME: IntelliAttendSmartBoard
+  BUILD_CONFIG: release
+
+jobs:
+  build:
+    name: Build Windows MSI
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate version tag
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if (-not ($tag -match '^v\d+\.\d+\.\d+')) {
+            Write-Host "Tag '$tag' does not match vX.Y.Z — aborting"
+            exit 1
+          }
+          Write-Host "Building version: $tag"
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Run analyzer
+        run: dart analyze lib/
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Create .env file from secrets
+        shell: pwsh
+        run: |
+@"
+API_BASE_URL=${{ vars.API_BASE_URL || 'https://api-dev.balaseetharamanjaneyulu.com' }}
+LOCAL_API_URL=http://127.0.0.1:8000/v1/board/telemetry
+FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}
+FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID || 'intelliattend-a2564' }}
+FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}
+FIREBASE_MESSAGING_SENDER_ID=${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
+ENABLE_DOCUMENTS=true
+"@ | Out-File -FilePath .env -Encoding UTF8
+        Write-Host ".env created for production build"
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Verify build output
+        shell: pwsh
+        run: |
+          $exe = "build\windows\x64\runner\Release\${{ env.APP_NAME }}.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Host "ERROR: Build output not found at $exe" -Foreground Red
+            exit 1
+          }
+          Write-Host "Build output size: $((Get-Item $exe).Length / 1MB) MB"
+
+      - name: Setup WiX Toolset
+        shell: pwsh
+        run: |
+          # WiX Toolset v3 is available via Chocolatey.
+          # Install if not already present.
+          $wixPath = "$env:WIX"
+          if (-not (Test-Path "$wixPath\bin\candle.exe")) {
+            choco install wixtoolset --no-progress -y
+          }
+          $wixPath = "$env:WIX"
+          Write-Host "WiX installed at: $wixPath"
+          Write-Host "candle: $(Get-Command "$wixPath\bin\candle.exe" | Select-Object -ExpandProperty Source)"
+          Write-Host "light:  $(Get-Command "$wixPath\bin\light.exe" | Select-Object -ExpandProperty Source)"
+
+      - name: Package MSI
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          $buildDir = "build\windows\x64\runner\Release"
+          $installerDir = "windows\installer"
+
+          # Build the MSI
+          Push-Location $installerDir
+
+          # Compile .wxs to .wixobj
+          & "$env:WIX\bin\candle.exe" `
+            -dAppName="${{ env.APP_NAME }}" `
+            -dVersion="$version" `
+            -dSourceDir="..\..\$buildDir" `
+            product.wxs `
+            -out product.wixobj
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # Link .wixobj to .msi
+          & "$env:WIX\bin\light.exe" `
+            -ext WixUIExtension `
+            product.wixobj `
+            -out "..\..\$buildDir\${{ env.APP_NAME }}-$version.msi"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Pop-Location
+
+          $msi = "$buildDir\${{ env.APP_NAME }}-$version.msi"
+          if (-not (Test-Path $msi)) {
+            Write-Host "ERROR: MSI not created at $msi" -Foreground Red
+            exit 1
+          }
+
+          $msiSize = (Get-Item $msi).Length / 1MB
+          Write-Host "MSI created: $msi ($([math]::Round($msiSize, 2)) MB)"
+
+      - name: Compute SHA-256
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          $buildDir = "build\windows\x64\runner\Release"
+          $msi = "$buildDir\${{ env.APP_NAME }}-$version.msi"
+
+          $hash = (Get-FileHash -Path $msi -Algorithm SHA256).Hash.ToLower()
+          Write-Host "SHA-256: $hash"
+
+          # Write hash file
+          $hashFile = "$buildDir\${{ env.APP_NAME }}-$version.sha256"
+          $hash | Out-File -FilePath $hashFile -NoNewline
+          Write-Host "Hash written to: $hashFile"
+
+          # Write as step output for later use
+          "sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        id: hash
+
+      - name: Create version manifest
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          $sha256 = "${{ steps.hash.outputs.sha256 }}"
+
+          $manifest = @{
+            latest_version = $version
+            download_url    = "https://github.com/${{ github.repository }}/releases/download/$tag/${{ env.APP_NAME }}-$version.msi"
+            sha256          = $sha256
+            release_date    = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
+            force           = $false
+            rollout_percentage = 100
+            minimum_version = $version
+            release_notes   = "See ${{ github.server_url }}/${{ github.repository }}/releases/tag/$tag"
+          }
+
+          $manifestPath = "build\windows\x64\runner\Release\latest.json"
+          $manifest | ConvertTo-Json | Out-File -FilePath $manifestPath -Encoding UTF8
+          Write-Host "Manifest created: $manifestPath"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-${{ github.ref_name }}
+          path: |
+            build\windows\x64\runner\Release\*.msi
+            build\windows\x64\runner\Release\*.sha256
+            build\windows\x64\runner\Release\latest.json
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body: |
+            ## IntelliAttend SmartBoard ${{ github.ref_name }}
+
+            ### Installation
+            Download the MSI below and run it on the classroom board.
+
+            ### Verification
+            SHA-256: `${{ steps.hash.outputs.sha256 }}`
+
+            ### Changelog
+            See the commit history for details.
+          files: |
+            build\windows\x64\runner\Release\*.msi
+            build\windows\x64\runner\Release\*.sha256
+            build\windows\x64\runner\Release\latest.json
+          draft: false
+          prerelease: false

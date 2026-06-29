@@ -26,6 +26,11 @@ import 'services/sync_manager.dart';
 import 'services/timetable_cache.dart';
 import 'services/time_sync_service.dart';
 import 'services/notification_listener_service.dart';
+import 'services/auto_updater.dart';
+import 'services/remote_config_service.dart';
+import 'services/update_checker.dart';
+import 'services/update_health_monitor.dart';
+import 'core/utils/version.dart';
 import 'package:provider/provider.dart';
 import 'data/repositories/auth_repository.dart';
 import 'data/repositories/device_repository.dart';
@@ -34,8 +39,8 @@ import 'presentation/providers/registration_provider.dart';
 import 'presentation/widgets/shutdown_countdown_overlay.dart';
 import 'presentation/widgets/emergency_overlay.dart';
 import 'presentation/widgets/priority_one_overlay.dart';
+import 'presentation/widgets/update_overlay.dart';
 import 'core/platform/power_command_service.dart';
-import 'services/websocket_service.dart';
 
 /// Global kill switch: tracks Ctrl+Shift+JJJ sequence from any screen.
 /// When triggered, releases kiosk mode and navigates to BootScreen.
@@ -142,6 +147,25 @@ void main(List<String> args) {
     _traceStartup(
         'startupGuard: crashLoop=${startupGuard.crashLoopDetected} autoStart=${startupGuard.isAutoStart} failures=${startupGuard.failedLaunches}');
     if (startupGuard.crashLoopDetected) {
+      // ── Version-aware rollback check ──────────────────────────────────
+      // Before declaring total failure, check if this crash loop was
+      // caused by a newly installed version. If so, [UpdateHealthMonitor]
+      // will transparently roll back to the previous known-good version
+      // and restart the app.
+      try {
+        final info = await PackageInfo.fromPlatform();
+        final currentVer = Version.parse('${info.version}+${info.buildNumber}');
+        final rollbackInitiated = await UpdateHealthMonitor.init(currentVer);
+        if (rollbackInitiated) {
+          // UpdateHealthMonitor._performRollback exits the process.
+          // If we get here, rollback failed — fall through to failure screen.
+          Log.e('[Startup] Rollback was initiated but did not exit — '
+              'proceeding to failure screen.');
+        }
+      } catch (e) {
+        Log.e('[Startup] Rollback check failed: $e');
+      }
+
       await _initWindow();
       await KioskService.forceRelease();
       runApp(InitFailureScreen(message: startupGuard.message));
@@ -447,16 +471,20 @@ Future<void> _initWindow() async {
     if (!kIsWeb &&
         (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
       await windowManager.ensureInitialized();
+
+      // Set initial window to 1920×1080 (the most common kiosk resolution)
+      // so Flutter's MediaQuery has correct logical dimensions from the
+      // very first frame.  Without explicit sizing, the window opens at a
+      // default 800×600 and switching to fullscreen moments later can
+      // leave MediaQuery with stale dimensions on certain Windows
+      // DPI / multi-monitor configurations — causing stretched / clipped
+      // layouts.
       final windowReady = Completer<void>();
       windowManager.waitUntilReadyToShow(
-        // Create as a normal windowed frame — fullscreen kiosk mode is
-        // applied later by KioskService.setMode() AFTER Tier-1 plugin
-        // init succeeds (see main() above). This ordering ensures that
-        // if a native C++ exception is thrown during plugin init, the
-        // window exits cleanly and DWM recovers naturally instead of
-        // leaving the desktop frozen with a hidden taskbar and no visible
-        // window.
         WindowOptions(
+          size: const Size(1920, 1080),
+          minimumSize: const Size(800, 600),
+          center: true,
           titleBarStyle: TitleBarStyle.hidden,
           skipTaskbar: false,
           backgroundColor: AppColors.bgLight,
@@ -507,6 +535,15 @@ Future<void> _initTier2() async {
     TimeSyncService.init,
     timeout: const Duration(seconds: 3),
   );
+
+  // Restore cached remote config from SharedPreferences so feature flags
+  // are available before the first heartbeat completes. This is a fast,
+  // non-blocking read — typically <5 ms.
+  await _tryInit(
+    'Remote Config',
+    RemoteConfigService.init,
+    timeout: const Duration(seconds: 2),
+  );
 }
 
 // ─── TIER 3: Fire-and-forget (non-blocking) ──────────────────────────────
@@ -528,20 +565,6 @@ void _initTier3() {
 /// and if multiple services touch native platform channels simultaneously
 /// during startup the Flutter engine can lose its connection.
 Future<void> startBackgroundProtocols() async {
-  // TEMP DEMO: auto-trigger shutdown overlay after 6 seconds
-  // regardless of registration state, so you can see the UI even in debug mode.
-  Future.delayed(const Duration(seconds: 6), () {
-    PowerCommandService().handleSystemCommand(
-      SystemCommandEvent(
-        command: 'shutdown',
-        delaySeconds: 60,
-        reason: 'End of day — scheduled shutdown',
-        commandId: 'demo-cmd-001',
-        issuedAt: DateTime.now(),
-      ),
-    );
-  });
-
   try {
     final registration = await globalDeviceRepository.getRegistration();
     if (registration == null) return;
@@ -549,6 +572,19 @@ Future<void> startBackgroundProtocols() async {
     final queryId = registration.classroomId ?? registration.smartBoardId;
     SyncManager().init(queryId);
     final boardId = registration.smartBoardId;
+
+    // Initialise the auto-update subsystem. [AutoUpdater.init] reads the
+    // current installed version; [UpdateChecker.start] begins polling the
+    // server manifest (already cached by [RemoteConfigService.init]) so
+    // any pending forced update is caught within seconds of launch.
+    await AutoUpdater.init(boardId: boardId);
+
+    // Initialise the update health monitor with the current version. This
+    // detects whether this is the first launch after an update and tracks
+    // crash loops that are specific to the new version.
+    await UpdateHealthMonitor.init(AutoUpdater.installedVersion);
+
+    UpdateChecker.start();
 
     TimetableCache()
         .updateAll(await globalDeviceRepository.getWeeklyTimeline());
@@ -567,6 +603,11 @@ Future<void> startBackgroundProtocols() async {
 
     Log.i(
         '🚀 [Protocols] Background Synchronization, Countdown Watchers, Window Orchestrator, and Time Sync active.');
+
+    // Mark the startup as successful for the update health monitor. After
+    // N consecutive successful starts, the current version is considered
+    // "stable" and the rollback backup is deleted.
+    await UpdateHealthMonitor.markStartupSuccessful();
   } catch (e) {
     Log.e('❌ [Protocols] Background initialization failed: $e');
   } finally {
@@ -696,9 +737,11 @@ class IntelliAttendApp extends StatelessWidget {
       themeMode: ThemeMode.light,
       home: const BootScreen(),
       builder: (context, child) {
-        return EmergencyOverlay(
-          child: PriorityOneOverlay(
-            child: ShutdownCountdownOverlay(child: child!),
+        return UpdateOverlay(
+          child: EmergencyOverlay(
+            child: PriorityOneOverlay(
+              child: ShutdownCountdownOverlay(child: child!),
+            ),
           ),
         );
       },

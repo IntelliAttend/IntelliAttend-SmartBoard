@@ -136,10 +136,10 @@ void main() {
       });
     });
 
-    // ── setMode — absoluteLocked ──────────────────────────────────────────
-    group('absoluteLocked', () {
-      test('absoluteLocked: alwaysOnTop → show → focus → fullscreen', () async {
-        await KioskService.setMode(KioskMode.absoluteLocked);
+    // ── setMode — locked ──────────────────────────────────────────────────
+    group('locked', () {
+      test('locked: alwaysOnTop → show → focus → fullscreen', () async {
+        await KioskService.setMode(KioskMode.locked);
 
         expect(channelCalls, containsAllInOrder([
           'setResizable',
@@ -178,7 +178,7 @@ void main() {
 
         final results = await Future.wait([
           KioskService.setMode(KioskMode.locked),
-          KioskService.setMode(KioskMode.absoluteLocked),
+          KioskService.setMode(KioskMode.locked),
           KioskService.setMode(KioskMode.suspended),
         ]);
 
@@ -319,7 +319,7 @@ void main() {
     // ── onWindowMinimize ──────────────────────────────────────────────────
     group('onWindowMinimize', () {
       test('blocks minimize during absoluteLocked', () async {
-        await KioskService.setMode(KioskMode.absoluteLocked);
+        await KioskService.setMode(KioskMode.locked);
         channelCalls.clear();
         channelArgs.clear();
 

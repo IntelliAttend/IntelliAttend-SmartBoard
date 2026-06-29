@@ -112,17 +112,72 @@ class TimetableScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 24),
-              Container(width: 1, height: 40, color: Colors.grey.withValues(alpha: 0.2)),
+              Container(width: 1, height: 60, color: Colors.grey.withValues(alpha: 0.2)),
               const SizedBox(width: 24),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(entry.courseName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                    Text(
-                      (entry.facultyName.contains('@') ? entry.facultyName.split('@')[0].replaceAll('_', ' ').toUpperCase() : entry.facultyName.toUpperCase()),
-                      style: const TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.w500)
+                    Row(
+                      children: [
+                        Text(entry.courseName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                        if (entry.subjectCode.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.04),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              entry.subjectCode,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: isDark ? Colors.white60 : Colors.black54,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Text(
+                          (entry.facultyName.contains('@') ? entry.facultyName.split('@')[0].replaceAll('_', ' ').toUpperCase() : entry.facultyName.toUpperCase()),
+                          style: const TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.w500)
+                        ),
+                        if (entry.sectionName.isNotEmpty) ...[
+                          const SizedBox(width: 12),
+                          Text(
+                            entry.sectionName.toUpperCase(),
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.primaryTeal.withValues(alpha: 0.7),
+                            ),
+                          ),
+                        ],
+
+                      ],
+                    ),
+                    if (entry.roomNumber.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(Icons.meeting_room_outlined, size: 14, color: isDark ? Colors.white38 : Colors.black38),
+                          const SizedBox(width: 4),
+                          Text(
+                            entry.roomNumber,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isDark ? Colors.white38 : Colors.black38,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),

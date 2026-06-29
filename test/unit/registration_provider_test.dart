@@ -18,7 +18,7 @@ class _MockDeviceRepository implements IDeviceRepository {
   @override Future<void> clearRegistration() async { _registration = null; }
   @override Future<void> performMigrationBridge() async {}
   @override Future<void> sendHeartbeat({required String smartBoardId, required String hardwareId, required String screenState, required int uptimeSeconds, required String appVersion}) async {}
-  @override Future<void> syncTimetable({bool fullSync = false}) async {}
+  @override Future<void> hydrateFromServer() async {}
   @override Future<List<TimetableEntry>> getTodayTimeline() async => [];
   @override Future<List<TimetableEntry>> getWeeklyTimeline() async => [];
   @override Future<TimetableEntry?> getCurrentSlot() async => null;
@@ -37,7 +37,7 @@ class _MockAuthRepository implements IAuthRepository {
   @override Future<Map<String, dynamic>?> login(String boardId, String password) async => _loginResult;
   @override Future<Map<String, dynamic>?> initiateRegistration(String boardId, String password) async => _initResult;
   @override Future<Map<String, dynamic>?> verifyOtp(String boardId, String otp) async => null;
-  @override Future<Map<String, dynamic>?> completeRegistration(String boardId, String hardwareId, String verificationToken) async => null;
+  @override Future<Map<String, dynamic>?> completeRegistration(String boardId, String hardwareId, String verificationToken, {Map<String, dynamic>? metadata}) async => null;
   @override Future<void> saveRegistration(Map<String, dynamic> profile, Isar isar, {String? hardwareId}) async {
     _savedProfile = profile;
     saveRegistrationCallCount++;

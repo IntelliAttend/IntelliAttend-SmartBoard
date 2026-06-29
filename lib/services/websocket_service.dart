@@ -4,6 +4,10 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../core/platform/power_command_service.dart';
 import '../core/utils/logger.dart';
+import '../models/notification_event.dart';
+import 'api_service.dart';
+import 'heartbeat_service.dart';
+import 'notification_listener_service.dart';
 import 'session_state_service.dart';
 import 'time_sync_service.dart';
 
@@ -113,16 +117,19 @@ class SessionEndedEvent {
 
 class StudentVerifiedEvent {
   final String studentId;
+  final String studentName;
   final String seat;
 
   StudentVerifiedEvent({
     required this.studentId,
+    this.studentName = '',
     required this.seat,
   });
 
   factory StudentVerifiedEvent.fromJson(Map<String, dynamic> json) {
     return StudentVerifiedEvent(
       studentId: json['student_id'] as String,
+      studentName: json['student_name'] as String? ?? '',
       seat: json['seat'] as String? ?? '',
     );
   }
@@ -170,6 +177,31 @@ class AttendanceUpdatedEvent {
   }
 }
 
+class AttendanceSubmittedEvent {
+  final String sessionId;
+  final int presentCount;
+  final int absentCount;
+  final DateTime timestamp;
+
+  AttendanceSubmittedEvent({
+    required this.sessionId,
+    required this.presentCount,
+    required this.absentCount,
+    required this.timestamp,
+  });
+
+  factory AttendanceSubmittedEvent.fromJson(Map<String, dynamic> json) {
+    return AttendanceSubmittedEvent(
+      sessionId: json['session_id'] as String,
+      presentCount: json['present_count'] as int? ?? 0,
+      absentCount: json['absent_count'] as int? ?? 0,
+      timestamp: json['timestamp'] != null
+          ? DateTime.parse(json['timestamp'] as String)
+          : TimeSyncService.timeNow,
+    );
+  }
+}
+
 class WebsocketService {
   static const Duration connectTimeout = Duration(seconds: 5);
   static const Duration pingInterval = Duration(seconds: 30);
@@ -182,7 +214,6 @@ class WebsocketService {
   bool _disposed = false;
   String? _sessionId;
   String? _boardId;
-  String? _accessToken;
   StreamSubscription? _messageSubscription;
 
   bool _isWaitingForFullSync = false;
@@ -200,8 +231,16 @@ class WebsocketService {
       StreamController<StudentVerifiedEvent>.broadcast();
   final StreamController<AttendanceUpdatedEvent> _attendanceUpdatedController =
       StreamController<AttendanceUpdatedEvent>.broadcast();
+  final StreamController<AttendanceSubmittedEvent> _attendanceSubmittedController =
+      StreamController<AttendanceSubmittedEvent>.broadcast();
   final StreamController<SystemCommandEvent> _systemCommandController =
       StreamController<SystemCommandEvent>.broadcast();
+
+  final StreamController<NotificationEvent> _notificationEventController =
+      StreamController<NotificationEvent>.broadcast();
+
+  Stream<NotificationEvent> get onNotificationEvent =>
+      _notificationEventController.stream;
 
   Stream<FullStateSync> get onFullStateSync => _syncController.stream;
   Stream<AttendanceMarkedEvent> get onAttendanceMarked =>
@@ -213,6 +252,8 @@ class WebsocketService {
       _studentVerifiedController.stream;
   Stream<AttendanceUpdatedEvent> get onAttendanceUpdated =>
       _attendanceUpdatedController.stream;
+  Stream<AttendanceSubmittedEvent> get onAttendanceSubmitted =>
+      _attendanceSubmittedController.stream;
   Stream<SystemCommandEvent> get onSystemCommand =>
       _systemCommandController.stream;
   bool get isConnected => _channel != null;
@@ -221,18 +262,16 @@ class WebsocketService {
 
   WebsocketService(this._host);
 
-  Future<void> connectSmartBoard(String boardId, String accessToken) async {
+  Future<void> connectSmartBoard(String boardId, [String? accessToken]) async {
     if (_disposed) return;
-    _accessToken = accessToken;
     _boardId = boardId;
     _sessionId = null;
     _reconnectAttempt = 0;
     await _doConnect();
   }
 
-  Future<void> connectAttendance(String sessionId, String accessToken) async {
+  Future<void> connectAttendance(String sessionId, [String? accessToken]) async {
     if (_disposed) return;
-    _accessToken = accessToken;
     _sessionId = sessionId;
     _reconnectAttempt = 0;
     await _doConnect();
@@ -241,25 +280,32 @@ class WebsocketService {
   Future<void> _doConnect() async {
     if (_disposed) return;
 
-    final token = _accessToken;
-    if (token == null || token.isEmpty) {
-      Log.w('[WS] No access token available scheduling reconnect');
-      _scheduleReconnect();
-      return;
-    }
-
     try {
-      String queryParams;
+      String path;
       if (_sessionId != null) {
-        queryParams = 'session_id=$_sessionId';
+        path = '/api/v1/websocket/session/$_sessionId';
       } else if (_boardId != null) {
-        queryParams = 'board_id=$_boardId';
+        path = '/api/v1/websocket/board/$_boardId';
       } else {
         Log.w('[WS] No board ID or session ID available');
         _scheduleReconnect();
         return;
       }
-      final wsUrl = '$_host/ws?$queryParams&token=$token';
+
+      final ticketData = await ApiService.getWebSocketTicket();
+      if (ticketData == null) {
+        Log.w('[WS] Failed to obtain WebSocket ticket, scheduling reconnect');
+        _scheduleReconnect();
+        return;
+      }
+      final ticket = ticketData['ticket'] as String?;
+      if (ticket == null || ticket.isEmpty) {
+        Log.w('[WS] Invalid ticket from server, scheduling reconnect');
+        _scheduleReconnect();
+        return;
+      }
+
+      final wsUrl = '$_host$path?ticket=$ticket';
       final wsUri = Uri.parse(wsUrl)
           .replace(scheme: wsUrl.startsWith('https') ? 'wss' : 'ws');
 
@@ -276,6 +322,12 @@ class WebsocketService {
       _isWaitingForFullSync = true;
       _connectionStateController.add(true);
       _sessionState.setConnected(true);
+      HeartbeatService.setWsConnected(true);
+
+      // Re-acknowledge dismissed notifications on reconnect (§4.3)
+      if (_reconnectAttempt > 0) {
+        NotificationListenerService().reAcknowledgeDismissed();
+      }
       _reconnectAttempt = 0;
       _startPingTimer();
 
@@ -300,6 +352,21 @@ class WebsocketService {
         },
         cancelOnError: false,
       );
+
+      // Wait for the WebSocket connection to be established.
+      // In web_socket_channel 3.x, connection errors only surface
+      // through the .ready future (not the public stream, due to
+      // allowForeignErrors: false).  If we don't await .ready, the
+      // unhandled Future error propagates to runZonedGuarded and
+      // triggers KioskService.forceRelease(), breaking fullscreen.
+      try {
+        await _channel!.ready;
+      } catch (e) {
+        Log.e('[WS] Connection ready error: $e');
+        _cleanup();
+        _scheduleReconnect();
+        return;
+      }
     } catch (e) {
       Log.e('[WS] Connection failed: $e');
       _cleanup();
@@ -313,6 +380,20 @@ class WebsocketService {
     } catch (e) {
       Log.w('[WS] Send failed: $e');
     }
+  }
+
+  void submitAttendance({
+    required String sessionId,
+    required List<String> presentEmails,
+    required List<String> absentEmails,
+  }) {
+    send({
+      'type': 'attendance_submit',
+      'session_id': sessionId,
+      'present_emails': presentEmails,
+      'absent_emails': absentEmails,
+    });
+    Log.i('[WS] attendance_submit sent: ${presentEmails.length} present, ${absentEmails.length} absent');
   }
 
   void _startPingTimer() {
@@ -329,9 +410,22 @@ class WebsocketService {
   void _handleMessage(dynamic rawMessage) {
     try {
       final Map<String, dynamic> message = jsonDecode(rawMessage as String);
+
+      // Check for notification events (contract v1 format)
+      final eventType = message['event_type'] as String?;
+      if (eventType == 'notification') {
+        _handleNotificationEvent(message);
+        return;
+      }
+
       final type = message['type'] as String?;
 
       if (type == 'pong' || type == 'heartbeat') return;
+
+      if (type == 'board_connected') {
+        _handleBoardConnected(message);
+        return;
+      }
 
       switch (type) {
         case 'full_state_sync':
@@ -387,6 +481,17 @@ class WebsocketService {
           Log.i('[WS] attendance_updated: ${event.present} present ${event.absent} absent');
           break;
 
+        case 'attendance_submitted':
+        case 'attendance_submit_ack':
+          final event = AttendanceSubmittedEvent.fromJson(message);
+          _attendanceSubmittedController.add(event);
+          Log.i('[WS] $type: ${event.presentCount} present ${event.absentCount} absent');
+          break;
+
+        case 'attendance_submit_error':
+          Log.e('[WS] attendance_submit_error: ${message['error']}');
+          break;
+
         case 'student_verified':
           final event = StudentVerifiedEvent.fromJson(message);
           _sessionState.notifyStudentVerified(event.seat);
@@ -416,6 +521,38 @@ class WebsocketService {
     } catch (e) {
       Log.w('[WS] Failed to parse message: $e $rawMessage');
     }
+  }
+
+  void _handleNotificationEvent(Map<String, dynamic> message) {
+    try {
+      final event = NotificationEvent.fromJson(message);
+      Log.i('[WS] Notification event: ${event.payload.displayMode} '
+          'id=${event.payload.notificationId} title=${event.payload.title}');
+
+      // Route through the notification listener service
+      NotificationListenerService().handleNotificationEvent(event);
+      _notificationEventController.add(event);
+    } catch (e) {
+      Log.w('[WS] Failed to parse notification event: $e');
+    }
+  }
+
+  void _handleBoardConnected(Map<String, dynamic> message) {
+    final boardId = message['board_id'] as String? ?? '';
+    Log.i('[WS] board_connected: $boardId — discovering active session');
+
+    // §4 — Check for an active session and auto-join via WebSocket.
+    ApiService.getActiveSession().then((session) {
+      if (session['active'] == true) {
+        final sid = session['session_id'] as String?;
+        if (sid != null && sid.isNotEmpty) {
+          Log.i('[WS] Active session found: $sid — sending join_session');
+          send({'type': 'join_session', 'session_id': sid});
+        }
+      } else {
+        Log.d('[WS] No active session on connect');
+      }
+    });
   }
 
   void _handleFullStateSync(Map<String, dynamic> message) {
@@ -490,6 +627,7 @@ class WebsocketService {
     _pendingAttendanceEvents.clear();
     _connectionStateController.add(false);
     _sessionState.setConnected(false);
+    HeartbeatService.setWsConnected(false);
   }
 
   void disconnect() {
@@ -508,6 +646,8 @@ class WebsocketService {
     _connectionStateController.close();
     _studentVerifiedController.close();
     _attendanceUpdatedController.close();
+    _attendanceSubmittedController.close();
     _systemCommandController.close();
+    _notificationEventController.close();
   }
 }

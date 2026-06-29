@@ -131,6 +131,10 @@ class ApiService {
           response = await _client
               .post(uri, headers: mergedHeaders, body: body)
               .timeout(timeout);
+        } else if (method == 'PATCH') {
+          response = await _client
+              .patch(uri, headers: mergedHeaders, body: body)
+              .timeout(timeout);
         } else {
           throw Exception('Unsupported HTTP method: $method');
         }
@@ -257,10 +261,26 @@ class ApiService {
       body: jsonEncode({'otp': otp}),
     );
 
-    if (response.statusCode != 200) {
-      throw _apiError('Session initiation', response);
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
     }
-    return jsonDecode(response.body) as Map<String, dynamic>;
+
+    // Session-initiation errors are session-level, NOT device-registration
+    // errors.  Do NOT route through _apiError (which maps 404 →
+    // UnregisteredException) — that would wipe local registration and force
+    // re-registration for a transient session issue.
+    String? serverMessage;
+    try {
+      final data = jsonDecode(response.body);
+      serverMessage = data['message']?.toString() ??
+          data['error']?.toString() ??
+          data['error_code']?.toString();
+    } catch (_) {}
+
+    final userMessage =
+        serverMessage ?? _userFriendlyMessage(response.statusCode);
+    Log.e('Session initiation failed (${response.statusCode}): $userMessage');
+    throw ApiException(userMessage, response.statusCode);
   }
 
   // ─── Recovery & Boot (Session Orchestration) ────────────────────────────
@@ -320,6 +340,24 @@ class ApiService {
     if (response.statusCode != 200) throw _apiError('Vault sync', response);
   }
 
+  static Future<void> submitAttendance({
+    required String sessionId,
+    required List<String> presentEmails,
+    required List<String> absentEmails,
+  }) async {
+    final response = await _request(
+      'POST',
+      'api/v1/board/session/attendance/submit',
+      headers: await _authHeaders(),
+      body: jsonEncode({
+        'session_id': sessionId,
+        'present_emails': presentEmails,
+        'absent_emails': absentEmails,
+      }),
+    );
+    if (response.statusCode != 200) throw _apiError('Attendance submit', response);
+  }
+
   static Future<void> terminateSession(String sessionId) async {
     final response = await _request(
       'POST',
@@ -370,6 +408,24 @@ class ApiService {
   }
 
   // ─── WebSocket Ticket (v2.0) ─────────────────────────────────────────────
+
+  /// Check if there is an active attendance session for this board.
+  /// Called right after WS receives `board_connected` (§4).
+  static Future<Map<String, dynamic>> getActiveSession() async {
+    try {
+      final response = await _request(
+        'GET',
+        'api/v1/board/active-session',
+        headers: await _authHeaders(),
+      );
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      Log.w('[ApiService] getActiveSession failed: $e');
+    }
+    return {'active': false, 'session_id': null, 'status': null};
+  }
 
   static Future<Map<String, dynamic>?> getWebSocketTicket() async {
     final headers = await _authHeaders();
@@ -532,6 +588,179 @@ class ApiService {
     );
     if (response.statusCode != 200 && response.statusCode != 401) {
       throw _apiError('Deregistration', response);
+    }
+  }
+
+  // ─── Resource / R2 Storage Operations ─────────────────────────────────────
+
+  /// Fetch faculty's personal resources for the current session from R2.
+  /// Returns a list of resource maps with R2 presigned URLs.
+  static Future<List<Map<String, dynamic>>> getMyResources({
+    required String sessionId,
+    String? sectionId,
+    String? courseName,
+  }) async {
+    final queryParams = <String, String>{
+      'session_id': sessionId,
+    };
+    if (sectionId != null && sectionId.isNotEmpty) {
+      queryParams['section_id'] = sectionId;
+    }
+    if (courseName != null && courseName.isNotEmpty) {
+      queryParams['course'] = courseName;
+    }
+
+    final response = await _request(
+      'GET',
+      'api/v1/resources/my',
+      headers: await _authHeaders(),
+      queryParameters: queryParams,
+    );
+
+    if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body);
+      final raw = decoded is List
+          ? decoded
+          : (decoded[ApiSchema.responseData] as List? ?? []);
+      return raw.cast<Map<String, dynamic>>();
+    }
+    if (response.statusCode == 404) {
+      Log.d('[ApiService] No personal resources for session $sessionId');
+      return [];
+    }
+    throw _apiError('My resources fetch', response);
+  }
+
+  /// Fetch college-wide / departmental resources from R2.
+  static Future<List<Map<String, dynamic>>> getCollegeResources({
+    String? courseName,
+  }) async {
+    final queryParams = <String, String>{};
+    if (courseName != null && courseName.isNotEmpty) {
+      queryParams['course'] = courseName;
+    }
+
+    final response = await _request(
+      'GET',
+      'api/v1/resources/college',
+      headers: await _authHeaders(),
+      queryParameters: queryParams.isNotEmpty ? queryParams : null,
+    );
+
+    if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body);
+      final raw = decoded is List
+          ? decoded
+          : (decoded[ApiSchema.responseData] as List? ?? []);
+      return raw.cast<Map<String, dynamic>>();
+    }
+    if (response.statusCode == 404) {
+      Log.d('[ApiService] No college resources available');
+      return [];
+    }
+    throw _apiError('College resources fetch', response);
+  }
+
+  // ─── Update Status Reporting ───────────────────────────────────────────
+  //
+  // Boards send update success/failure/rollback events to the server so the
+  // admin dashboard can track per-board version status. These calls are
+  // fire-and-forget (failures are logged but not retried).
+
+  /// Report the outcome of a binary auto-update.
+  ///
+  /// Payload:
+  /// ```json
+  /// {
+  ///   "current_version": "5.5.0",
+  ///   "previous_version": "5.4.0",
+  ///   "status": "completed" | "failed" | "rolled_back",
+  ///   "stable_startups": 3,
+  ///   "rollback_count": 0
+  /// }
+  /// ```
+  static Future<void> reportUpdateStatus({
+    required String currentVersion,
+    required String previousVersion,
+    required String status,
+    required int stableStartups,
+    required int rollbackCount,
+  }) async {
+    try {
+      await _request(
+        'POST',
+        'api/v1/board/update-status',
+        headers: await _authHeaders(),
+        body: jsonEncode({
+          'current_version': currentVersion,
+          'previous_version': previousVersion,
+          'status': status,
+          'stable_startups': stableStartups,
+          'rollback_count': rollbackCount,
+          'timestamp': TimeSyncService.timeNow.toUtc().toIso8601String(),
+        }),
+        maxRetries: 1, // best-effort only
+      );
+    } catch (e) {
+      Log.d('[ApiService] Update status report failed (non-critical): $e');
+    }
+  }
+
+  // ─── Notification Operations ────────────────────────────────────────────
+
+  /// Fetch all notifications for this board (REST fallback / history).
+  /// Called on boot via [NotificationListenerService.forceSync] and on
+  /// pull-to-refresh.  Returns an empty list on error or 404.
+  static Future<List<Map<String, dynamic>>> getNotifications() async {
+    try {
+      final response = await _request(
+        'GET',
+        'api/v1/board/notifications',
+        headers: await _authHeaders(),
+        maxRetries: 1,
+      );
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        final raw = decoded is List
+            ? decoded
+            : (decoded[ApiSchema.responseData] as List? ?? []);
+        return raw.cast<Map<String, dynamic>>();
+      }
+      Log.w('[ApiService] getNotifications returned ${response.statusCode}');
+    } catch (e) {
+      Log.d('[ApiService] getNotifications failed (non-critical): $e');
+    }
+    return [];
+  }
+
+  /// Acknowledge a notification (compliance/audit trail for emergency/P1).
+  /// Called when the user taps dismiss on a full_screen or overlay notification.
+  static Future<bool> acknowledgeNotification(String notificationId) async {
+    try {
+      final response = await _request(
+        'PATCH',
+        'api/v1/user/notifications/$notificationId/acknowledge',
+        headers: await _authHeaders(),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      Log.w('[ApiService] Acknowledge notification failed: $e');
+      return false;
+    }
+  }
+
+  /// Mark a P3/default notification as read.
+  static Future<bool> markNotificationRead(String notificationId) async {
+    try {
+      final response = await _request(
+        'PATCH',
+        'api/v1/user/notifications/$notificationId/read',
+        headers: await _authHeaders(),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      Log.w('[ApiService] Mark notification read failed: $e');
+      return false;
     }
   }
 

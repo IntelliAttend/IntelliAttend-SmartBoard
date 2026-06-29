@@ -1,5 +1,5 @@
 import 'package:flutter_local_notifications_windows/flutter_local_notifications_windows.dart';
-import 'package:test/test.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:timezone/data/latest_all.dart';
 import 'package:timezone/standalone.dart';
 

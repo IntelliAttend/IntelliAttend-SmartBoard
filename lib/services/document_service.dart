@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import '../core/config/app_config.dart';
@@ -85,6 +86,43 @@ class DocumentService {
       if (await file.exists()) {
         await file.delete();
       }
+      return null;
+    }
+  }
+
+  /// Downloads a document into memory (RAM) without saving to disk.
+  /// Returns the raw bytes, or null on failure.
+  /// Use this for ephemeral viewing where the file should not persist.
+  Future<Uint8List?> loadDocumentBytes(
+    String url, {
+    void Function(double progress)? onProgress,
+  }) async {
+    if (!_initialized) await init();
+
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      final localFile = File(url);
+      if (await localFile.exists()) {
+        Log.i('[DocumentService] Reading local file into memory: $url');
+        return localFile.readAsBytes();
+      }
+      Log.e('[DocumentService] Local file not found: $url');
+      return null;
+    }
+
+    try {
+      Log.i('[DocumentService] Loading into memory: $url');
+      final response = await _dio.get<Uint8List>(
+        url,
+        options: Options(responseType: ResponseType.bytes),
+        onReceiveProgress: (received, total) {
+          if (total > 0 && onProgress != null) {
+            onProgress(received / total);
+          }
+        },
+      );
+      return response.data;
+    } catch (e) {
+      Log.e('[DocumentService] In-memory load failed: $e');
       return null;
     }
   }

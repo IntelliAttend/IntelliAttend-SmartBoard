@@ -25,6 +25,7 @@ class ApiSchema {
 
   // ── Notifications ──────────────────────────────────────────────────────────
 
+  static String get fieldNotificationId => 'notification_id';
   static String get fieldTitle => 'title';
   static String get fieldBody => 'body';
   static String get fieldType => 'type';
@@ -36,6 +37,9 @@ class ApiSchema {
   static String get fieldAttachmentName => 'attachment_name';
   static String get fieldAttachmentType => 'attachment_type';
   static String get fieldAttachmentSize => 'attachment_size';
+  static String get fieldDisplayMode => 'display_mode';
+  static String get fieldRequiresAcknowledgement => 'requires_acknowledgement';
+  static String get fieldDurationSeconds => 'duration_seconds';
   static String get fieldPrecautionarySteps => 'precautionary_steps';
   static String get fieldLocation => 'location';
   static String get fieldSafeExit => 'safe_exit';

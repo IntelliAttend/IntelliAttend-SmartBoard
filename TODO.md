@@ -1,54 +1,134 @@
-# SmartBoard — Pending Work & Considerations
+# SmartBoard — Master Task List
 
-## Completed (This Release)
+> Auto-generated from codebase audit. Last updated: 2026-06-28.
 
-- [x] **TokenManager singleton** — unified token lifecycle (cache → refresh → hard re-auth)
-- [x] **AuthInterceptor 401 replay** — transparent recovery with isolated Dio instance
-- [x] **ApiService `_authHeaders()`** — wraps TokenManager for http.Client stack
-- [x] **HeartbeatService proactive refresh** — force-refresh every 3rd beat (~15 min)
-- [x] **Structured auth exceptions** — `NoCredentialsException`, `InvalidCredentialsException`
-- [x] **Registration flow** — admin login + OTP + hardware binding verified on IASB-4208
-- [x] **Unit tests** — 7/7 passing (cache, dedup, force-refresh, fallback, reset)
-- [x] **Release build** — `flutter build windows --release` (15.5 MB)
-- [x] **Auto-launch** — registered at `HKCU\...\Run` pointing to release exe
+---
 
-## Pending Work
+## 🔴 Server-Side (Backend Team — Python/FastAPI)
 
-### Medium Priority
+| # | Task | Priority | Status | Details |
+|---|------|----------|--------|---------|
+| 1 | **Mount device registration router** in `main.py` | 🔴 Critical | ❌ Open | `from app.api.v1 import device` + `app.include_router(device.router, prefix="/api/v1/device")` |
+| 2 | **Reset board `is_registered` flag** for IASB-4208 | 🔴 Critical | ❌ Open | Firestore doc `smart_boards/IASB-4208` has `is_registered: true` → set to `false` |
+| 3 | **Verify `/device/register/complete` returns `custom_token`** | 🔴 Critical | ❌ Open | App exchanges this via Firebase `signInWithCustomToken` to bind session to hardware |
+| 4 | **Verify `/device/register/login` response shape** | 🟡 Medium | ❌ Open | Must return `{ "is_registered": false, "otp_required": true }` |
+| 5 | **Add WebSocket ticket endpoint** if missing | 🟡 Medium | ❌ Open | `POST /api/v1/websocket/ticket` — returns 10s-expiry ticket for WS auth |
+| 6 | **Implement session pre-flight allocation** | 🟡 Medium | ❌ Open | `GET /api/v1/board/preflight?slot_id=<uuid>` → pre-allocate session ID |
 
-- [ ] **Bundle `.env` with the release binary**
-  The app crashes at startup if `.env` is missing. Current workaround is manual copy.
-  Options: embed `FIREBASE_API_KEY` at build time via `--dart-define`, or bundle `.env` in the installer.
+> **Full contract details:** See `docs/SERVER_SIDE_REQUIREMENTS.md`
 
-- [ ] **Set `SSL_PIN_FINGERPRINT` in `.env` for production**
-  App logs `⚠️ SSL_PIN_FINGERPRINT not set`. Works without it, but production boards should pin to prevent MITM.
-  ```
-  SSL_PIN_FINGERPRINT=sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-  ```
+---
 
-- [ ] **Monitor DPAPI file-lock contention on boot**
-  Observed `flutter_secure_storage.dat` locked by concurrent processes (`errno = 32`).
-  The retry loop (3 attempts) handles it, but if it becomes frequent, consider a mutex or delayed initialization.
+## 🔴 Release & Runtime
 
-### Low Priority
+| # | Task | Priority | Status | Details |
+|---|------|----------|--------|---------|
+| 7 | **Bundle `.env` with release binary** | 🔴 High | ❌ Open | App crashes if `.env` missing. Options: `--dart-define`, embed in installer |
+| 8 | **Fix release build AOT data path** | 🔴 High | ❌ Open | `launch_err.txt`: `Can't load AOT data from .../Release/data/app.so` — file missing |
+| 9 | **Set `SSL_PIN_FINGERPRINT` in `.env`** | 🔴 High | ❌ Open | Production boards need SHA-256 pinning to prevent MITM on classroom network |
 
-- [ ] **Tune WebSocket reconnection behavior**
-  Logs show rapid `[WS] Connection closed / Reconnecting in 1s` cycles.
-  Not blocking (recovers), but excessive chatter may indicate a config mismatch. Worth investigating if real-time attendance updates are affected.
+---
 
-- [ ] **Review startup watchdog timeout (45s)**
-  `[Startup] Watchdog fired — startup not complete after 45s. Releasing kiosk constraints.`
-  On slow hardware or cold boot, kiosk hardening is briefly released. Increase timeout or suppress if false alarms are observed.
+## 🟡 Stability & Known Bugs
 
-- [ ] **Clean up old Isar migration path**
-  The code migrates from `Documents\intelliattend_smartboard\` to `%APPDATA%\com.example\...\`.
-  If a stale old-path database exists, a future factory reset could restore it. Document or remove the migration after N releases.
+| # | Task | Priority | Status | Details |
+|---|------|----------|--------|---------|
+| 10 | **RenderFlex overflow in idle screen** | 🟡 Medium | ✅ Fixed | Row overflows 67px on right. Fix: wrapped title `Text` in `Flexible` with `TextOverflow.ellipsis` |
+| 11 | **WebSocket rapid reconnect cycles** | 🟡 Medium | ❌ Open | Logs show rapid connect/disconnect. Not blocking but noisy |
+| 12 | **DPAPI file-lock contention on boot** | 🟡 Medium | ❌ Open | `flutter_secure_storage.dat` locked by concurrent processes (`errno = 32`). Retry loop handles it |
+| 13 | **Startup watchdog fires at 45s** on slow HW | 🟡 Low | ❌ Open | Briefly releases kiosk constraints. Increase timeout or suppress false alarms |
 
-### Icebox
+---
 
-- [ ] **Board credential provisioning without touchscreen**
-  Currently requires admin login + OTP per board via touchscreen UI.
-  Future: pre-provision `board_email`/`board_password` via config file or QR code scanned at deployment.
+## 🟡 Environment & Config
 
-- [ ] **Automated deployment pipeline**
-  Manual ZIP → copy → extract → run flow. Consider MSI installer or Windows update mechanism.
+| # | Task | Priority | Status | Details |
+|---|------|----------|--------|---------|
+| 14 | **Set real `FIREBASE_APP_ID`** | 🟡 Medium | ⚠️ Placeholder | Get from Firebase Console → Project Settings |
+| 15 | **Set real `FIREBASE_MESSAGING_SENDER_ID`** | 🟡 Low | ⚠️ Placeholder | Get from Firebase Console (only used for logging currently) |
+| 16 | **`FIREBASE_API_KEY` restriction** | 🟡 Medium | ❌ Open | Restrict in Firebase Console to Identity Toolkit + Secure Token APIs only |
+
+---
+
+## 🟡 Dependency Health
+
+| # | Task | Priority | Status | Details |
+|---|------|----------|--------|---------|
+| 17 | **Update 23 outdated packages** | 🟡 Medium | ❌ Open | Run `flutter pub upgrade` |
+| 18 | **Replace 3 discontinued packages** | 🟡 Medium | ❌ Open | `js`, `build_resolvers`, `build_runner_core` are discontinued |
+| 19 | **Fix `local_plugins/` test imports** | 🟢 Low | ❌ Open | Missing `import 'package:flutter_test/flutter_test.dart'` generates 370 analyzer warnings |
+
+---
+
+## 🟡 Security & Hardening
+
+| # | Task | Priority | Status | Details |
+|---|------|----------|--------|---------|
+| 20 | **CI security scanning** | 🟡 Medium | ❌ Open | Integrate CodeQL/Snyk into `.github/workflows/ci.yml` |
+| 21 | **Load test simulation** | 🟡 Medium | ❌ Open | Simulate 1,000 concurrent scans via `scripts/load_test.py` |
+| 22 | **Automated E2E UI tests** | 🟡 Medium | ❌ Open | Add Patrol or IntegrationTest for kiosk UX flows |
+| 23 | **Stale heartbeat alerting** | 🟡 Medium | ❌ Open | Pipe stale heartbeat events to Slack/email |
+| 24 | **Contract validation tests** | 🟢 Low | ❌ Open | Add automated schema alignment tests (Pydantic ↔ Isar) |
+
+---
+
+## 🟡 Time Sync Auto-Correction
+
+| # | Task | Priority | Status | Details |
+|---|------|----------|--------|---------|
+| 25 | **Auto-correct system clock** when skew > 1s | 🟡 Medium | ❌ Open | Call PowerShell `Set-Date` from `time_sync_service.dart` |
+| 26 | **NTP auto-configuration** via `w32tm` | 🟢 Low | ❌ Open | Configure NTP peers on first boot |
+| 27 | **Timezone detection** from server response | 🟢 Low | ❌ Open | Apply IANA → Windows zone via `tzutil` |
+
+---
+
+## 🟡 Hydration Display Gaps (Data Stored But Not Displayed)
+
+| # | Task | Priority | Status | Details |
+|---|------|----------|--------|---------|
+| 28 | **Display `roomNumber` in timeline slot & timetable** | 🟡 Medium | ✅ Fixed | `timeline_slot.dart` + `timetable_screen.dart` show room with icon |
+| 29 | **Display `subjectCode`/`courseCode` in timetable** | 🟡 Medium | ✅ Fixed | Shown as a badge next to course name in timetable screen |
+| 30 | **Display `sectionName` in timetable** | 🟡 Medium | ✅ Fixed | Shown next to faculty name in teal color |
+| 31 | **Display `classType` badge (Lab/Tutorial)** | 🟡 Medium | ✅ Fixed | Color-coded badge (purple for Lab, amber for Tutorial), hidden for Lecture |
+| 32 | **Persist `timezone` from hydration response** | 🟢 Low | ❌ Open | Server returns `timezone` in both profile and top-level payload; not stored |
+
+---
+
+## 🔵 Auto-Update System (Implemented — See `docs/AUTO_UPDATE_STRATEGY.md`)
+
+| # | Task | Priority | Status | Details |
+|---|------|----------|--------|---------|
+| 36 | **Implement `RemoteConfig` model** | 🔵 High | ✅ Done | `lib/models/remote_config.dart` — `RemoteConfig` + `UpdateManifest` with rollout %, SHA-256, force flag |
+| 37 | **Implement `RemoteConfigService`** | 🔵 High | ✅ Done | `lib/services/remote_config_service.dart` — apply, persist to SharedPreferences, serve flags |
+| 38 | **Extend heartbeat to parse `config` block** | 🔵 High | ✅ Done | `heartbeat_service.dart` — parses `config` from heartbeat response, applies, triggers `UpdateChecker` |
+| 39 | **Add feature flag gates to screens** | 🔵 High | ⏳ Pending | Use `RemoteConfigService.isFeatureEnabled()` in idle, timetable, workspace, nav — requires manual gating per screen |
+| 40 | **Implement binary auto-updater** | 🔵 Medium | ✅ Done | `lib/services/auto_updater.dart` — download MSI, SHA-256 verify, msiexec silent install, rollout cohort |
+| 41 | **Add update overlay UI** | 🔵 Medium | ✅ Done | `lib/presentation/widgets/update_overlay.dart` — blurred full-screen overlay with progress bar |
+| 42 | **Add config endpoint to backend** | 🔵 High | ❌ Open | Server must return `config` block in heartbeat response or via `GET /api/v1/board/config` |
+| 43 | **Integrate Shorebird CLI** | 🔵 Low | ❌ Open | `shorebird init`, `shorebird release` for rapid Dart code patches (see strategy doc) |
+| — | **Version utilities** | 🔵 High | ✅ Done | `lib/core/utils/version.dart` — semver parsing and comparison |
+| — | **Update checker (scheduled + event-driven)** | 🔵 High | ✅ Done | `lib/services/update_checker.dart` — periodic timer + heartbeat-triggered check |
+| — | **WiX MSI configuration** | 🔵 Medium | ✅ Done | `windows/installer/product.wxs` — file-based MSI with auto-start, Start Menu shortcut |
+| — | **CI/CD release workflow** | 🔵 High | ✅ Done | `.github/workflows/release.yml` — build MSI, sign, SHA-256, GH Release on `v*` tag push |
+
+---
+
+## 🟢 Cleanup
+
+| # | Task | Priority | Status | Details |
+|---|------|----------|--------|---------|
+| 33 | **Remove stale Isar migration path** | 🟢 Low | ❌ Open | Old path in `session_manager.dart:_migrateFromOldPath()` — migrate from `Documents/` to `%APPDATA%` |
+| 34 | **Update `.env.example`** to match actual `.env` | 🟢 Low | ❌ Open | Missing `FIREBASE_API_KEY`, `FIREBASE_PROJECT_ID`, `ENABLE_DOCUMENTS` |
+| 35 | **Fix test lint warnings** | 🟢 Low | ❌ Open | `avoid_print`, `curly_braces_in_flow_control_structures`, unused vars in test files |
+
+---
+
+## ✅ Recently Completed
+
+- ✅ **Registration flow fixed** — `signInWithCustomToken()` exists, `completeRegistration()` sends metadata + exchanges custom token, `_authHeaders()` uses Firebase token directly
+- ✅ **TokenManager singleton** — unified token lifecycle (cache → refresh → hard re-auth)
+- ✅ **AuthInterceptor 401 replay** — transparent recovery with isolated Dio instance
+- ✅ **Structured auth exceptions** — `NoCredentialsException`, `InvalidCredentialsException`
+- ✅ **RenderFlex overflow in idle screen** — title wrapped in `Flexible`
+- ✅ **Server-side requirements documented** — `docs/SERVER_SIDE_REQUIREMENTS.md`
+- ✅ **Hydration display gaps closed** — `roomNumber`, `subjectCode`, `sectionName`, `classType` now rendered in timeline + timetable UI

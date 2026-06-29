@@ -43,7 +43,7 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
 
   // Runtime session objects — populated on ACTIVE transition
   WebsocketService? _wsService;
-  String _wsAccessToken = '';
+
 
   @override
   void initState() {
@@ -64,27 +64,20 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
         await ApiService.syncTime().catchError((_) => 0);
       }
 
+      // Subscribe to state changes BEFORE applying recovery so we don't
+      // miss the initial event (broadcast streams don't replay).
+      _stateSubscription = _sessionState.onStateChanged.listen((state) {
+        if (!mounted) return;
+        _handleStateChange(state);
+      });
+
+      _boardStateSubscription = _boardState.stateStream.listen((newState) {
+        if (!mounted) return;
+        setState(() => _currentRenderState = newState);
+      });
+
       final stateResponse = await ApiService.getCurrentState();
       if (stateResponse.isNotEmpty && stateResponse['state'] != null) {
-        final stateStr = stateResponse['state'] as String;
-        final half1 = stateResponse['session_secret_half1'] as String?;
-
-        if (stateStr == 'ACTIVE' || stateStr == 'CLOSED') {
-          final sessionId = stateResponse['session_id'] as String? ?? '';
-          String? secret;
-
-          if (half1 != null) {
-            secret = await _deriveSecretFromHalf1(half1);
-          } else {
-            secret = await SecureStorageService.getSessionSecret(sessionId);
-          }
-
-          if (secret != null && stateStr == 'ACTIVE') {
-            _sessionState.storeSessionSecrets(secret,
-                stateResponse['websocket_token'] as String?);
-          }
-        }
-
         _sessionState.applyFromRecovery(stateResponse);
       }
 
@@ -92,7 +85,6 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
         _wsService = WebsocketService(AppConfig.baseUrl);
         await _wsService!.connectSmartBoard(
           widget.registration.smartBoardId,
-          '',
         );
       } catch (e) {
         Log.w('[Orchestrator] WS connect failed: $e');
@@ -100,16 +92,6 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
     } catch (e) {
       Log.w('[Orchestrator] Boot recovery failed: $e');
     }
-
-    _stateSubscription = _sessionState.onStateChanged.listen((state) {
-      if (!mounted) return;
-      _handleStateChange(state);
-    });
-
-    _boardStateSubscription = _boardState.stateStream.listen((newState) {
-      if (!mounted) return;
-      setState(() => _currentRenderState = newState);
-    });
 
     if (mounted) {
       setState(() {
@@ -139,8 +121,6 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
   }
 
   Future<void> _prepareActiveSession(SessionState state) async {
-    if (_sessionState.sessionSecret != null) return;
-
     String? secret = _sessionState.sessionSecret;
     secret ??= await SecureStorageService.getSessionSecret(state.sessionId);
     if (secret == null && state.sessionSecretHalf1 != null) {
@@ -153,12 +133,9 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
 
     _sessionState.storeSessionSecrets(secret, state.websocketToken);
 
-    final accessToken = state.websocketToken ?? '';
-    _wsAccessToken = accessToken;
-
-    if (_wsService != null && accessToken.isNotEmpty && state.sessionId.isNotEmpty) {
+    if (_wsService != null && state.sessionId.isNotEmpty) {
       try {
-        await _wsService!.connectAttendance(state.sessionId, accessToken);
+        await _wsService!.connectAttendance(state.sessionId);
       } catch (e) {
         Log.w('[Orchestrator] Attendance WS connect failed: $e');
       }
@@ -207,7 +184,6 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
         return AttendanceScreen(
           sessionId: state.sessionId,
           websocketService: _wsService ?? WebsocketService(AppConfig.baseUrl),
-          accessToken: _wsAccessToken,
           initialPresentCount: state.presentCount,
           capacity: widget.registration.capacity,
           courseName: state.courseName ?? 'Class',

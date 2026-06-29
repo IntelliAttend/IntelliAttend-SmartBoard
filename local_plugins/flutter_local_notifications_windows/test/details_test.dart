@@ -1,6 +1,6 @@
 import 'package:flutter_local_notifications_windows/flutter_local_notifications_windows.dart';
 import 'package:flutter_local_notifications_windows/src/details/notification_to_xml.dart';
-import 'package:test/test.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 const WindowsInitializationSettings settings = WindowsInitializationSettings(
   appName: 'Test app',

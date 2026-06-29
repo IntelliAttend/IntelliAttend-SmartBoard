@@ -195,6 +195,13 @@ class SessionManager {
     Log.i('[SessionManager] Session $sessionId wiped from Isar.');
   }
 
+  static Future<void> clearAllActiveSessions() async {
+    await _isar!.writeTxn(() async {
+      await _isar!.activeSessions.where().deleteAll();
+    });
+    Log.i('[SessionManager] All active sessions wiped from Isar.');
+  }
+
   static Future<void> recordCompletedSession({
     required String slotId,
     required String sessionId,
@@ -249,5 +256,35 @@ class SessionManager {
       Log.i(
           '🧹 [SessionManager] Cleaned ${allCompleted.length} completed-session records for new day.');
     }
+  }
+
+  static Future<void> saveAttendanceSnapshot({
+    required String sessionId,
+    required List<int> presentIndices,
+    required List<int> absentIndices,
+  }) async {
+    final session = await _isar!.activeSessions
+        .filter()
+        .sessionIdEqualTo(sessionId)
+        .findFirst();
+    if (session == null) {
+      Log.w('[SessionManager] No active session $sessionId to save snapshot to.');
+      return;
+    }
+    await _isar!.writeTxn(() async {
+      session.presentIndices = presentIndices;
+      session.absentIndices = absentIndices;
+      await _isar!.activeSessions.put(session);
+    });
+    Log.i('[SessionManager] Attendance snapshot saved for $sessionId (${presentIndices.length} present, ${absentIndices.length} absent)');
+  }
+
+  static Future<(List<int> present, List<int> absent)?> loadAttendanceSnapshot(String sessionId) async {
+    final session = await _isar!.activeSessions
+        .filter()
+        .sessionIdEqualTo(sessionId)
+        .findFirst();
+    if (session == null) return null;
+    return (session.presentIndices, session.absentIndices);
   }
 }

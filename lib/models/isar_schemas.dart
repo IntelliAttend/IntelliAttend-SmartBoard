@@ -20,6 +20,9 @@ class ActiveSession {
   List<String> verifiedStudentIds = [];
 
   late int rosterCount;
+
+  List<int> presentIndices = [];
+  List<int> absentIndices = [];
 }
 
 
@@ -115,6 +118,7 @@ class HydrationProfile {
   String? floor;
   String? institutionId;
   String? institutionName;
+  String? timezone;
   late bool isRegistered;
 }
 

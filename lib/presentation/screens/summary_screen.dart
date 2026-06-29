@@ -6,6 +6,7 @@ import '../../core/platform/kiosk_service.dart';
 import '../../core/utils/logger.dart';
 import '../../main.dart';
 import '../../services/session_manager.dart';
+import '../../services/student_service.dart';
 import 'session_orchestrator_screen.dart';
 import 'registration_screen.dart';
 
@@ -17,6 +18,10 @@ class SummaryScreen extends StatefulWidget {
   final String facultyName;
   final String? slotId;
   final VoidCallback? onReturnToIdle;
+  final List<StudentInfo>? students;
+  final List<int>? presentIndices;
+  final List<int>? absentIndices;
+  final bool isAttendanceSubmitted;
 
   const SummaryScreen({
     super.key,
@@ -27,6 +32,10 @@ class SummaryScreen extends StatefulWidget {
     required this.facultyName,
     this.slotId,
     this.onReturnToIdle,
+    this.students,
+    this.presentIndices,
+    this.absentIndices,
+    this.isAttendanceSubmitted = false,
   });
 
   @override

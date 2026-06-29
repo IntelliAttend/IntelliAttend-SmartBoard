@@ -1,10 +1,14 @@
 # Notification Integration — Server Team Guide
 
+> **⚠️ ARCHIVED — This document describes the legacy Firestore-based approach.**
+> The production notification system now uses **WebSocket delivery**.
+> See **[NOTIFICATION_SYSTEM_API.md](./NOTIFICATION_SYSTEM_API.md)** for the current contract.
+
 ## Overview
 
-The SmartBoard displays real-time notifications (alerts, attendance updates, system messages, admin messages) pushed from the backend. The board **never writes** to the notifications data — it only reads.
+The SmartBoard displays real-time notifications (alerts, attendance updates, system messages, admin messages) pushed from the backend via **WebSocket**. The board **never writes** to the notifications data — it only reads and acknowledges.
 
-The architecture uses **Firestore native `.snapshots()`** for real-time push delivery at zero polling cost. If Firestore native is unavailable, a manual `forceSync()` trigger fetches via REST.
+> **Legacy note:** An earlier prototype used Firestore `.snapshots()` for delivery. The codebase has since moved to WebSocket. The `forceSync()` method now calls `GET /api/v1/board/notifications` (REST) as a fallback for history/pull-to-refresh.
 
 ---
 
@@ -210,6 +214,24 @@ To enable a "Share to SmartBoard" button on the faculty/student app:
 4. The board user taps the notification → document downloads and opens.
 
 > **Note:** The board only supports **reading** documents. It cannot upload or send documents back.
+
+---
+
+## Migration to WebSocket
+
+The current production system uses **WebSocket delivery** instead of Firestore snapshots. The Firestore-based approach in this document is preserved for reference but is no longer the active integration path.
+
+### What changed:
+
+| Aspect | Old (Firestore) | New (WebSocket + REST) |
+|--------|-----------------|------------------------|
+| Delivery | Firestore `.snapshots()` | WebSocket (real-time) |
+| History | Firestore query | `GET /api/v1/board/notifications` |
+| Ack tracking | Firestore `read` field | `PATCH /api/v1/user/notifications/{id}/acknowledge` |
+| Auth | Firebase API key | Bearer token (Firebase ID token) |
+| Admin push | Write to Firestore | `POST /api/v1/admin/board/{id}/notification` |
+
+**The server team should refer to [`NOTIFICATION_SYSTEM_API.md`](./NOTIFICATION_SYSTEM_API.md) for all new development.**
 
 ---
 

@@ -39,6 +39,7 @@ class TimelineSlot extends StatelessWidget {
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           if (isLive) ...[
             Container(
@@ -58,7 +59,6 @@ class TimelineSlot extends StatelessWidget {
             ),
             const SizedBox(height: 4),
           ],
-          const SizedBox(height: 4),
           Text(
             "${entry.startTime} – ${entry.endTime}",
             style: TextStyle(
@@ -80,6 +80,7 @@ class TimelineSlot extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
+
         ],
       ),
     );

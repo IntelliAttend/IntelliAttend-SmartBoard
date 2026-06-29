@@ -80,6 +80,11 @@ class KioskService {
         Log.w(
             '🛡️ [Kiosk] Health check: window not fullscreen. Re-applying $mode.');
         await setMode(mode, force: true);
+      } else {
+        // Window is fullscreen — re-assert always-on-top so the window
+        // stays above the taskbar.  This is a lightweight no-op if the
+        // WS_EX_TOPMOST flag is already set.
+        await windowManager.setAlwaysOnTop(true);
       }
     } catch (e) {
       Log.d('[Kiosk] Health check failed: $e');
@@ -158,15 +163,19 @@ class KioskService {
           await windowManager.focus();
           if (Platform.isWindows) {
             await windowManager.setPreventClose(true);
-            // Skip taskbar entirely in fullscreen — app never appears on the taskbar.
+            // Skip taskbar icon only — the fullscreen window naturally
+            // covers the OS taskbar, no need to hide it globally.
             await windowManager.setSkipTaskbar(true);
           }
           await windowManager.setFullScreen(true);
+          // Re-assert always-on-top after fullscreen toggle.  setFullScreen
+          // changes the window style from WS_OVERLAPPEDWINDOW to WS_POPUP
+          // which can reset the WS_EX_TOPMOST flag on some Windows versions.
+          await windowManager.setAlwaysOnTop(true);
           break;
 
-        // ── LOCKED (deprecated — superseded by fullscreen with skipTaskbar) ──
+        // ── LOCKED (active attendance session) ──
         case KioskMode.locked:
-          // Fall through to fullscreen behaviour.
           await windowManager.setResizable(false);
           await windowManager.setAlwaysOnTop(true);
           await windowManager.show();
@@ -176,6 +185,8 @@ class KioskService {
             await windowManager.setSkipTaskbar(true);
           }
           await windowManager.setFullScreen(true);
+          // Re-assert always-on-top after fullscreen toggle.
+          await windowManager.setAlwaysOnTop(true);
           break;
 
         // ── SUSPENDED ────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import '../../services/document_service.dart';
 import '../../services/notification_listener_service.dart';
 import '../../core/utils/logger.dart';
 import 'document_viewer_screen.dart';
+import 'file_viewer_screen.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -199,21 +200,38 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         ),
       );
     } else {
-      final uri = Uri.file(path);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } else {
+      final ext = fileName.split('.').last.toLowerCase();
+      // Try built-in viewer for text/image files; fall back to system app
+      if (['txt', 'md', 'log', 'csv', 'json', 'xml', 'yaml', 'yml',
+            'png', 'jpg', 'jpeg', 'gif', 'webp', 'html',
+            'ini', 'cfg', 'bat', 'sh', 'bmp', 'svg',
+            'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].contains(ext)) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('No app found to open $fileName',
-                style: GoogleFonts.inter(fontSize: 14)),
-            behavior: SnackBarBehavior.floating,
-            backgroundColor: Colors.redAccent,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            margin: const EdgeInsets.all(16),
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => FileViewerScreen(
+              filePath: path,
+              fileName: fileName,
+            ),
           ),
         );
+      } else {
+        final uri = Uri.file(path);
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+        } else {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('No app found to open $fileName',
+                  style: GoogleFonts.inter(fontSize: 14)),
+              behavior: SnackBarBehavior.floating,
+              backgroundColor: Colors.redAccent,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              margin: const EdgeInsets.all(16),
+            ),
+          );
+        }
       }
     }
   }
@@ -266,110 +284,122 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   onTap: hasDoc && !isDownloading
                       ? () => _openAttachment(notification)
                       : null,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
                     child: Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: isDark
-                          ? Colors.white.withValues(alpha: 0.03)
-                          : Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border(
-                        left: BorderSide(
-                          color: notification.priority != NotificationPriority.low
-                              ? _colorForPriority(notification.priority)
-                              : Colors.transparent,
-                          width: 4,
-                        ),
-                        top: BorderSide(
-                          color: hasDoc
-                              ? AppColors.primaryTeal.withValues(alpha: isDark ? 0.2 : 0.15)
-                              : isDark
-                                  ? Colors.white10
-                                  : Colors.black.withValues(alpha: 0.05),
-                        ),
-                        right: BorderSide(
-                          color: hasDoc
-                              ? AppColors.primaryTeal.withValues(alpha: isDark ? 0.2 : 0.15)
-                              : isDark
-                                  ? Colors.white10
-                                  : Colors.black.withValues(alpha: 0.05),
-                        ),
-                        bottom: BorderSide(
-                          color: hasDoc
-                              ? AppColors.primaryTeal.withValues(alpha: isDark ? 0.2 : 0.15)
-                              : isDark
-                                  ? Colors.white10
-                                  : Colors.black.withValues(alpha: 0.05),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? Colors.white.withValues(alpha: 0.03)
+                            : Colors.white,
+                        border: Border(
+                          top: BorderSide(
+                            color: hasDoc
+                                ? AppColors.primaryTeal.withValues(alpha: isDark ? 0.2 : 0.15)
+                                : isDark
+                                    ? Colors.white10
+                                    : Colors.black.withValues(alpha: 0.05),
+                          ),
+                          right: BorderSide(
+                            color: hasDoc
+                                ? AppColors.primaryTeal.withValues(alpha: isDark ? 0.2 : 0.15)
+                                : isDark
+                                    ? Colors.white10
+                                    : Colors.black.withValues(alpha: 0.05),
+                          ),
+                          bottom: BorderSide(
+                            color: hasDoc
+                                ? AppColors.primaryTeal.withValues(alpha: isDark ? 0.2 : 0.15)
+                                : isDark
+                                    ? Colors.white10
+                                    : Colors.black.withValues(alpha: 0.05),
+                          ),
                         ),
                       ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            CircleAvatar(
-                              backgroundColor:
-                                  _colorForType(notification.type)
-                                      .withValues(alpha: 0.1),
-                              child: Icon(
-                                _iconForType(notification.type),
-                                color: _colorForType(notification.type),
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            if (notification.priority != NotificationPriority.low)
-                              Container(
-                                margin: const EdgeInsets.only(right: 8),
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: _colorForPriority(notification.priority)
-                                      .withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  _labelForPriority(notification.priority),
-                                  style: GoogleFonts.inter(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w700,
-                                    color: _colorForPriority(notification.priority),
-                                    letterSpacing: 0.5,
-                                  ),
+                      child: Stack(
+                        children: [
+                          if (notification.priority != NotificationPriority.low)
+                            Positioned.fill(
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: Container(
+                                  width: 4,
+                                  color: _colorForPriority(notification.priority),
                                 ),
                               ),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(notification.title,
-                                      style: GoogleFonts.inter(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 16)),
-                                  const SizedBox(height: 4),
-                                  Text(notification.body,
-                                      style: GoogleFonts.inter(
-                                          color: Colors.grey)),
-                                ],
-                              ),
                             ),
-                            Text(_timeAgo(notification.timestamp),
-                                style: GoogleFonts.inter(
-                                    color: Colors.grey, fontSize: 12)),
-                          ],
-                        ),
+                          Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    CircleAvatar(
+                                      backgroundColor:
+                                          _colorForType(notification.type)
+                                              .withValues(alpha: 0.1),
+                                      child: Icon(
+                                        _iconForType(notification.type),
+                                        color: _colorForType(notification.type),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 16),
+                                    if (notification.priority != NotificationPriority.low)
+                                      Container(
+                                        margin: const EdgeInsets.only(right: 8),
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 8, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: _colorForPriority(notification.priority)
+                                              .withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          _labelForPriority(notification.priority),
+                                          style: GoogleFonts.inter(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w700,
+                                            color: _colorForPriority(notification.priority),
+                                            letterSpacing: 0.5,
+                                          ),
+                                        ),
+                                      ),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(notification.title,
+                                              style: GoogleFonts.inter(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 16)),
+                                          const SizedBox(height: 4),
+                                          Text(notification.body,
+                                              style: GoogleFonts.inter(
+                                                  color: Colors.grey)),
+                                        ],
+                                      ),
+                                    ),
+                                    Text(_timeAgo(notification.timestamp),
+                                        style: GoogleFonts.inter(
+                                            color: Colors.grey, fontSize: 12)),
+                                  ],
+                                ),
 
-                        // Attachment section
-                        if (hasDoc) ...[
-                          const SizedBox(height: 16),
-                          _buildAttachmentSection(
-                            notification,
-                            isDownloading,
-                            hasError,
-                            progress,
+                                // Attachment section
+                                if (hasDoc) ...[
+                                  const SizedBox(height: 16),
+                                  _buildAttachmentSection(
+                                    notification,
+                                    isDownloading,
+                                    hasError,
+                                    progress,
+                                  ),
+                                ],
+                              ],
+                            ),
                           ),
                         ],
-                      ],
+                      ),
                     ),
                   ),
                 );
@@ -411,8 +441,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   Widget _buildAttachmentInfo(BoardNotification notification, bool isDark) {
-    final isCached = _documentService.isCached(notification.attachmentUrl!);
-
     return Row(
       children: [
         Container(
@@ -455,18 +483,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             ],
           ),
         ),
-        if (isCached)
-          Icon(
-            Icons.check_circle,
-            color: AppColors.successLime,
-            size: 20,
-          )
-        else
-          Icon(
-            Icons.download_rounded,
-            color: AppColors.primaryTeal,
-            size: 20,
-          ),
+        Icon(
+          Icons.info_outline_rounded,
+          color: AppColors.primaryTeal.withValues(alpha: 0.7),
+          size: 20,
+        ),
       ],
     );
   }
@@ -506,7 +527,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Downloading...',
+                'Loading...',
                 style: GoogleFonts.inter(
                   color: isDark ? Colors.white70 : AppColors.textSecondaryLight,
                   fontSize: 14,
@@ -515,7 +536,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               ),
               const SizedBox(height: 2),
               Text(
-                '$percent% complete',
+                '$percent% loaded',
                 style: GoogleFonts.inter(
                   color: Colors.grey,
                   fontSize: 12,

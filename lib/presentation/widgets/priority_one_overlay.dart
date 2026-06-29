@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:window_manager/window_manager.dart';
+import '../../core/theme/app_theme.dart';
 import '../../services/notification_listener_service.dart';
 
 class PriorityOneOverlay extends StatefulWidget {
@@ -15,19 +17,28 @@ class PriorityOneOverlay extends StatefulWidget {
 }
 
 class _PriorityOneOverlayState extends State<PriorityOneOverlay>
-    with TickerProviderStateMixin {
+    with SingleTickerProviderStateMixin {
   final NotificationListenerService _notifService = NotificationListenerService();
   StreamSubscription<List<BoardNotification>>? _sub;
   List<BoardNotification> _notifications = [];
 
   int _secondsRemaining = 60;
+  int _totalDuration = 60;
   Timer? _countdownTimer;
   bool _canDismiss = false;
 
-  late final AnimationController _borderCtrl;
+  late final AnimationController _smoothCtrl;
+  double _displayProgress = 0.0;
+  double _prevProgress = 0.0;
+  double _targetProgress = 0.0;
 
   BoardNotification? get _active =>
-      _notifications.where((n) => n.priority == NotificationPriority.high).firstOrNull;
+      _notifications.where((n) =>
+          n.priority == NotificationPriority.high ||
+          n.priority == NotificationPriority.normal).firstOrNull;
+
+  bool get _isP1 => _active?.priority == NotificationPriority.high;
+  bool get _isP2 => _active?.priority == NotificationPriority.normal;
 
   bool _wasActive = false;
 
@@ -44,13 +55,16 @@ class _PriorityOneOverlayState extends State<PriorityOneOverlay>
       }
     });
 
-    _borderCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 4));
-    _borderCtrl.repeat();
+    _smoothCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+    _smoothCtrl.addListener(_onSmoothUpdate);
 
     _wasActive = _active != null;
     if (_wasActive) {
       _startCountdown();
-      _setAlwaysOnTop(true);
+      _forceWindowToFront();
     }
   }
 
@@ -59,45 +73,98 @@ class _PriorityOneOverlayState extends State<PriorityOneOverlay>
     if (nowActive && !_wasActive) {
       _wasActive = true;
       _startCountdown();
-      _setAlwaysOnTop(true);
+      _forceWindowToFront();
     } else if (!nowActive && _wasActive) {
       _wasActive = false;
       _resetCountdown();
-      _setAlwaysOnTop(false);
+      _releaseWindowFromFront();
     }
+  }
+
+  int _resolveDuration(BoardNotification n) {
+    if (n.durationSeconds != null && n.durationSeconds! >= 10) {
+      return n.durationSeconds!;
+    }
+    return 60;
   }
 
   void _startCountdown() {
     _countdownTimer?.cancel();
-    _secondsRemaining = 60;
+    if (_isP2) {
+      setState(() {
+        _canDismiss = true;
+        _secondsRemaining = 0;
+        _totalDuration = 0;
+      });
+      return;
+    }
+    final n = _active;
+    _totalDuration = n != null ? _resolveDuration(n) : 60;
+    _secondsRemaining = _totalDuration;
     _canDismiss = false;
+    _displayProgress = 1.0;
+    _prevProgress = 1.0;
+    _targetProgress = 1.0;
+    _smoothCtrl.value = 0.0;
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) { timer.cancel(); return; }
-      if (_secondsRemaining <= 1) {
-        timer.cancel();
-        setState(() => _canDismiss = true);
-      } else {
-        setState(() => _secondsRemaining--);
-      }
+      setState(() {
+        _secondsRemaining--;
+        if (_secondsRemaining <= 0) {
+          timer.cancel();
+          _prevProgress = _targetProgress;
+          _targetProgress = 0.0;
+          _smoothCtrl.forward(from: 0.0).then((_) {
+            if (mounted) setState(() => _canDismiss = true);
+          });
+        } else {
+          _prevProgress = _targetProgress;
+          _targetProgress = _secondsRemaining / _totalDuration;
+          _smoothCtrl.forward(from: 0.0);
+        }
+      });
     });
+  }
+
+  void _onSmoothUpdate() {
+    _displayProgress = lerpDouble(_prevProgress, _targetProgress, _smoothCtrl.value) ?? _targetProgress;
+    if (mounted) setState(() {});
   }
 
   void _resetCountdown() {
     _countdownTimer?.cancel();
-    _secondsRemaining = 60;
+    _secondsRemaining = 0;
     _canDismiss = false;
   }
 
-  void _dismiss() {
+  Future<void> _dismiss() async {
     final n = _active;
     if (n != null) {
-      _notifService.removeNotification(n.id);
+      if (n.notificationId != null && n.notificationId!.isNotEmpty) {
+        await _notifService.dismissNotification(n.notificationId!);
+      } else {
+        _notifService.removeNotification(n.id);
+      }
     }
   }
 
-  void _setAlwaysOnTop(bool onTop) {
+  static const _kioskChannel = MethodChannel('com.intelliattend/kiosk');
+
+  Future<void> _forceWindowToFront() async {
     try {
-      windowManager.setAlwaysOnTop(onTop);
+      await _kioskChannel.invokeMethod('forceWindowToFront');
+    } catch (_) {
+      try {
+        await windowManager.setAlwaysOnTop(true);
+        await windowManager.show();
+        await windowManager.focus();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _releaseWindowFromFront() async {
+    try {
+      await windowManager.setAlwaysOnTop(false);
     } catch (_) {}
   }
 
@@ -105,9 +172,9 @@ class _PriorityOneOverlayState extends State<PriorityOneOverlay>
   void dispose() {
     _sub?.cancel();
     _countdownTimer?.cancel();
-    _borderCtrl.dispose();
+    _smoothCtrl.dispose();
     if (_wasActive) {
-      _setAlwaysOnTop(false);
+      _releaseWindowFromFront();
     }
     super.dispose();
   }
@@ -124,109 +191,122 @@ class _PriorityOneOverlayState extends State<PriorityOneOverlay>
 
   Widget _buildOverlay() {
     final n = _active!;
+    final accentColor = _isP1 ? AppColors.warningAmber : AppColors.primaryTeal;
+    final timerProgress = _displayProgress;
+
     return Positioned.fill(
       child: Material(
         color: Colors.transparent,
         child: Stack(
           children: [
+            // Blur backdrop
             Positioned.fill(
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                child: Container(color: Colors.black.withValues(alpha: 0.3)),
+              child: GestureDetector(
+                onTap: _canDismiss ? null : () {},
+                onPanDown: _canDismiss ? null : (_) {},
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                  child: Container(
+                    color: Colors.black.withValues(alpha: _isP1 ? 0.28 : 0.22),
+                  ),
+                ),
               ),
             ),
+            // Card
             Center(
-              child: AnimatedBuilder(
-                animation: _borderCtrl,
-                builder: (context, child) {
-                  final angle = _borderCtrl.value * math.pi * 2;
-                  return Container(
-                    width: 500,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(24),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.3),
-                          blurRadius: 50,
-                          offset: const Offset(0, 25),
-                        ),
-                      ],
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  minWidth: 480,
+                  maxWidth: 800,
+                ),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: Colors.black.withValues(alpha: 0.06),
                     ),
-                    child: Stack(
-                      children: [
-                        if (child != null) child,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.06),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                      BoxShadow(
+                        color: accentColor.withValues(alpha: 0.04),
+                        blurRadius: 20,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                  child: Stack(
+                    children: [
+                      // Progress border as timer (P1 only)
+                      if (_isP1)
                         Positioned.fill(
                           child: IgnorePointer(
                             child: CustomPaint(
                               painter: _FlowBorderPainter(
-                                angle: angle,
+                                progress: timerProgress,
                                 canDismiss: _canDismiss,
+                                color: accentColor,
                               ),
                             ),
                           ),
                         ),
-                      ],
-                    ),
-                  );
-                },
-                child: Padding(
-                  padding: const EdgeInsets.all(32),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 60,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF59E0B),
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      const Icon(Icons.warning_amber_rounded, size: 64, color: Color(0xFFF59E0B)),
-                      const SizedBox(height: 16),
-                      Text(
-                        n.title,
-                        style: GoogleFonts.inter(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: const Color(0xFF0F172A),
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        n.body,
-                        style: GoogleFonts.inter(
-                          fontSize: 16,
-                          color: const Color(0xFF475569),
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 32),
-                      SizedBox(
-                        width: 200,
-                        height: 48,
-                        child: ElevatedButton(
-                          onPressed: _canDismiss ? _dismiss : null,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _canDismiss
-                                ? const Color(0xFFF59E0B)
-                                : Colors.grey.shade200,
-                            foregroundColor: _canDismiss ? Colors.white : Colors.grey.shade500,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                      // Content
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 36),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            // Icon
+                            Icon(
+                              _isP1 ? Icons.warning_amber_rounded : Icons.info_outline,
+                              size: 36,
+                              color: accentColor,
                             ),
-                            elevation: _canDismiss ? 2 : 0,
-                          ),
-                          child: Text(
-                            'Dismiss',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
+                            const SizedBox(height: 24),
+                            // Title
+                            Text(
+                              n.title.isNotEmpty ? n.title : (_isP1 ? 'Alert' : 'Notice'),
+                              style: GoogleFonts.inter(
+                                fontSize: 26,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.textPrimaryLight,
+                                height: 1.2,
+                              ),
+                              textAlign: TextAlign.center,
                             ),
-                          ),
+                            const SizedBox(height: 14),
+                            // Body
+                            if (n.body.isNotEmpty)
+                              Text(
+                                n.body,
+                                style: GoogleFonts.inter(
+                                  fontSize: 18,
+                                  color: Colors.grey,
+                                  height: 1.5,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            // Countdown text (P1 only, hide when expired)
+                            if (_isP1 && _secondsRemaining > 0) ...[
+                              const SizedBox(height: 28),
+                              Text(
+                                '${_secondsRemaining}s',
+                                style: GoogleFonts.jetBrainsMono(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.textPrimaryLight.withValues(alpha: 0.45),
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 28),
+                            // Action button
+                            _buildActionButton(accentColor),
+                          ],
                         ),
                       ),
                     ],
@@ -239,43 +319,112 @@ class _PriorityOneOverlayState extends State<PriorityOneOverlay>
       ),
     );
   }
+
+  Widget _buildActionButton(Color accentColor) {
+    final canAct = _canDismiss;
+
+    return SizedBox(
+      height: 46,
+      child: TextButton(
+        onPressed: canAct ? _dismiss : null,
+        style: TextButton.styleFrom(
+          backgroundColor: canAct
+              ? accentColor.withValues(alpha: 0.12)
+              : Colors.black.withValues(alpha: 0.04),
+          foregroundColor: canAct ? accentColor : Colors.black.withValues(alpha: 0.2),
+          disabledBackgroundColor: Colors.black.withValues(alpha: 0.04),
+          disabledForegroundColor: Colors.black.withValues(alpha: 0.2),
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: BorderSide(
+              color: canAct
+                  ? accentColor.withValues(alpha: 0.25)
+                  : Colors.black.withValues(alpha: 0.06),
+              width: 1,
+            ),
+          ),
+        ),
+        child: Text(
+          'DISMISS',
+          style: GoogleFonts.inter(
+            fontSize: 15,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _FlowBorderPainter extends CustomPainter {
-  final double angle;
+  final double progress;
   final bool canDismiss;
+  final Color color;
 
-  _FlowBorderPainter({required this.angle, required this.canDismiss});
+  _FlowBorderPainter({
+    required this.progress,
+    required this.canDismiss,
+    required this.color,
+  });
+
+  static const double _cornerRadius = 22.5;
+  static const double _inset = 1.5;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    final innerRect = Rect.fromLTWH(2.5, 2.5, size.width - 5, size.height - 5);
-    final innerRrect = RRect.fromRectAndRadius(innerRect, const Radius.circular(21.5));
+    if (canDismiss) return;
 
-    final paint = Paint()
+    final innerRect = Rect.fromLTWH(
+        _inset, _inset, size.width - _inset * 2, size.height - _inset * 2);
+    final rrect =
+        RRect.fromRectAndRadius(innerRect, const Radius.circular(_cornerRadius));
+
+    final path = Path()..addRRect(rrect);
+    final metric = path.computeMetrics().first;
+    final totalLength = metric.length;
+
+    // Background track
+    final trackPaint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5
-      ..strokeCap = StrokeCap.round;
+      ..strokeWidth = 4.0
+      ..color = color.withValues(alpha: 0.1);
+    canvas.drawPath(path, trackPaint);
 
-    final gradient = SweepGradient(
-      startAngle: angle,
-      endAngle: angle + math.pi * 2,
-      colors: [
-        const Color(0xFFF59E0B).withValues(alpha: 0.0),
-        const Color(0xFFF59E0B).withValues(alpha: canDismiss ? 0.2 : 0.6),
-        const Color(0xFFF59E0B).withValues(alpha: canDismiss ? 0.5 : 1.0),
-        const Color(0xFFF59E0B).withValues(alpha: canDismiss ? 0.2 : 0.6),
-        const Color(0xFFF59E0B).withValues(alpha: 0.0),
-      ],
-      stops: const [0.0, 0.3, 0.5, 0.7, 1.0],
-    );
+    // Progress arc — starts from top-centre, goes clockwise
+    final clamped = progress.clamp(0.0, 1.0);
+    if (clamped > 0.005) {
+      final progressPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4.0
+        ..color = color;
 
-    paint.shader = gradient.createShader(rect);
-    canvas.drawRRect(innerRrect, paint);
+      // Distance from path start (top-left) to top-centre
+      final cornerArc = (math.pi / 2) * _cornerRadius;
+      final topEdge = innerRect.width - 2 * _cornerRadius;
+      final topCentreOffset = cornerArc + topEdge / 2;
+
+      final drawLength = totalLength * clamped;
+      final startOffset = topCentreOffset;
+      final endOffset = startOffset + drawLength;
+
+      if (endOffset <= totalLength) {
+        canvas.drawPath(
+            metric.extractPath(startOffset, endOffset), progressPaint);
+      } else {
+        // Wrap around: draw from startOffset to end, then from 0 to remainder
+        canvas.drawPath(
+            metric.extractPath(startOffset, totalLength), progressPaint);
+        canvas.drawPath(
+            metric.extractPath(0, endOffset - totalLength), progressPaint);
+      }
+    }
   }
 
   @override
   bool shouldRepaint(covariant _FlowBorderPainter oldDelegate) =>
-      oldDelegate.angle != angle || oldDelegate.canDismiss != canDismiss;
+      oldDelegate.progress != progress ||
+      oldDelegate.canDismiss != canDismiss ||
+      oldDelegate.color != color;
 }

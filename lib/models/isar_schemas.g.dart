@@ -17,38 +17,48 @@ const ActiveSessionSchema = CollectionSchema(
   name: r'ActiveSession',
   id: -3138477134689118396,
   properties: {
-    r'courseName': PropertySchema(
+    r'absentIndices': PropertySchema(
       id: 0,
+      name: r'absentIndices',
+      type: IsarType.longList,
+    ),
+    r'courseName': PropertySchema(
+      id: 1,
       name: r'courseName',
       type: IsarType.string,
     ),
     r'facultyName': PropertySchema(
-      id: 1,
+      id: 2,
       name: r'facultyName',
       type: IsarType.string,
     ),
+    r'presentIndices': PropertySchema(
+      id: 3,
+      name: r'presentIndices',
+      type: IsarType.longList,
+    ),
     r'rosterCount': PropertySchema(
-      id: 2,
+      id: 4,
       name: r'rosterCount',
       type: IsarType.long,
     ),
     r'scheduledEndTime': PropertySchema(
-      id: 3,
+      id: 5,
       name: r'scheduledEndTime',
       type: IsarType.dateTime,
     ),
     r'sectionId': PropertySchema(
-      id: 4,
+      id: 6,
       name: r'sectionId',
       type: IsarType.string,
     ),
     r'sessionId': PropertySchema(
-      id: 5,
+      id: 7,
       name: r'sessionId',
       type: IsarType.string,
     ),
     r'verifiedStudentIds': PropertySchema(
-      id: 6,
+      id: 8,
       name: r'verifiedStudentIds',
       type: IsarType.stringList,
     )
@@ -87,8 +97,10 @@ int _activeSessionEstimateSize(
   Map<Type, List<int>> allOffsets,
 ) {
   var bytesCount = offsets.last;
+  bytesCount += 3 + object.absentIndices.length * 8;
   bytesCount += 3 + object.courseName.length * 3;
   bytesCount += 3 + object.facultyName.length * 3;
+  bytesCount += 3 + object.presentIndices.length * 8;
   bytesCount += 3 + object.sectionId.length * 3;
   bytesCount += 3 + object.sessionId.length * 3;
   bytesCount += 3 + object.verifiedStudentIds.length * 3;
@@ -107,13 +119,15 @@ void _activeSessionSerialize(
   List<int> offsets,
   Map<Type, List<int>> allOffsets,
 ) {
-  writer.writeString(offsets[0], object.courseName);
-  writer.writeString(offsets[1], object.facultyName);
-  writer.writeLong(offsets[2], object.rosterCount);
-  writer.writeDateTime(offsets[3], object.scheduledEndTime);
-  writer.writeString(offsets[4], object.sectionId);
-  writer.writeString(offsets[5], object.sessionId);
-  writer.writeStringList(offsets[6], object.verifiedStudentIds);
+  writer.writeLongList(offsets[0], object.absentIndices);
+  writer.writeString(offsets[1], object.courseName);
+  writer.writeString(offsets[2], object.facultyName);
+  writer.writeLongList(offsets[3], object.presentIndices);
+  writer.writeLong(offsets[4], object.rosterCount);
+  writer.writeDateTime(offsets[5], object.scheduledEndTime);
+  writer.writeString(offsets[6], object.sectionId);
+  writer.writeString(offsets[7], object.sessionId);
+  writer.writeStringList(offsets[8], object.verifiedStudentIds);
 }
 
 ActiveSession _activeSessionDeserialize(
@@ -123,14 +137,16 @@ ActiveSession _activeSessionDeserialize(
   Map<Type, List<int>> allOffsets,
 ) {
   final object = ActiveSession();
-  object.courseName = reader.readString(offsets[0]);
-  object.facultyName = reader.readString(offsets[1]);
+  object.absentIndices = reader.readLongList(offsets[0]) ?? [];
+  object.courseName = reader.readString(offsets[1]);
+  object.facultyName = reader.readString(offsets[2]);
   object.id = id;
-  object.rosterCount = reader.readLong(offsets[2]);
-  object.scheduledEndTime = reader.readDateTime(offsets[3]);
-  object.sectionId = reader.readString(offsets[4]);
-  object.sessionId = reader.readString(offsets[5]);
-  object.verifiedStudentIds = reader.readStringList(offsets[6]) ?? [];
+  object.presentIndices = reader.readLongList(offsets[3]) ?? [];
+  object.rosterCount = reader.readLong(offsets[4]);
+  object.scheduledEndTime = reader.readDateTime(offsets[5]);
+  object.sectionId = reader.readString(offsets[6]);
+  object.sessionId = reader.readString(offsets[7]);
+  object.verifiedStudentIds = reader.readStringList(offsets[8]) ?? [];
   return object;
 }
 
@@ -142,18 +158,22 @@ P _activeSessionDeserializeProp<P>(
 ) {
   switch (propertyId) {
     case 0:
-      return (reader.readString(offset)) as P;
+      return (reader.readLongList(offset) ?? []) as P;
     case 1:
       return (reader.readString(offset)) as P;
     case 2:
-      return (reader.readLong(offset)) as P;
+      return (reader.readString(offset)) as P;
     case 3:
-      return (reader.readDateTime(offset)) as P;
+      return (reader.readLongList(offset) ?? []) as P;
     case 4:
-      return (reader.readString(offset)) as P;
+      return (reader.readLong(offset)) as P;
     case 5:
-      return (reader.readString(offset)) as P;
+      return (reader.readDateTime(offset)) as P;
     case 6:
+      return (reader.readString(offset)) as P;
+    case 7:
+      return (reader.readString(offset)) as P;
+    case 8:
       return (reader.readStringList(offset) ?? []) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -356,6 +376,151 @@ extension ActiveSessionQueryWhere
 
 extension ActiveSessionQueryFilter
     on QueryBuilder<ActiveSession, ActiveSession, QFilterCondition> {
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      absentIndicesElementEqualTo(int value) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'absentIndices',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      absentIndicesElementGreaterThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'absentIndices',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      absentIndicesElementLessThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'absentIndices',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      absentIndicesElementBetween(
+    int lower,
+    int upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'absentIndices',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      absentIndicesLengthEqualTo(int length) {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(
+        r'absentIndices',
+        length,
+        true,
+        length,
+        true,
+      );
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      absentIndicesIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(
+        r'absentIndices',
+        0,
+        true,
+        0,
+        true,
+      );
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      absentIndicesIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(
+        r'absentIndices',
+        0,
+        false,
+        999999,
+        true,
+      );
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      absentIndicesLengthLessThan(
+    int length, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(
+        r'absentIndices',
+        0,
+        true,
+        length,
+        include,
+      );
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      absentIndicesLengthGreaterThan(
+    int length, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(
+        r'absentIndices',
+        length,
+        include,
+        999999,
+        true,
+      );
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      absentIndicesLengthBetween(
+    int lower,
+    int upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(
+        r'absentIndices',
+        lower,
+        includeLower,
+        upper,
+        includeUpper,
+      );
+    });
+  }
+
   QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
       courseNameEqualTo(
     String value, {
@@ -679,6 +844,151 @@ extension ActiveSessionQueryFilter
         upper: upper,
         includeUpper: includeUpper,
       ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      presentIndicesElementEqualTo(int value) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'presentIndices',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      presentIndicesElementGreaterThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'presentIndices',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      presentIndicesElementLessThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'presentIndices',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      presentIndicesElementBetween(
+    int lower,
+    int upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'presentIndices',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      presentIndicesLengthEqualTo(int length) {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(
+        r'presentIndices',
+        length,
+        true,
+        length,
+        true,
+      );
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      presentIndicesIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(
+        r'presentIndices',
+        0,
+        true,
+        0,
+        true,
+      );
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      presentIndicesIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(
+        r'presentIndices',
+        0,
+        false,
+        999999,
+        true,
+      );
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      presentIndicesLengthLessThan(
+    int length, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(
+        r'presentIndices',
+        0,
+        true,
+        length,
+        include,
+      );
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      presentIndicesLengthGreaterThan(
+    int length, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(
+        r'presentIndices',
+        length,
+        include,
+        999999,
+        true,
+      );
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      presentIndicesLengthBetween(
+    int lower,
+    int upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.listLength(
+        r'presentIndices',
+        lower,
+        includeLower,
+        upper,
+        includeUpper,
+      );
     });
   }
 
@@ -1478,6 +1788,13 @@ extension ActiveSessionQuerySortThenBy
 
 extension ActiveSessionQueryWhereDistinct
     on QueryBuilder<ActiveSession, ActiveSession, QDistinct> {
+  QueryBuilder<ActiveSession, ActiveSession, QDistinct>
+      distinctByAbsentIndices() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'absentIndices');
+    });
+  }
+
   QueryBuilder<ActiveSession, ActiveSession, QDistinct> distinctByCourseName(
       {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
@@ -1489,6 +1806,13 @@ extension ActiveSessionQueryWhereDistinct
       {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
       return query.addDistinctBy(r'facultyName', caseSensitive: caseSensitive);
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QDistinct>
+      distinctByPresentIndices() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'presentIndices');
     });
   }
 
@@ -1536,6 +1860,13 @@ extension ActiveSessionQueryProperty
     });
   }
 
+  QueryBuilder<ActiveSession, List<int>, QQueryOperations>
+      absentIndicesProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'absentIndices');
+    });
+  }
+
   QueryBuilder<ActiveSession, String, QQueryOperations> courseNameProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'courseName');
@@ -1545,6 +1876,13 @@ extension ActiveSessionQueryProperty
   QueryBuilder<ActiveSession, String, QQueryOperations> facultyNameProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'facultyName');
+    });
+  }
+
+  QueryBuilder<ActiveSession, List<int>, QQueryOperations>
+      presentIndicesProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'presentIndices');
     });
   }
 
@@ -7534,6 +7872,11 @@ const HydrationProfileSchema = CollectionSchema(
       id: 8,
       name: r'roomNumber',
       type: IsarType.string,
+    ),
+    r'timezone': PropertySchema(
+      id: 9,
+      name: r'timezone',
+      type: IsarType.string,
     )
   },
   estimateSize: _hydrationProfileEstimateSize,
@@ -7589,6 +7932,12 @@ int _hydrationProfileEstimateSize(
       bytesCount += 3 + value.length * 3;
     }
   }
+  {
+    final value = object.timezone;
+    if (value != null) {
+      bytesCount += 3 + value.length * 3;
+    }
+  }
   return bytesCount;
 }
 
@@ -7607,6 +7956,7 @@ void _hydrationProfileSerialize(
   writer.writeBool(offsets[6], object.isRegistered);
   writer.writeString(offsets[7], object.roomId);
   writer.writeString(offsets[8], object.roomNumber);
+  writer.writeString(offsets[9], object.timezone);
 }
 
 HydrationProfile _hydrationProfileDeserialize(
@@ -7626,6 +7976,7 @@ HydrationProfile _hydrationProfileDeserialize(
   object.isRegistered = reader.readBool(offsets[6]);
   object.roomId = reader.readString(offsets[7]);
   object.roomNumber = reader.readStringOrNull(offsets[8]);
+  object.timezone = reader.readStringOrNull(offsets[9]);
   return object;
 }
 
@@ -7653,6 +8004,8 @@ P _hydrationProfileDeserializeProp<P>(
     case 7:
       return (reader.readString(offset)) as P;
     case 8:
+      return (reader.readStringOrNull(offset)) as P;
+    case 9:
       return (reader.readStringOrNull(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -8996,6 +9349,160 @@ extension HydrationProfileQueryFilter
       ));
     });
   }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterFilterCondition>
+      timezoneIsNull() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(const FilterCondition.isNull(
+        property: r'timezone',
+      ));
+    });
+  }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterFilterCondition>
+      timezoneIsNotNull() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(const FilterCondition.isNotNull(
+        property: r'timezone',
+      ));
+    });
+  }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterFilterCondition>
+      timezoneEqualTo(
+    String? value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'timezone',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterFilterCondition>
+      timezoneGreaterThan(
+    String? value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'timezone',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterFilterCondition>
+      timezoneLessThan(
+    String? value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'timezone',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterFilterCondition>
+      timezoneBetween(
+    String? lower,
+    String? upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'timezone',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterFilterCondition>
+      timezoneStartsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.startsWith(
+        property: r'timezone',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterFilterCondition>
+      timezoneEndsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.endsWith(
+        property: r'timezone',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterFilterCondition>
+      timezoneContains(String value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.contains(
+        property: r'timezone',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterFilterCondition>
+      timezoneMatches(String pattern, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.matches(
+        property: r'timezone',
+        wildcard: pattern,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterFilterCondition>
+      timezoneIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'timezone',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterFilterCondition>
+      timezoneIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        property: r'timezone',
+        value: '',
+      ));
+    });
+  }
 }
 
 extension HydrationProfileQueryObject
@@ -9128,6 +9635,20 @@ extension HydrationProfileQuerySortBy
       sortByRoomNumberDesc() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'roomNumber', Sort.desc);
+    });
+  }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterSortBy>
+      sortByTimezone() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'timezone', Sort.asc);
+    });
+  }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterSortBy>
+      sortByTimezoneDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'timezone', Sort.desc);
     });
   }
 }
@@ -9271,6 +9792,20 @@ extension HydrationProfileQuerySortThenBy
       return query.addSortBy(r'roomNumber', Sort.desc);
     });
   }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterSortBy>
+      thenByTimezone() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'timezone', Sort.asc);
+    });
+  }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QAfterSortBy>
+      thenByTimezoneDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'timezone', Sort.desc);
+    });
+  }
 }
 
 extension HydrationProfileQueryWhereDistinct
@@ -9339,6 +9874,13 @@ extension HydrationProfileQueryWhereDistinct
       return query.addDistinctBy(r'roomNumber', caseSensitive: caseSensitive);
     });
   }
+
+  QueryBuilder<HydrationProfile, HydrationProfile, QDistinct>
+      distinctByTimezone({bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'timezone', caseSensitive: caseSensitive);
+    });
+  }
 }
 
 extension HydrationProfileQueryProperty
@@ -9404,6 +9946,12 @@ extension HydrationProfileQueryProperty
       roomNumberProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'roomNumber');
+    });
+  }
+
+  QueryBuilder<HydrationProfile, String?, QQueryOperations> timezoneProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'timezone');
     });
   }
 }

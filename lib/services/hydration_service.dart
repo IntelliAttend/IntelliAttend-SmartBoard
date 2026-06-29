@@ -127,6 +127,7 @@ class HydrationService {
         ..floor = profile['floor']?.toString()
         ..institutionId = profile['institution_id']?.toString()
         ..institutionName = profile['institution_name']?.toString()
+        ..timezone = profile['timezone']?.toString()
         ..isRegistered = profile['is_registered'] == true;
       await isar.hydrationProfiles.put(entry);
     });

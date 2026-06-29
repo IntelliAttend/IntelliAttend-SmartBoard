@@ -5,8 +5,11 @@ import '../core/auth/token_manager.dart';
 import '../core/utils/logger.dart';
 import '../core/state/board_state_machine.dart';
 import '../data/repositories/device_repository.dart';
+import '../models/remote_config.dart';
 import 'api_service.dart';
+import 'remote_config_service.dart';
 import 'time_sync_service.dart';
+import 'update_checker.dart';
 
 class HeartbeatSessionInfo {
   final String? sessionId;
@@ -28,6 +31,7 @@ class HeartbeatService {
   static bool _started = false;
   static int _consecutiveNullSessions = 0;
   static const int _maxNullSessionsBeforeForceEnd = 3;
+  static bool _wsConnected = false;
 
   static int _heartbeatCount = 0;
 
@@ -77,6 +81,12 @@ class HeartbeatService {
     Log.i('[Heartbeat] Stopped.');
   }
 
+  static bool get wsConnected => _wsConnected;
+
+  static void setWsConnected(bool connected) {
+    _wsConnected = connected;
+  }
+
   static void dispose() {
     _sessionController.close();
   }
@@ -103,6 +113,13 @@ class HeartbeatService {
       );
     } catch (e) {
       Log.w('[Heartbeat] Token refresh failed; will retry next beat: $e');
+    }
+
+    // §3 — Stop HTTP polling when WebSocket is connected.
+    // Real-time updates arrive via WS (attendance, session state, etc.).
+    if (_wsConnected) {
+      Log.d('[Heartbeat] WS connected — skipping HTTP heartbeat');
+      return;
     }
 
     final registration = await _deviceRepository?.getRegistration();
@@ -155,6 +172,21 @@ class HeartbeatService {
         if (machine.currentState == BoardState.active) {
           Log.w('[Heartbeat] $_consecutiveNullSessions consecutive null sessions — force-ending');
           machine.forceTransitionTo(BoardState.closed);
+        }
+      }
+
+      // Parse remote config from heartbeat response.
+      // The server includes a `config` block with feature flags, UI overrides,
+      // and optionally a forced-update manifest. We apply it immediately so
+      // feature flags take effect within 15 seconds.
+      final configData = result['config'] as Map<String, dynamic>?;
+      if (configData != null && configData.isNotEmpty) {
+        final config = RemoteConfig.fromJson(configData);
+        final applied = await RemoteConfigService.applyConfig(config);
+        if (applied) {
+          Log.i('[Heartbeat] Applied remote config v${config.configVersion}');
+          // If the new config carries an update manifest, check immediately.
+          unawaited(UpdateChecker.checkNow());
         }
       }
     } catch (e) {

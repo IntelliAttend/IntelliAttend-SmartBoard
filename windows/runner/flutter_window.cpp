@@ -59,6 +59,36 @@ bool FlutterWindow::OnCreate() {
             close_blocked_ = std::get<bool>(*call.arguments());
           }
           result->Success();
+        } else if (call.method_name() == "forceWindowToFront") {
+          HWND hwnd = GetHandle();
+          // ── Bypass Windows foreground lock ──────────────────────────
+          // AttachThreadInput lets us temporarily join the current
+          // foreground window's input thread so SetForegroundWindow can
+          // succeed even when another app (e.g. Chrome) has focus.
+          HWND fgHwnd = ::GetForegroundWindow();
+          DWORD fgTid = ::GetWindowThreadProcessId(fgHwnd, nullptr);
+          DWORD ourTid = ::GetCurrentThreadId();
+          bool attached = (fgTid != ourTid) && (fgTid != 0) &&
+              ::AttachThreadInput(fgTid, ourTid, TRUE);
+
+          // ── Restore if minimized ────────────────────────────────────
+          if (::IsIconic(hwnd)) {
+            ::ShowWindow(hwnd, SW_RESTORE);
+          }
+          // ── Show + topmost + foreground in one pass ─────────────────
+          ::ShowWindow(hwnd, SW_SHOW);
+          ::SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+                         SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW);
+          ::BringWindowToTop(hwnd);
+          ::SetForegroundWindow(hwnd);
+          ::SetFocus(hwnd);
+          ::SetActiveWindow(hwnd);
+
+          // ── Detach from foreground thread ───────────────────────────
+          if (attached) {
+            ::AttachThreadInput(fgTid, ourTid, FALSE);
+          }
+          result->Success();
         } else {
           result->NotImplemented();
         }
