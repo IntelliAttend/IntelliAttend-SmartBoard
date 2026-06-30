@@ -19,6 +19,7 @@ import '../../services/api_service.dart';
 import '../../core/platform/hardware_fingerprint_service.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../core/rate_limiter.dart';
+import '../../models/board_notification.dart';
 import '../../models/isar_schemas.dart';
 import '../widgets/glass_container.dart';
 import '../widgets/pin_input.dart';

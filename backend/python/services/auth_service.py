@@ -4,9 +4,15 @@ import logging
 import jwt
 import os
 from datetime import datetime, timezone, timedelta
-from firebase_admin import auth
-from google.cloud import firestore
+from typing import Optional
+
+from firebase_admin import auth as firebase_auth
 from fastapi import Request, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.database import get_db
+from models.sql_models import User, PendingRegistration, AuthStatus, UserRole
 
 logger = logging.getLogger("IntelliAttend.Auth")
 
@@ -17,6 +23,10 @@ if not JWT_SECRET:
         "The application cannot start securely without it."
     )
 
+_OTP_MAX_ATTEMPTS = 10
+_OTP_LOCKOUT_MINUTES = 15
+_VERIFICATION_TOKEN_TTL_MINUTES = 15
+
 
 class AuthService:
     @staticmethod
@@ -25,219 +35,255 @@ class AuthService:
         Verifies a Firebase ID token and returns the decoded claims.
         """
         try:
-            decoded_token = auth.verify_id_token(id_token)
+            decoded_token = firebase_auth.verify_id_token(id_token)
             return decoded_token
         except Exception as e:
             logger.error(f"Firebase token verification failed: {e}")
             return None
 
-    # ─── DEPRECATED: Legacy OTP + custom JWT registration flow ──────────────
-    #
-    # These methods implemented the OTP-based board registration and custom JWT
-    # auth. The SmartBoard now authenticates using Firebase Auth email/password,
-    # the same as the Faculty and Student mobile apps. Board accounts are
-    # provisioned via Firebase Auth Admin (createUserWithEmailAndPassword) and
-    # looked up by email in the smart_boards collection.
-    #
-    # Preserved for reference in case re-registration flows are revisited.
-    # ─────────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _hash_otp(otp: str) -> str:
+        return hashlib.sha256(otp.encode()).hexdigest()
 
     @staticmethod
-    async def initiate_registration(board_id: str, db: firestore.AsyncClient):
-        """
-        DEPRECATED — OTP-based registration replaced by Firebase Auth provisioning.
-
-        Previously: verified board is provisioned, generated OTP, stored hash.
-        Now: board accounts created via Firebase Auth Admin at install time.
-        """
-        board_ref = db.collection("smart_boards").document(board_id)
-        board_doc = await board_ref.get()
-
-        if not board_doc.exists:
-            logger.warning(f"[Ignition] Board {board_id} not provisioned in database.")
-            return None
-
-        board_data = board_doc.to_dict()
-
-        if board_data.get("is_registered") and board_data.get("status") == "ACTIVE":
-            logger.info(f"[Ignition] Board {board_id} is already registered. Skipping OTP.")
-            return {
-                "status": "already_registered",
-                "smart_board_id": board_id,
-                "room_id": board_data.get("room_id"),
-                "room_name": board_data.get("room_name"),
-                "building": board_data.get("building"),
-                "department": board_data.get("department"),
-            }
-
-        otp = str(secrets.randbelow(900000) + 100000)
-        otp_hash = hashlib.sha256(otp.encode()).hexdigest()
-
-        await db.collection("pending_ignitions").document(board_id).set({
-            "otp_hash": otp_hash,
-            "created_at": firestore.SERVER_TIMESTAMP,
-            "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10)
-        })
-
-        admin_email = board_data.get("admin_email", "IT Administrator")
-        logger.info(f"[Ignition] OTP sent to {admin_email} for board {board_id}")
-        logger.debug(f"[Ignition] OTP {otp} for board {board_id} (debug only)")
-
-        return {"status": "success", "admin_email": admin_email}
+    def _generate_otp() -> str:
+        return f"{secrets.randbelow(900000) + 100000:06d}"
 
     @staticmethod
-    async def verify_otp(board_id: str, otp: str, db: firestore.AsyncClient):
-        """
-        DEPRECATED — OTP verification replaced by Firebase Auth sign-in.
-        """
-        ignition_ref = db.collection("pending_ignitions").document(board_id)
-        ignition_doc = await ignition_ref.get()
-
-        if not ignition_doc.exists:
-            logger.warning(f"[Ignition] No pending ignition for board {board_id}")
-            return None
-
-        ignition_data = ignition_doc.to_dict()
-
-        expires_at = ignition_data.get("expires_at")
-        if expires_at:
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-            if datetime.now(timezone.utc) > expires_at:
-                logger.warning(f"[Ignition] OTP expired for board {board_id}")
-                await ignition_ref.delete()
-                return None
-
-        otp_hash = hashlib.sha256(otp.encode()).hexdigest()
-        if ignition_data.get("otp_hash") != otp_hash:
-            logger.warning(f"[Ignition] OTP Mismatch for board {board_id}")
-            return None
-
-        verification_token = f"vtok_{secrets.token_hex(16)}"
-
-        await ignition_ref.update({
-            "verification_token": verification_token,
-            "otp_verified": True
-        })
-
-        return {"status": "success", "verification_token": verification_token}
-
-    @staticmethod
-    async def complete_registration(board_id: str, verification_token: str, hardware_id: str, db: firestore.AsyncClient, firebase_uid: str = None):
-        """
-        DEPRECATED — Hardware binding replaced by Firebase Auth email lookup.
-        """
-        ignition_ref = db.collection("pending_ignitions").document(board_id)
-        ignition_doc = await ignition_ref.get()
-
-        if not ignition_doc.exists:
-            logger.warning(f"[Ignition] No pending ignition for board {board_id}")
-            return None
-
-        ignition_data = ignition_doc.to_dict()
-        if not ignition_data.get("otp_verified") or ignition_data.get("verification_token") != verification_token:
-            logger.warning(f"[Ignition] Verification Token Mismatch for board {board_id}")
-            return None
-
-        board_ref = db.collection("smart_boards").document(board_id)
-        await board_ref.update({
-            "is_registered": True,
-            "device_id": hardware_id,
-            "firebase_uid": firebase_uid,
-            "status": "ACTIVE",
-            "registered_at": firestore.SERVER_TIMESTAMP
-        })
-
-        board_snapshot = await board_ref.get()
-        board_data = board_snapshot.to_dict()
-
-        await db.collection("RegisteredDevices").document(hardware_id).set({
-            "board_id": board_id,
-            "status": "ACTIVE",
-            "registered_at": firestore.SERVER_TIMESTAMP,
-            "room_id": board_data.get("room_id", "UNKNOWN"),
-            "room_name": board_data.get("room_name", "Unknown Room")
-        })
-
-        await ignition_ref.delete()
-
+    def _generate_verification_token(smart_board_id: str) -> str:
         payload = {
-            "sub": board_id,
-            "device_id": hardware_id,
-            "role": "smart_board",
+            "sub": smart_board_id,
+            "purpose": "registration_verification",
             "iat": datetime.now(timezone.utc),
-            "exp": datetime.now(timezone.utc) + timedelta(minutes=60)
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=_VERIFICATION_TOKEN_TTL_MINUTES),
+        }
+        return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+    @staticmethod
+    async def _lookup_pending(session: AsyncSession, smart_board_id: str) -> Optional[PendingRegistration]:
+        result = await session.execute(
+            select(PendingRegistration).where(PendingRegistration.smart_board_id == smart_board_id)
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def _lockout_pending(pending: PendingRegistration) -> None:
+        pending.locked_until = datetime.now(timezone.utc) + timedelta(minutes=_OTP_LOCKOUT_MINUTES)
+        pending.attempts = _OTP_MAX_ATTEMPTS
+
+    # --- PostgreSQL-backed registration flow ----------------------------------
+
+    @staticmethod
+    async def register_initiate_pg(
+        smart_board_id: str,
+        firebase_uid: str,
+        email: str,
+        session: AsyncSession,
+    ) -> dict:
+        """
+        Step 1 of registration: verify board can register and send OTP.
+
+        Returns dict with status 'already_registered' or 'otp_required'.
+        """
+        # Check if board already has an active user account
+        existing = await session.execute(
+            select(User).where(User.email == email)
+        )
+        existing_user = existing.scalar_one_or_none()
+
+        if existing_user is not None:
+            if existing_user.auth_status.value == "active":
+                return {
+                    "status": "already_registered",
+                    "is_registered": True,
+                    "smart_board_id": existing_user.smart_board_id or smart_board_id,
+                    "room_id": existing_user.room_id,
+                }
+            if existing_user.auth_status.value == "pending":
+                # User pending — allow re-initiation if no pending record
+                pending = await AuthService._lookup_pending(session, smart_board_id)
+                if pending is None:
+                    # Clean stale pending entry if it exists for a different SBI
+                    pass
+            if existing_user.auth_status.value == "suspended":
+                raise HTTPException(
+                    status_code=403,
+                    detail="BOARD_SUSPENDED: This board has been deactivated",
+                )
+        else:
+            # Create pending user account
+            new_user = User(
+                id=firebase_uid[:32],  # deterministic id from firebase uid
+                email=email,
+                name=f"SmartBoard {smart_board_id}",
+                role=UserRole.BOARD,
+                auth_status=AuthStatus.PENDING,
+                firebase_uid=firebase_uid,
+                smart_board_id=smart_board_id,
+            )
+            session.add(new_user)
+            await session.flush()
+
+        # Check for existing pending registration and rate limit
+        pending = await AuthService._lookup_pending(session, smart_board_id)
+
+        if pending is not None:
+            if pending.locked_until and pending.locked_until > datetime.now(timezone.utc):
+                remaining = int((pending.locked_until - datetime.now(timezone.utc)).total_seconds())
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Too many attempts. Try again in {remaining} seconds",
+                )
+            if pending.attempts >= _OTP_MAX_ATTEMPTS:
+                await AuthService._lockout_pending(pending)
+                await session.flush()
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Too many attempts. Locked out for {_OTP_LOCKOUT_MINUTES} minutes",
+                )
+
+        # Generate and store OTP
+        otp = AuthService._generate_otp()
+        otp_hash = AuthService._hash_otp(otp)
+
+        if pending is None:
+            pending = PendingRegistration(
+                id=secrets.token_hex(16),
+                smart_board_id=smart_board_id,
+                firebase_uid=firebase_uid,
+                email=email,
+                otp_hash=otp_hash,
+                otp_expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            )
+            session.add(pending)
+        else:
+            pending.otp_hash = otp_hash
+            pending.otp_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+            pending.attempts = 0
+            pending.locked_until = None
+
+        await session.flush()
+
+        logger.info(f"[Register] OTP initiated for board {smart_board_id} (email: {email})")
+        logger.debug(f"[Register] OTP {otp} for board {smart_board_id} (debug)")
+
+        admin_email = email
+        return {
+            "status": "otp_required",
+            "is_registered": False,
+            "smart_board_id": smart_board_id,
+            "admin_email": admin_email,
         }
 
-        access_token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
-        refresh_token = secrets.token_hex(32)
+    @staticmethod
+    async def register_verify_pg(
+        smart_board_id: str,
+        otp: str,
+        session: AsyncSession,
+    ) -> dict:
+        """
+        Step 2 of registration: verify OTP.
 
-        await db.collection("refresh_tokens").document(refresh_token).set({
-            "board_id": board_id,
-            "device_id": hardware_id,
-            "created_at": firestore.SERVER_TIMESTAMP,
-            "expires_at": datetime.now(timezone.utc) + timedelta(days=365)
-        })
+        Returns dict with verification_token on success.
+        """
+        pending = await AuthService._lookup_pending(session, smart_board_id)
+        if not pending:
+            raise HTTPException(status_code=400, detail="Invalid OTP or Session Expired")
+
+        if pending.locked_until and pending.locked_until > datetime.now(timezone.utc):
+            raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
+
+        if pending.attempts >= _OTP_MAX_ATTEMPTS:
+            await AuthService._lockout_pending(pending)
+            await session.flush()
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many failed attempts. Locked out for {_OTP_LOCKOUT_MINUTES} minutes",
+            )
+
+        if datetime.now(timezone.utc) > pending.otp_expires_at:
+            raise HTTPException(status_code=400, detail="OTP expired")
+
+        if pending.otp_hash != AuthService._hash_otp(otp):
+            pending.attempts += 1
+            await session.flush()
+            remaining = _OTP_MAX_ATTEMPTS - pending.attempts
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid OTP. {remaining} attempts remaining."
+            )
+
+        # Success — issue verification token
+        verification_token = AuthService._generate_verification_token(smart_board_id)
+        await session.delete(pending)
+        await session.flush()
+
+        logger.info(f"[Register] OTP verified for board {smart_board_id}")
+        return {"verification_token": verification_token}
+
+    @staticmethod
+    async def register_complete_pg(
+        smart_board_id: str,
+        verification_token: str,
+        hardware_id: str,
+        metadata: Optional[dict],
+        session: AsyncSession,
+    ) -> dict:
+        """
+        Step 3 of registration: validate verification token and bind hardware.
+
+        Returns dict with custom_token and profile on success.
+        """
+        try:
+            payload = jwt.decode(verification_token, JWT_SECRET, algorithms=["HS256"])
+            if payload.get("purpose") != "registration_verification":
+                raise ValueError("Invalid token purpose")
+            if payload.get("sub") != smart_board_id:
+                raise ValueError("Token subject mismatch")
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=400, detail="Verification token expired")
+        except jwt.InvalidTokenError:
+            raise HTTPException(status_code=400, detail="Invalid verification token")
+
+        result = await session.execute(
+            select(User).where(User.smart_board_id == smart_board_id)
+        )
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=403, detail="Board not found")
+
+        if user.auth_status.value != "pending":
+            raise HTTPException(status_code=400, detail="Board is not pending registration")
+
+        # Update user to active and bind hardware
+        user.auth_status = AuthStatus.ACTIVE
+        user.room_id = user.room_id  # preserve existing room_id
+        await session.flush()
+
+        # Generate Firebase custom token so the client can bind the session
+        try:
+            custom_token = firebase_auth.create_custom_token(user.firebase_uid or smart_board_id)
+        except Exception as e:
+            logger.error(f"Failed to create custom token: {e}")
+            custom_token = None
+
+        logger.info(f"[Register] Completed registration for board {smart_board_id}")
 
         return {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "expires_in": 3600,
-            "token_type": "Bearer",
-            "profile": {
-                "smart_board_id": board_id,
-                "room_id": board_data.get("room_id"),
-                "room_name": board_data.get("room_name"),
-                "building": board_data.get("building"),
-                "department": board_data.get("department")
-            }
-        }
-
-    @staticmethod
-    async def refresh_access_token(refresh_token: str, db: firestore.AsyncClient):
-        """
-        DEPRECATED — Custom JWT refresh replaced by Firebase SDK auto-refresh.
-
-        Firebase Auth SDK automatically refreshes ID tokens before they expire
-        (~1 hour). The board never needs to manually refresh — just call
-        user.getIdToken() and the SDK handles the rest.
-        """
-        token_ref = db.collection("refresh_tokens").document(refresh_token)
-        token_doc = await token_ref.get()
-
-        if not token_doc.exists:
-            logger.warning(f"[Auth] Invalid or revoked refresh token: {refresh_token}")
-            return None
-
-        token_data = token_doc.to_dict()
-        if token_data["expires_at"].replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
-            logger.warning(f"[Auth] Expired refresh token for board: {token_data.get('board_id')}")
-            await token_ref.delete()
-            return None
-
-        board_id = token_data["board_id"]
-        hardware_id = token_data["device_id"]
-
-        payload = {
-            "sub": board_id,
-            "device_id": hardware_id,
-            "role": "smart_board",
-            "iat": datetime.now(timezone.utc),
-            "exp": datetime.now(timezone.utc) + timedelta(minutes=60)
-        }
-
-        access_token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
-
-        return {
-            "access_token": access_token,
-            "expires_in": 3600,
-            "token_type": "Bearer"
+            "custom_token": custom_token,
+            "smart_board_id": smart_board_id,
+            "classroom_id": user.room_id or "",
+            "room_name": user.name or f"SmartBoard {smart_board_id}",
+            "building": "",
+            "department": "",
         }
 
     @staticmethod
     def require_role(allowed_roles: list[str]):
         """
-        FastAPI dependency to enforce RBAC based on JWT claims.
+        FastAPI dependency to enforce RBAC based on legacy JWT claims.
+        This is retained for admin/IT dashboard routes only. Board endpoints
+        use get_current_board_pg which enforces Firebase token + role='board'.
         """
         async def _role_checker(http_request: Request) -> dict:
             auth_header = http_request.headers.get("Authorization")

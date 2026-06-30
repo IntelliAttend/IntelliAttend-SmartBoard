@@ -8,10 +8,10 @@
 
 | # | Task | Priority | Status | Details |
 |---|------|----------|--------|---------|
-| 1 | **Mount device registration router** in `main.py` | 🔴 Critical | ❌ Open | `from app.api.v1 import device` + `app.include_router(device.router, prefix="/api/v1/device")` |
+| 1 | **Mount device registration router** in `main.py` | 🔴 Critical | ✅ Done | New `/api/v1/device/register/*` router mounted; PostgreSQL-backed (no Firestore) |
 | 2 | **Reset board `is_registered` flag** for IASB-4208 | 🔴 Critical | ❌ Open | Firestore doc `smart_boards/IASB-4208` has `is_registered: true` → set to `false` |
-| 3 | **Verify `/device/register/complete` returns `custom_token`** | 🔴 Critical | ❌ Open | App exchanges this via Firebase `signInWithCustomToken` to bind session to hardware |
-| 4 | **Verify `/device/register/login` response shape** | 🟡 Medium | ❌ Open | Must return `{ "is_registered": false, "otp_required": true }` |
+| 3 | **Verify `/device/register/complete` returns `custom_token`** | 🔴 Critical | ✅ Done | Returns Firebase custom token + classroom profile |
+| 4 | **Verify `/device/register/login` response shape** | 🟡 Medium | ✅ Done | Returns `already_registered` or `otp_required` with profile |
 | 5 | **Add WebSocket ticket endpoint** if missing | 🟡 Medium | ❌ Open | `POST /api/v1/websocket/ticket` — returns 10s-expiry ticket for WS auth |
 | 6 | **Implement session pre-flight allocation** | 🟡 Medium | ❌ Open | `GET /api/v1/board/preflight?slot_id=<uuid>` → pre-allocate session ID |
 
@@ -132,3 +132,15 @@
 - ✅ **RenderFlex overflow in idle screen** — title wrapped in `Flexible`
 - ✅ **Server-side requirements documented** — `docs/SERVER_SIDE_REQUIREMENTS.md`
 - ✅ **Hydration display gaps closed** — `roomNumber`, `subjectCode`, `sectionName`, `classType` now rendered in timeline + timetable UI
+
+## ✅ Recently Completed (2026-06-30)
+
+- ✅ **Device registration router mounted** — New `/api/v1/device/register/*` endpoints (`/login`, `/verify`, `/complete`) mounted in `main.py`
+- ✅ **PostgreSQL-only registration flow** — Replaced all Firestore auth code with SQLAlchemy 2.0 + asyncpg
+- ✅ **`smart_board_id` added to `users` table** — Alembic migration `002_add_smart_board_id.py`
+- ✅ **`PendingRegistration` table created** — Alembic migration `003_add_pending_registrations.py`
+- ✅ **New Pydantic request schemas** — `DeviceRegisterInitiateRequest`, `DeviceRegisterVerifyRequest`, `DeviceRegisterCompleteRequest`
+- ✅ **New `AuthService` registration methods** — `register_initiate_pg`, `register_verify_pg`, `register_complete_pg`
+- ✅ **Firebase Admin SDK initialized** — `main.py` now initializes `firebase_admin` for token verification + custom token generation
+- ✅ **Deprecated code removed** — Deleted dead Firestore auth code from `main.py`, `core/security.py`, `auth_service.py`
+- ✅ **Backend registration tests added** — `tests/test_registration_pg.py` with 5 passing tests (async + mocked DB)

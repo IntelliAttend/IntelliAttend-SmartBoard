@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intelliattend_smartboard/models/board_notification.dart';
 import 'package:intelliattend_smartboard/models/notification_event.dart';
 import 'package:intelliattend_smartboard/services/notification_listener_service.dart';
 

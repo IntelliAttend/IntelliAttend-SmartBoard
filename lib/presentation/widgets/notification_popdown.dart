@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
-import '../../services/notification_listener_service.dart';
+import '../../models/board_notification.dart';
 
 class NotificationPopdown extends StatefulWidget {
   final BoardNotification notification;
@@ -194,7 +195,7 @@ class _NotificationPopdownState extends State<NotificationPopdown>
               children: [
                 Text(
                   n.title,
-                  style: const TextStyle(
+                  style: GoogleFonts.inter(
                     fontSize: 14,
                     fontWeight: FontWeight.bold,
                     color: AppColors.textPrimaryLight,
@@ -205,7 +206,7 @@ class _NotificationPopdownState extends State<NotificationPopdown>
                 const SizedBox(height: 2),
                 Text(
                   n.body,
-                  style: TextStyle(
+                  style: GoogleFonts.inter(
                     fontSize: 12,
                     color: AppColors.textSecondaryLight.withValues(alpha: 0.8),
                   ),

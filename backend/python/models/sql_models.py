@@ -139,6 +139,9 @@ class User(Base):
         Enum(AuthStatus, name="auth_status"), default=AuthStatus.PENDING
     )
     firebase_uid: Mapped[Optional[str]] = mapped_column(String(128), unique=True)
+    smart_board_id: Mapped[Optional[str]] = mapped_column(
+        String(64), unique=True, index=True, nullable=True
+    )
     room_id: Mapped[Optional[str]] = mapped_column(
         String(32), ForeignKey("rooms.id"), nullable=True
     )
@@ -433,3 +436,21 @@ class AttendanceVault(Base):
         DateTime(timezone=True), default=_utcnow
     )
     board_id: Mapped[str] = mapped_column(String(64), default="unknown")
+
+# --- Pending Registration ----------------------------------------------------
+
+
+class PendingRegistration(Base):
+    __tablename__ = "pending_registrations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    smart_board_id: Mapped[str] = mapped_column(
+        String(64), unique=True, index=True, nullable=False
+    )
+    firebase_uid: Mapped[Optional[str]] = mapped_column(String(128), unique=True, nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    otp_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    otp_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

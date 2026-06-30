@@ -6,35 +6,9 @@ from google.cloud import firestore
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.security import get_current_board
 from models.sql_models import BoardHeartbeat, User
 
 logger = logging.getLogger("IntelliAttend")
-
-
-class BoardService:
-    """
-    DEPRECATED — Legacy custom JWT + X-Device-ID auth preserved for reference.
-
-    The SmartBoard now authenticates exactly like the Faculty and Student mobile
-    apps — using Firebase Auth with email/password. See core/security.py for the
-    current get_current_board() dependency.
-
-    Key changes:
-      - Token type: HMAC-signed JWT (HS256) → Firebase ID Token (RS256)
-      - Token expiry: 2 hours → ~1 hour (Google-managed, auto-refreshed by SDK)
-      - Refresh mechanism: Manual POST /board/refresh → Automatic (Firebase SDK)
-      - Registration: OTP + fingerprint → Firebase Auth email/password
-      - Board lookup: By board_id field → By email field in smart_boards collection
-    """
-    COLLECTION = "smart_boards"
-
-    @classmethod
-    def get_board_data(cls, db: firestore.AsyncClient):
-        """
-        DEPRECATED — Use core.security.get_current_board() instead.
-        """
-        return get_current_board(db)
 
 
 class HeartbeatService:

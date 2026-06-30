@@ -1,14 +1,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../core/config/app_config.dart';
 import '../../core/theme/app_theme.dart';
-import '../../services/document_service.dart';
+import '../../models/board_notification.dart';
 import '../../services/notification_listener_service.dart';
 import '../../core/utils/logger.dart';
-import 'document_viewer_screen.dart';
-import 'file_viewer_screen.dart';
+import 'notification_detail_screen.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -20,12 +18,8 @@ class NotificationsScreen extends StatefulWidget {
 class _NotificationsScreenState extends State<NotificationsScreen> {
   final NotificationListenerService _notificationService =
       NotificationListenerService();
-  final DocumentService _documentService = DocumentService();
   List<BoardNotification> _notifications = [];
   StreamSubscription<List<BoardNotification>>? _subscription;
-  final Map<String, double> _downloadProgress = {};
-  final Set<String> _downloadingIds = {};
-  final Set<String> _errorIds = {};
 
   @override
   void initState() {
@@ -103,7 +97,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   String _timeAgo(DateTime dt) {
-    final diff = DateTime.now().difference(dt);
+    final diff = DateTime.now().difference(dt.toLocal());
     if (diff.inMinutes < 1) return 'Just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
     if (diff.inHours < 24) return '${diff.inHours} hr ago';
@@ -148,92 +142,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
   }
 
-  bool _isPdf(String name) =>
-      name.split('.').last.toLowerCase() == 'pdf';
-
-  Future<void> _openAttachment(BoardNotification notification) async {
-    if (!mounted) return;
-    final id = notification.id;
-
-    setState(() {
-      _downloadingIds.add(id);
-      _downloadProgress[id] = 0.0;
-      _errorIds.remove(id);
-    });
-
-    final path = await _documentService.downloadDocument(
-      notification.attachmentUrl!,
-      notification.displayAttachmentName,
-      onProgress: (progress) {
-        if (mounted) {
-          setState(() => _downloadProgress[id] = progress);
-        }
-      },
+  void _openDetail(BoardNotification notification) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => NotificationDetailScreen(notification: notification),
+      ),
     );
-
-    if (!mounted) return;
-
-    if (path == null) {
-      setState(() {
-        _downloadingIds.remove(id);
-        _downloadProgress.remove(id);
-        _errorIds.add(id);
-      });
-      return;
-    }
-
-    setState(() {
-      _downloadingIds.remove(id);
-      _downloadProgress.remove(id);
-    });
-
-    final fileName = notification.displayAttachmentName;
-
-    if (_isPdf(fileName)) {
-      if (!mounted) return;
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => DocumentViewerScreen(
-            filePath: path,
-            fileName: fileName,
-          ),
-        ),
-      );
-    } else {
-      final ext = fileName.split('.').last.toLowerCase();
-      // Try built-in viewer for text/image files; fall back to system app
-      if (['txt', 'md', 'log', 'csv', 'json', 'xml', 'yaml', 'yml',
-            'png', 'jpg', 'jpeg', 'gif', 'webp', 'html',
-            'ini', 'cfg', 'bat', 'sh', 'bmp', 'svg',
-            'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].contains(ext)) {
-        if (!mounted) return;
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => FileViewerScreen(
-              filePath: path,
-              fileName: fileName,
-            ),
-          ),
-        );
-      } else {
-        final uri = Uri.file(path);
-        if (await canLaunchUrl(uri)) {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
-        } else {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('No app found to open $fileName',
-                  style: GoogleFonts.inter(fontSize: 14)),
-              behavior: SnackBarBehavior.floating,
-              backgroundColor: Colors.redAccent,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              margin: const EdgeInsets.all(16),
-            ),
-          );
-        }
-      }
-    }
   }
 
   @override
@@ -276,14 +190,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               itemBuilder: (context, index) {
                 final notification = _notifications[index];
                 final hasDoc = documentsEnabled && notification.hasAttachment;
-                final isDownloading = _downloadingIds.contains(notification.id);
-                final hasError = _errorIds.contains(notification.id);
-                final progress = _downloadProgress[notification.id] ?? 0.0;
 
                 return GestureDetector(
-                  onTap: hasDoc && !isDownloading
-                      ? () => _openAttachment(notification)
-                      : null,
+                  onTap: () => _openDetail(notification),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(16),
                     child: Container(
@@ -327,6 +236,30 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                 ),
                               ),
                             ),
+                          Positioned(
+                            top: 12,
+                            right: 12,
+                            child: GestureDetector(
+                              onTap: () {
+                                _notificationService.deleteNotificationPermanently(notification.id);
+                              },
+                              child: Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  color: isDark
+                                      ? Colors.white.withValues(alpha: 0.04)
+                                      : Colors.black.withValues(alpha: 0.03),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Icon(
+                                  Icons.delete_outline_rounded,
+                                  size: 16,
+                                  color: isDark ? Colors.white24 : Colors.black26,
+                                ),
+                              ),
+                            ),
+                          ),
                           Padding(
                             padding: const EdgeInsets.all(24),
                             child: Column(
@@ -374,6 +307,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                                   fontSize: 16)),
                                           const SizedBox(height: 4),
                                           Text(notification.body,
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
                                               style: GoogleFonts.inter(
                                                   color: Colors.grey)),
                                         ],
@@ -385,15 +320,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                   ],
                                 ),
 
-                                // Attachment section
+                                // Attachment indicator
                                 if (hasDoc) ...[
-                                  const SizedBox(height: 16),
-                                  _buildAttachmentSection(
-                                    notification,
-                                    isDownloading,
-                                    hasError,
-                                    progress,
-                                  ),
+                                  const SizedBox(height: 12),
+                                  _buildAttachmentIndicator(notification),
                                 ],
                               ],
                             ),
@@ -408,167 +338,46 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     );
   }
 
-  Widget _buildAttachmentSection(
-    BoardNotification notification,
-    bool isDownloading,
-    bool hasError,
-    double progress,
-  ) {
+  Widget _buildAttachmentIndicator(BoardNotification notification) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return InkWell(
-      onTap: isDownloading
-          ? null
-          : () => _openAttachment(notification),
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: AppColors.primaryTeal.withValues(alpha: isDark ? 0.08 : 0.05),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: AppColors.primaryTeal.withValues(alpha: isDark ? 0.15 : 0.1),
-          ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.primaryTeal.withValues(alpha: isDark ? 0.08 : 0.05),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: AppColors.primaryTeal.withValues(alpha: isDark ? 0.15 : 0.1),
         ),
-        child: isDownloading
-            ? _buildDownloadProgress(progress, isDark)
-            : hasError
-                ? _buildRetrySection(notification, isDark)
-                : _buildAttachmentInfo(notification, isDark),
       ),
-    );
-  }
-
-  Widget _buildAttachmentInfo(BoardNotification notification, bool isDark) {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: AppColors.primaryTeal.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Icon(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
             _iconForAttachment(notification.attachmentType, notification.displayAttachmentName),
+            size: 16,
             color: AppColors.primaryTeal,
-            size: 22,
           ),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                notification.displayAttachmentName,
-                style: GoogleFonts.inter(
-                  color: isDark ? Colors.white : AppColors.textPrimaryLight,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-                overflow: TextOverflow.ellipsis,
-                maxLines: 1,
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              notification.displayAttachmentName,
+              style: GoogleFonts.inter(
+                color: AppColors.primaryTeal,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
               ),
-              if (notification.attachmentSize != null) ...[
-                const SizedBox(height: 2),
-                Text(
-                  _formatFileSize(notification.attachmentSize),
-                  style: GoogleFonts.inter(
-                    color: Colors.grey,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-        Icon(
-          Icons.info_outline_rounded,
-          color: AppColors.primaryTeal.withValues(alpha: 0.7),
-          size: 20,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildDownloadProgress(double progress, bool isDark) {
-    final percent = (progress * 100).toInt();
-
-    return Row(
-      children: [
-        SizedBox(
-          width: 40,
-          height: 40,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              CircularProgressIndicator(
-                value: progress,
-                strokeWidth: 3,
-                valueColor:
-                    AlwaysStoppedAnimation<Color>(AppColors.primaryTeal),
-                backgroundColor: Colors.white.withValues(alpha: 0.1),
-              ),
-              Text(
-                '$percent%',
-                style: GoogleFonts.inter(
-                  color: AppColors.primaryTeal,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Loading...',
-                style: GoogleFonts.inter(
-                  color: isDark ? Colors.white70 : AppColors.textSecondaryLight,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                '$percent% loaded',
-                style: GoogleFonts.inter(
-                  color: Colors.grey,
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildRetrySection(BoardNotification notification, bool isDark) {
-    return Row(
-      children: [
-        const Icon(Icons.error_outline, color: Colors.redAccent, size: 22),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            'Download failed. Tap to retry.',
-            style: GoogleFonts.inter(
-              color: Colors.redAccent,
-              fontSize: 14,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
-        ),
-        Icon(
-          Icons.refresh_rounded,
-          color: Colors.white54,
-          size: 20,
-        ),
-      ],
+          if (notification.attachmentSize != null) ...[
+            const SizedBox(width: 6),
+            Text(
+              _formatFileSize(notification.attachmentSize),
+              style: GoogleFonts.inter(color: Colors.grey, fontSize: 11),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

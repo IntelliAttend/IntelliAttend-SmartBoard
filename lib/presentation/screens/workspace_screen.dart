@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/logger.dart';
+import '../../models/board_notification.dart';
 import '../../services/api_service.dart';
 import '../../services/heartbeat_service.dart';
 import '../../services/notification_listener_service.dart';
@@ -48,6 +49,43 @@ class _FlashbackDay {
     required this.date,
     required this.events,
   });
+}
+
+
+class _WSColors {
+  final Color bg;
+  final Color surface;
+  final Color elevated;
+  final Color border;
+  final Color borderStrong;
+  final Color textPrimary;
+  final Color textSecondary;
+  final Color textMuted;
+
+  const _WSColors({
+    required this.bg,
+    required this.surface,
+    required this.elevated,
+    required this.border,
+    required this.borderStrong,
+    required this.textPrimary,
+    required this.textSecondary,
+    required this.textMuted,
+  });
+
+  factory _WSColors.of(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return _WSColors(
+      bg: isDark ? AppColors.bgDark : AppColors.bgLight,
+      surface: isDark ? Colors.white.withValues(alpha: 0.03) : Colors.white,
+      elevated: isDark ? Colors.white.withValues(alpha: 0.07) : const Color(0xFFF1F5F9),
+      border: isDark ? const Color(0x1AFFFFFF) : const Color(0x1A000000),
+      borderStrong: isDark ? const Color(0x33FFFFFF) : const Color(0x33000000),
+      textPrimary: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+      textSecondary: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
+      textMuted: Colors.grey,
+    );
+  }
 }
 
 class WorkspaceScreen extends StatefulWidget {
@@ -100,28 +138,19 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
   StreamSubscription<List<BoardNotification>>? _resourcesSub;
 
   late AnimationController _pulseController;
+  _WSColors get _palette => _WSColors.of(context);
 
-  // ── Palette (light, clean) ──────────────────────────────────────────────────
-  // Matches the idle_screen light-mode "white" aesthetic.
-  static const Color _bgDark = Color(0xFFF8FAFC);       // AppColors.bgLight
-  static const Color _surfaceCard = Colors.white;          // pure white
-  static const Color _surfaceElevated = Color(0xFFF1F5F9); // subtle gray elevation
-  static const Color _surfaceGlass = Color(0x0A000000);   // subtle dark overlay
-  static const Color _border = Color(0x1A000000);        // 10% black — thin border
-  static const Color _borderStrong = Color(0x33000000);  // 20% black — strong border
-  static const Color _textPrimary = Color(0xFF0F172A);   // AppColors.textPrimaryLight
-  static const Color _textSecondary = Color(0xFF475569);  // AppColors.textSecondaryLight
-  static const Color _textMuted = Color(0xFF94A3B8);     // slate 400
+  // Brand / accent colors (theme-independent)
   static const Color _teal = AppColors.primaryTeal;
   static const Color _tealAlpha = Color(0x3314B8A6);
   static const Color _tealLight = Color(0x2214B8A6);
-
   static const Color _green = Color(0xFF4ADE80);
   static const Color _greenLight = Color(0x224ADE80);
   static const Color _red = Color(0xFFEF4444);
   static const Color _amber = Color(0xFFF59E0B);
   static const Color _amberLight = Color(0x22F59E0B);
   static const Color _purple = Color(0xFFA78BFA);
+
 
   List<_TimelineEvent> get _todayTimeline => [
         _TimelineEvent(
@@ -572,7 +601,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
             fontSize: 10,
             fontWeight: FontWeight.bold,
             letterSpacing: 1.5,
-            color: Color(0xFF94A3B8),
+            color: Colors.grey,
           ),
         ),
         const SizedBox(height: 4),
@@ -595,7 +624,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _bgDark,
+      backgroundColor: _palette.bg,
       body: Column(
         children: [
           _buildTopBar(),
@@ -614,7 +643,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                             : _buildSettingsView(),
                   ),
                 ),
-                Container(width: 1, color: _border),
+                Container(width: 1, color: _palette.border),
                 Padding(
                   padding: const EdgeInsets.only(bottom: 20),
                   child: SizedBox(width: 400, child: _buildLectureHistory()),
@@ -637,10 +666,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
     final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
     return Container(
       height: 64,
-      padding: const EdgeInsets.only(left: 28),
+      padding: const EdgeInsets.symmetric(horizontal: 40),
       decoration: BoxDecoration(
-        color: _bgDark,
-        border: Border(bottom: BorderSide(color: _border, width: 1)),
+        color: _palette.bg,
+        border: Border(bottom: BorderSide(color: _palette.border, width: 1)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -658,16 +687,16 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                     child: Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: _surfaceElevated,
+                        color: _palette.elevated,
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: _border),
+                        border: Border.all(color: _palette.border),
                       ),
-                      child: Icon(Icons.arrow_back_rounded, color: _textSecondary, size: 20),
+                      child: Icon(Icons.arrow_back_rounded, color: _palette.textSecondary, size: 20),
                     ),
                   ),
                 ),
                 const SizedBox(width: 20),
-                Container(width: 1, height: 28, color: _border),
+                Container(width: 1, height: 28, color: _palette.border),
                 const SizedBox(width: 20),
                 Flexible(
                   child: Column(
@@ -680,7 +709,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                           fontSize: 9,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 1.5,
-                          color: _textMuted,
+                          color: _palette.textMuted,
                         ),
                       ),
                       const SizedBox(height: 3),
@@ -689,7 +718,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
-                          color: _textPrimary,
+                          color: _palette.textPrimary,
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -710,11 +739,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
-                  color: _textPrimary,
+                  color: _palette.textPrimary,
                 ),
               ),
               const SizedBox(width: 12),
-              Container(width: 1, height: 16, color: _border),
+              Container(width: 1, height: 16, color: _palette.border),
               const SizedBox(width: 12),
               Icon(Icons.schedule_rounded, size: 14, color: _teal),
               const SizedBox(width: 6),
@@ -723,7 +752,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                 style: GoogleFonts.jetBrainsMono(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
-                  color: _textPrimary,
+                  color: _palette.textPrimary,
                 ),
               ),
             ],
@@ -751,8 +780,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
     return Container(
       width: 240,
       decoration: BoxDecoration(
-        color: _bgDark,
-        border: Border(right: BorderSide(color: _border, width: 1.5)),
+        color: _palette.bg,
+        border: Border(right: BorderSide(color: _palette.border, width: 1.5)),
       ),
       child: Column(
         children: [
@@ -764,9 +793,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
             child: Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
-                color: _surfaceCard,
+                color: _palette.surface,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: _border),
+                border: Border.all(color: _palette.border),
                 boxShadow: [
                   BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 20, offset: const Offset(0, 4)),
                 ],
@@ -793,7 +822,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                           style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w700,
-                            color: _textPrimary,
+                            color: _palette.textPrimary,
                           ),
                         ),
                         const SizedBox(height: 2),
@@ -860,7 +889,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                   decoration: BoxDecoration(
                     color: Colors.transparent,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _border),
+                    border: Border.all(color: _palette.border),
                   ),
                   child: Row(
                     children: [
@@ -868,7 +897,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                         width: 40,
                         height: 40,
                         decoration: BoxDecoration(
-                          color: _surfaceElevated,
+                          color: _palette.elevated,
                           borderRadius: BorderRadius.circular(10),
                         ),
                         child: const Icon(Icons.people_rounded, size: 20, color: Color(0xFF94A3B8)),
@@ -883,12 +912,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                               style: TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w500,
-                                color: _textPrimary,
+                                color: _palette.textPrimary,
                               ),
                             ),
                             Text(
                               'Mark & manage',
-                              style: TextStyle(fontSize: 10, color: _textMuted),
+                              style: TextStyle(fontSize: 10, color: _palette.textMuted),
                             ),
                           ],
                         ),
@@ -921,7 +950,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _red,
                   foregroundColor: Colors.white,
-                  disabledBackgroundColor: _textMuted,
+                  disabledBackgroundColor: _palette.textMuted,
                   minimumSize: const Size(0, 48),
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -955,7 +984,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
             color: isActive ? _teal : Colors.transparent,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: isActive ? _teal : _border,
+              color: isActive ? _teal : _palette.border,
               width: isActive ? 0 : 1,
             ),
             boxShadow: isActive
@@ -968,10 +997,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(
-                  color: isActive ? Colors.white.withValues(alpha: 0.15) : _surfaceElevated,
+                  color: isActive ? Colors.white.withValues(alpha: 0.15) : _palette.elevated,
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(icon, size: 20, color: isActive ? Colors.white : _textMuted),
+                child: Icon(icon, size: 20, color: isActive ? Colors.white : _palette.textMuted),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -983,7 +1012,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
-                        color: isActive ? Colors.white : _textPrimary,
+                        color: isActive ? Colors.white : _palette.textPrimary,
                       ),
                     ),
                     if (subtitle != null)
@@ -991,7 +1020,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                         subtitle,
                         style: TextStyle(
                           fontSize: 10,
-                          color: isActive ? Colors.white.withValues(alpha: 0.6) : _textMuted,
+                          color: isActive ? Colors.white.withValues(alpha: 0.6) : _palette.textMuted,
                         ),
                       ),
                   ],
@@ -1014,10 +1043,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
       children: [
         // TabBar — animated underline indicator (matching timetable)
         Container(
-          padding: const EdgeInsets.fromLTRB(32, 24, 32, 0),
+          padding: const EdgeInsets.fromLTRB(40, 40, 40, 0),
           child: Container(
             decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: _border)),
+              border: Border(bottom: BorderSide(color: _palette.border)),
             ),
             child: TabBar(
               controller: _resourceTabController,
@@ -1025,7 +1054,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
               indicatorWeight: 3,
               indicatorPadding: const EdgeInsets.symmetric(horizontal: 8),
               labelColor: _teal,
-              unselectedLabelColor: _textMuted,
+              unselectedLabelColor: _palette.textMuted,
               labelStyle: TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w700,
@@ -1156,10 +1185,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: isSelected ? _tealLight : _surfaceCard,
+            color: isSelected ? _tealLight : _palette.surface,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: isSelected ? _teal : _border,
+              color: isSelected ? _teal : _palette.border,
               width: isSelected ? 2 : 1,
             ),
           ),
@@ -1170,7 +1199,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
               Icon(
                 _fileIcon(ext),
                 size: 32,
-                color: isSelected ? _teal : _textSecondary,
+                color: isSelected ? _teal : _palette.textSecondary,
               ),
               const SizedBox(height: 8),
               Text(
@@ -1178,7 +1207,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
-                  color: _textPrimary,
+                  color: _palette.textPrimary,
                 ),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -1197,9 +1226,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: _surfaceCard,
+        color: _palette.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _borderStrong),
+        border: Border.all(color: _palette.borderStrong),
       ),
       child: Row(
         children: [
@@ -1223,7 +1252,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w800,
-                    color: _textPrimary,
+                    color: _palette.textPrimary,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -1231,7 +1260,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                   filter == _ResourceFilter.myResources
                       ? 'Live cards appear here once the notification cache is populated.'
                       : 'Departmental library card wall is reserved for curated assets.',
-                  style: TextStyle(fontSize: 12, color: _textMuted),
+                  style: TextStyle(fontSize: 12, color: _palette.textMuted),
                 ),
               ],
             ),
@@ -1250,7 +1279,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: _surfaceCard,
+        color: _palette.surface,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: accentColor.withValues(alpha: 0.22)),
       ),
@@ -1276,18 +1305,18 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
-                    color: _textPrimary,
+                    color: _palette.textPrimary,
                   ),
                 ),
                 const SizedBox(height: 3),
                 Text(
                   subtitle,
-                  style: TextStyle(fontSize: 11, color: _textMuted, height: 1.35),
+                  style: TextStyle(fontSize: 11, color: _palette.textMuted, height: 1.35),
                 ),
               ],
             ),
           ),
-          Icon(Icons.chevron_right_rounded, color: _textMuted.withValues(alpha: 0.55)),
+          Icon(Icons.chevron_right_rounded, color: _palette.textMuted.withValues(alpha: 0.55)),
         ],
       ),
     );
@@ -1320,7 +1349,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
   Widget _buildLectureHistory() {
     final days = _allLectureDays;
     return Container(
-      color: _bgDark,
+      color: _palette.bg,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1328,7 +1357,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
           Container(
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
             decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: _border)),
+              border: Border(bottom: BorderSide(color: _palette.border)),
             ),
             child: Row(
               children: [
@@ -1350,12 +1379,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
-                        color: _textPrimary,
+                        color: _palette.textPrimary,
                       ),
                     ),
                     Text(
                       'Scroll up for older sessions',
-                      style: TextStyle(fontSize: 11, color: _textMuted),
+                      style: TextStyle(fontSize: 11, color: _palette.textMuted),
                     ),
                   ],
                 ),
@@ -1384,7 +1413,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
-                              color: day.label == 'Today' ? _tealLight : _surfaceElevated,
+                              color: day.label == 'Today' ? _tealLight : _palette.elevated,
                               borderRadius: BorderRadius.circular(6),
                             ),
                             child: Text(
@@ -1392,7 +1421,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                               style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w700,
-                                color: day.label == 'Today' ? _teal : _textMuted,
+                                color: day.label == 'Today' ? _teal : _palette.textMuted,
                               ),
                             ),
                           ),
@@ -1401,7 +1430,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                             day.date,
                             style: TextStyle(
                               fontSize: 11,
-                              color: _textMuted,
+                              color: _palette.textMuted,
                             ),
                           ),
                         ],
@@ -1413,7 +1442,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                     if (dayIndex < days.length - 1)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 6),
-                        child: Container(height: 1, color: _border),
+                        child: Container(height: 1, color: _palette.border),
                       ),
                   ],
                 );
@@ -1427,8 +1456,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
           Container(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 18),
             decoration: BoxDecoration(
-              color: _bgDark,
-              border: Border(top: BorderSide(color: _border)),
+              color: _palette.bg,
+              border: Border(top: BorderSide(color: _palette.border)),
             ),
             child: SizedBox(
               width: double.infinity,
@@ -1492,10 +1521,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
             height: 24,
             margin: const EdgeInsets.only(top: 4),
             decoration: BoxDecoration(
-              color: event.isActive ? _tealLight : _surfaceCard,
+              color: event.isActive ? _tealLight : _palette.surface,
               shape: BoxShape.circle,
               border: Border.all(
-                color: event.isActive ? _teal : _borderStrong,
+                color: event.isActive ? _teal : _palette.borderStrong,
                 width: event.isActive ? 2.5 : 2,
               ),
             ),
@@ -1508,10 +1537,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
             child: Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: event.isActive ? _teal.withValues(alpha: 0.04) : _surfaceCard,
+                color: event.isActive ? _teal.withValues(alpha: 0.04) : _palette.surface,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: event.isActive ? _teal.withValues(alpha: 0.15) : _border,
+                  color: event.isActive ? _teal.withValues(alpha: 0.15) : _palette.border,
                   width: 1,
                 ),
               ),
@@ -1520,14 +1549,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.schedule_rounded, size: 12, color: event.isActive ? _teal : _textMuted),
+                      Icon(Icons.schedule_rounded, size: 12, color: event.isActive ? _teal : _palette.textMuted),
                       const SizedBox(width: 4),
                       Text(
                         event.time,
                         style: GoogleFonts.jetBrainsMono(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
-                          color: event.isActive ? _teal : _textMuted,
+                          color: event.isActive ? _teal : _palette.textMuted,
                           letterSpacing: 0.3,
                         ),
                       ),
@@ -1558,7 +1587,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
-                      color: _textPrimary,
+                      color: _palette.textPrimary,
                     ),
                   ),
                   const SizedBox(height: 3),
@@ -1566,7 +1595,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                     event.description,
                     style: TextStyle(
                       fontSize: 12,
-                      color: _textSecondary,
+                      color: _palette.textSecondary,
                       height: 1.4,
                     ),
                     maxLines: 2,
@@ -1599,9 +1628,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
           children: [
             Text(title,
                 style: TextStyle(
-                    fontSize: 18, fontWeight: FontWeight.w700, color: _textPrimary)),
+                    fontSize: 18, fontWeight: FontWeight.w700, color: _palette.textPrimary)),
             Text(subtitle,
-                style: TextStyle(fontSize: 11, color: _textMuted)),
+                style: TextStyle(fontSize: 11, color: _palette.textMuted)),
           ],
         ),
       ],
@@ -1642,12 +1671,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.w800,
-                      color: _textPrimary,
+                      color: _palette.textPrimary,
                     ),
                   ),
                   Text(
                     'Upcoming lectures & events',
-                    style: TextStyle(fontSize: 12, color: _textMuted),
+                    style: TextStyle(fontSize: 12, color: _palette.textMuted),
                   ),
                 ],
               ),
@@ -1667,7 +1696,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
-                    color: _textMuted,
+                    color: _palette.textMuted,
                     letterSpacing: 0.3,
                   ),
                 ),
@@ -1700,7 +1729,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: isToday ? FontWeight.w800 : FontWeight.w500,
-                        color: isToday ? Colors.white : _textSecondary,
+                        color: isToday ? Colors.white : _palette.textSecondary,
                       ),
                     ),
                   ),
@@ -1746,8 +1775,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                     style: SegmentedButton.styleFrom(
                       selectedBackgroundColor: _teal,
                       selectedForegroundColor: Colors.white,
-                    backgroundColor: _surfaceGlass,
-                      foregroundColor: _textSecondary,
+                    backgroundColor: _palette.surface,
+                      foregroundColor: _palette.textSecondary,
                     ),
                   ),
                 ),
@@ -1799,9 +1828,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                 Container(
                   padding: const EdgeInsets.all(22),
                   decoration: BoxDecoration(
-                    color: _surfaceCard,
+                    color: _palette.surface,
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: _border),
+                    border: Border.all(color: _palette.border),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1823,17 +1852,17 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                             children: [
                               Text('IntelliAttend SmartBoard',
                                   style: TextStyle(
-                                      fontSize: 17, fontWeight: FontWeight.w800, color: _textPrimary)),
+                                      fontSize: 17, fontWeight: FontWeight.w800, color: _palette.textPrimary)),
                               const SizedBox(height: 3),
                               Text('Version 5.4.0+1',
                                   style: TextStyle(
-                                      fontSize: 12, color: _textMuted)),
+                                      fontSize: 12, color: _palette.textMuted)),
                             ],
                           ),
                         ],
                       ),
                       const SizedBox(height: 22),
-                      Container(height: 1, color: _border),
+                      Container(height: 1, color: _palette.border),
                       const SizedBox(height: 16),
                       _infoRow(Icons.construction_rounded, 'Build', 'Windows Debug'),
                       _infoRow(Icons.tag_rounded, 'Session', widget.sessionId),
@@ -1861,9 +1890,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: _surfaceCard,
+        color: _palette.surface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _border),
+        border: Border.all(color: _palette.border),
       ),
       child: Row(
         children: [
@@ -1884,10 +1913,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
               children: [
                 Text(title,
                     style: TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w700, color: _textPrimary)),
+                        fontSize: 14, fontWeight: FontWeight.w700, color: _palette.textPrimary)),
                 const SizedBox(height: 2),
                 Text(subtitle,
-                    style: TextStyle(fontSize: 12, color: _textMuted)),
+                    style: TextStyle(fontSize: 12, color: _palette.textMuted)),
               ],
             ),
           ),
@@ -1909,12 +1938,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
             width: 64,
             child: Text(label,
                 style: TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w500, color: _textMuted)),
+                    fontSize: 12, fontWeight: FontWeight.w500, color: _palette.textMuted)),
           ),
           Expanded(
             child: Text(value,
                 style: TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w700, color: _textPrimary)),
+                    fontSize: 12, fontWeight: FontWeight.w700, color: _palette.textPrimary)),
           ),
         ],
       ),

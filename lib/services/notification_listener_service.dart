@@ -4,160 +4,11 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import '../core/config/api_schema.dart';
 import '../core/utils/logger.dart';
+import '../models/board_notification.dart';
 import '../models/notification_event.dart';
 import 'api_service.dart';
+import 'session_manager.dart';
 import 'time_sync_service.dart';
-
-enum NotificationPriority {
-  emergency, // 0 — full screen takeover
-  high,      // 1 — blur overlay with timer
-  normal,    // 2 — reminder card / popdown
-  low,       // 3 — notification panel only
-}
-
-class BoardNotification {
-  final String id;
-  final String title;
-  final String body;
-  final String type;
-  final DateTime timestamp;
-  final bool read;
-  final String? attachmentUrl;
-  final String? attachmentName;
-  final String? attachmentType;
-  final int? attachmentSize;
-  final NotificationPriority priority;
-  final List<String>? precautionarySteps;
-  final String? location;
-  final String? safeExit;
-  final String? assemblyPoint;
-
-  // Contract v1 fields
-  final String? notificationId;
-  final bool requiresAcknowledgement;
-  final int? durationSeconds;
-  final String? displayMode;
-
-  BoardNotification({
-    required this.id,
-    required this.title,
-    required this.body,
-    required this.type,
-    required this.timestamp,
-    this.read = false,
-    this.attachmentUrl,
-    this.attachmentName,
-    this.attachmentType,
-    this.attachmentSize,
-    this.priority = NotificationPriority.low,
-    this.precautionarySteps,
-    this.location,
-    this.safeExit,
-    this.assemblyPoint,
-    this.notificationId,
-    this.requiresAcknowledgement = false,
-    this.durationSeconds,
-    this.displayMode,
-  });
-
-  bool get hasAttachment => attachmentUrl != null && attachmentUrl!.isNotEmpty;
-
-  String get displayAttachmentName {
-    if (attachmentName != null && attachmentName!.isNotEmpty) return attachmentName!;
-    if (attachmentUrl != null) {
-      final segments = attachmentUrl!.split('/');
-      return segments.last;
-    }
-    return 'document';
-  }
-
-  bool get isAllClear =>
-      displayMode == NotificationPayload.displayModeFullScreen &&
-      type == NotificationPayload.notificationTypeAllClear;
-
-  static NotificationPriority _parsePriority(dynamic value) {
-    if (value is int) {
-      return NotificationPriority.values[value.clamp(0, 3)];
-    }
-    if (value is String) {
-      switch (value.toLowerCase()) {
-        case 'emergency': return NotificationPriority.emergency;
-        case 'high': return NotificationPriority.high;
-        case 'normal': return NotificationPriority.normal;
-        case 'low': return NotificationPriority.low;
-      }
-    }
-    return NotificationPriority.low;
-  }
-
-  factory BoardNotification.fromMap(String id, Map<String, dynamic> data) {
-    int? parseSize(dynamic value) {
-      if (value is int) return value;
-      if (value is double) return value.toInt();
-      if (value is String) return int.tryParse(value);
-      return null;
-    }
-
-    return BoardNotification(
-      id: id,
-      title: data[ApiSchema.fieldTitle]?.toString() ?? 'Notification',
-      body: data[ApiSchema.fieldBody]?.toString() ?? '',
-      type: data[ApiSchema.fieldType]?.toString() ?? 'info',
-      timestamp: data[ApiSchema.fieldTimestamp] is DateTime
-          ? (data[ApiSchema.fieldTimestamp] as DateTime)
-          : data[ApiSchema.fieldCreatedAt] is DateTime
-              ? (data[ApiSchema.fieldCreatedAt] as DateTime)
-              : TimeSyncService.timeNow,
-      read: data[ApiSchema.fieldRead] == true,
-      attachmentUrl: data[ApiSchema.fieldAttachmentUrl]?.toString(),
-      attachmentName: data[ApiSchema.fieldAttachmentName]?.toString(),
-      attachmentType: data[ApiSchema.fieldAttachmentType]?.toString(),
-      attachmentSize: parseSize(data[ApiSchema.fieldAttachmentSize]),
-      priority: _parsePriority(data[ApiSchema.fieldPriority]),
-      notificationId: data[ApiSchema.fieldNotificationId]?.toString(),
-      requiresAcknowledgement: data[ApiSchema.fieldRequiresAcknowledgement] == true,
-      durationSeconds: parseSize(data[ApiSchema.fieldDurationSeconds]),
-      displayMode: data[ApiSchema.fieldDisplayMode]?.toString(),
-      precautionarySteps: (data[ApiSchema.fieldPrecautionarySteps] as List<dynamic>?)
-          ?.map((e) => e.toString()).toList(),
-      location: data[ApiSchema.fieldLocation]?.toString(),
-      safeExit: data[ApiSchema.fieldSafeExit]?.toString(),
-      assemblyPoint: data[ApiSchema.fieldAssemblyPoint]?.toString(),
-    );
-  }
-
-  factory BoardNotification.fromNotificationPayload(NotificationPayload payload, {DateTime? timestamp}) {
-    return BoardNotification(
-      id: payload.notificationId,
-      title: payload.title ?? '',
-      body: payload.body ?? '',
-      type: payload.notificationType,
-      timestamp: timestamp ?? TimeSyncService.timeNow,
-      priority: _mapDisplayModeToPriority(payload.displayMode, payload.notificationType),
-      attachmentUrl: payload.attachmentUrl,
-      attachmentName: payload.attachmentName,
-      attachmentType: payload.attachmentType,
-      attachmentSize: payload.attachmentSize,
-      notificationId: payload.notificationId,
-      requiresAcknowledgement: payload.requiresAcknowledgement,
-      durationSeconds: payload.durationSeconds,
-      displayMode: payload.displayMode,
-    );
-  }
-
-  static NotificationPriority _mapDisplayModeToPriority(String displayMode, String notificationType) {
-    if (displayMode == NotificationPayload.displayModeFullScreen) {
-      return NotificationPriority.emergency;
-    }
-    if (displayMode == NotificationPayload.displayModeOverlay) {
-      return NotificationPriority.high;
-    }
-    if (displayMode == NotificationPayload.displayModeReminder) {
-      return NotificationPriority.normal;
-    }
-    return NotificationPriority.low;
-  }
-}
 
 class NotificationListenerService {
   static final NotificationListenerService _instance =
@@ -197,7 +48,7 @@ class NotificationListenerService {
     final ppt = await _copyAsset('sample_presentation.ppt');
 
     final now = TimeSyncService.timeNow;
-    _cachedNotifications = [
+    final samples = <BoardNotification>[
       BoardNotification(id: 'sample-pdf-1',
         title: 'Lecture Notes — Week 10',
         body: 'Dr. Sharma shared PDF notes for this week\'s lecture on Neural Networks.',
@@ -272,8 +123,11 @@ class NotificationListenerService {
         attachmentType: 'application/vnd.ms-powerpoint', attachmentSize: 8,
       ),
     ];
+    // Append samples to existing cache so previously persisted notifications
+    // are not lost when docs mode is enabled.
+    _cachedNotifications = [...samples, ..._cachedNotifications];
     _notificationsController.add(_cachedNotifications);
-    Log.i('[NotificationListener] Injected ${_cachedNotifications.length} sample notifications');
+    Log.i('[NotificationListener] Injected ${samples.length} sample notifications');
   }
 
   final StreamController<List<BoardNotification>> _notificationsController =
@@ -335,12 +189,114 @@ class NotificationListenerService {
   List<BoardNotification> get cachedNotifications =>
       List.unmodifiable(_cachedNotifications);
 
+  // ── Public BoardNotification factory helpers ─────────────────────
+
+  // ── Priority parsing helpers ────────────────────────────────────
+
+  static NotificationPriority _parsePriority(dynamic value) {
+    if (value is int) {
+      return NotificationPriority.values[value.clamp(0, 3)];
+    }
+    if (value is String) {
+      switch (value.toLowerCase()) {
+        case 'emergency': return NotificationPriority.emergency;
+        case 'high': return NotificationPriority.high;
+        case 'normal': return NotificationPriority.normal;
+        case 'low': return NotificationPriority.low;
+      }
+    }
+    return NotificationPriority.low;
+  }
+
+  static BoardNotification fromMap(String id, Map<String, dynamic> data) {
+    int? parseSize(dynamic value) {
+      if (value is int) return value;
+      if (value is double) return value.toInt();
+      if (value is String) return int.tryParse(value);
+      return null;
+    }
+
+    return BoardNotification(
+      id: id,
+      title: data[ApiSchema.fieldTitle]?.toString() ?? 'Notification',
+      body: data[ApiSchema.fieldBody]?.toString() ?? '',
+      type: data[ApiSchema.fieldType]?.toString() ?? 'info',
+      timestamp: data[ApiSchema.fieldTimestamp] is DateTime
+          ? (data[ApiSchema.fieldTimestamp] as DateTime)
+          : data[ApiSchema.fieldCreatedAt] is DateTime
+              ? (data[ApiSchema.fieldCreatedAt] as DateTime)
+              : TimeSyncService.timeNow,
+      read: data[ApiSchema.fieldRead] == true,
+      attachmentUrl: data[ApiSchema.fieldAttachmentUrl]?.toString(),
+      attachmentName: data[ApiSchema.fieldAttachmentName]?.toString(),
+      attachmentType: data[ApiSchema.fieldAttachmentType]?.toString(),
+      attachmentSize: parseSize(data[ApiSchema.fieldAttachmentSize]),
+      priority: _parsePriority(data[ApiSchema.fieldPriority]),
+      notificationId: data[ApiSchema.fieldNotificationId]?.toString(),
+      requiresAcknowledgement: data[ApiSchema.fieldRequiresAcknowledgement] == true,
+      durationSeconds: parseSize(data[ApiSchema.fieldDurationSeconds]),
+      displayMode: data[ApiSchema.fieldDisplayMode]?.toString(),
+      precautionarySteps: (data[ApiSchema.fieldPrecautionarySteps] as List<dynamic>?)
+          ?.map((e) => e.toString()).toList(),
+      location: data[ApiSchema.fieldLocation]?.toString(),
+      safeExit: data[ApiSchema.fieldSafeExit]?.toString(),
+      assemblyPoint: data[ApiSchema.fieldAssemblyPoint]?.toString(),
+    );
+  }
+
+  // ── Local vault persistence ────────────────────────────────────
+
+  /// Loads notifications from the local Isar vault on startup.
+  /// Merges with any already-cached items so WebSocket arrivals that
+  /// beat this call are not lost. Returns the list sorted by timestamp
+  /// descending.
+  Future<List<BoardNotification>> loadFromLocalVault() async {
+    try {
+      final stored = await SessionManager.getAllStoredNotifications();
+      // Merge: keep any in-memory items not yet in Isar
+      final existingIds = _cachedNotifications.map((n) => n.id).toSet();
+      final newFromVault = stored.where((n) => !existingIds.contains(n.id)).toList();
+      _cachedNotifications = [...newFromVault, ..._cachedNotifications];
+      _notificationsController.add(_cachedNotifications);
+      Log.i('[NotificationListener] Loaded ${stored.length} notifications from local vault');
+      return stored;
+    } catch (e) {
+      Log.w('[NotificationListener] Local vault load failed: $e');
+      return [];
+    }
+  }
+
+  /// Persists a single notification to the local vault.
+  Future<void> _persistNotification(BoardNotification notification) async {
+    try {
+      await SessionManager.saveNotification(notification);
+    } catch (e) {
+      Log.w('[NotificationListener] Persist failed: $e');
+    }
+  }
+
+  /// Persists multiple notifications to the local vault.
+  Future<void> _persistNotifications(List<BoardNotification> notifications) async {
+    try {
+      await SessionManager.saveNotifications(notifications);
+    } catch (e) {
+      Log.w('[NotificationListener] Batch persist failed: $e');
+    }
+  }
+
+  static BoardNotification _fromPayload(NotificationPayload payload, {DateTime? timestamp}) {
+    return BoardNotification.fromNotificationPayload(payload, timestamp: timestamp);
+  }
+
   bool get isListening => _currentBoardId != null;
 
-  void start(String boardId) {
+  Future<void> start(String boardId) async {
     if (isListening && _currentBoardId == boardId) return;
     stop();
     _currentBoardId = boardId;
+
+    // Restore any notifications persisted from previous sessions
+    await loadFromLocalVault();
 
     Log.i('[NotificationListener] Started for board: $boardId');
   }
@@ -366,12 +322,13 @@ class NotificationListenerService {
           continue;
         }
         final id = notificationId ?? 'rest-${DateTime.now().millisecondsSinceEpoch}-$i';
-        notifications.add(BoardNotification.fromMap(id, data));
+        notifications.add(fromMap(id, data));
       }
 
       notifications.sort((a, b) => b.timestamp.compareTo(a.timestamp));
       _cachedNotifications = notifications;
       _notificationsController.add(_cachedNotifications);
+      _persistNotifications(notifications);
 
       Log.i('[NotificationListener] Loaded ${notifications.length} notifications from REST');
     } catch (e) {
@@ -380,9 +337,30 @@ class NotificationListenerService {
   }
 
   /// Removes a notification from the cache by [id] and emits the updated list.
+  /// The notification remains in the local vault (marked read) so the full
+  /// history is always preserved.
   void removeNotification(String id) {
+    final removed = _cachedNotifications.where((n) => n.id == id).toList();
     _cachedNotifications.removeWhere((n) => n.id == id);
     _notificationsController.add(_cachedNotifications);
+    for (final n in removed) {
+      final nid = n.notificationId ?? n.id;
+      SessionManager.markStoredNotificationRead(nid);
+    }
+  }
+
+  /// Permanently deletes a notification from both the cache and the local
+  /// vault.  Unlike [removeNotification] (which marks read), this is a true
+  /// deletion — useful for the "delete" action in the notifications list.
+  void deleteNotificationPermanently(String id) {
+    final removed = _cachedNotifications.where((n) => n.id == id).toList();
+    _cachedNotifications.removeWhere((n) => n.id == id);
+    _notificationsController.add(_cachedNotifications);
+    for (final n in removed) {
+      final nid = n.notificationId ?? n.id;
+      _dismissedNotificationIds.add(nid);
+      SessionManager.deleteStoredNotification(nid);
+    }
   }
 
   // ── Contract v1: WebSocket notification handling ──────────────────
@@ -409,27 +387,30 @@ class NotificationListenerService {
 
     // Handle all-clear: emit onAllClear stream and archive in history
     if (payload.isAllClear) {
-      final notification = BoardNotification.fromNotificationPayload(payload, timestamp: event.timestamp);
+      final notification = _fromPayload(payload, timestamp: event.timestamp);
       _allClearController.add(notification);
       _removeDisplayedNotification(NotificationPriority.emergency);
       _cachedNotifications.insert(0, notification);
       _notificationsController.add(_cachedNotifications);
+      _persistNotification(notification);
       Log.i('[NotificationListener] All-clear received. Restoring normal UI.');
       return;
     }
 
-    final notification = BoardNotification.fromNotificationPayload(payload, timestamp: event.timestamp);
+    final notification = _fromPayload(payload, timestamp: event.timestamp);
 
     switch (payload.displayMode) {
       case NotificationPayload.displayModeFullScreen:
       case NotificationPayload.displayModeOverlay:
         // These go to the overlay system (emergency/high priority)
         addNotification(notification);
+        _persistNotification(notification);
         break;
 
       case NotificationPayload.displayModeReminder:
         // Reminder goes to popdown queue with normal priority
         addNotification(notification);
+        _persistNotification(notification);
         break;
 
       case NotificationPayload.displayModeDefault:
@@ -437,6 +418,7 @@ class NotificationListenerService {
         // Default goes to inbox AND popdown queue (low priority, no overlay)
         _cachedNotifications.insert(0, notification);
         _notificationsController.add(_cachedNotifications);
+        _persistNotification(notification);
         // Emit on incoming stream so idle screen can show popdown
         if (_isIdle) {
           _incomingController.add(notification);
@@ -450,6 +432,8 @@ class NotificationListenerService {
 
   /// Dismiss a notification that was displayed via WebSocket.
   /// Sends acknowledge to server and adds to dismissed set.
+  /// The notification stays in the local vault (already marked read by
+  /// [removeNotification]) for the full history.
   Future<void> dismissNotification(String notificationId) async {
     _dismissedNotificationIds.add(notificationId);
     removeNotification(notificationId);
@@ -487,7 +471,7 @@ class NotificationListenerService {
   // ── Debug injection helpers ──────────────────────────────────────
 
   void injectEmergencyForDebug() {
-    addNotification(BoardNotification(
+    final n = BoardNotification(
       id: 'debug-emergency-${DateTime.now().millisecondsSinceEpoch}',
       title: 'FIRE EMERGENCY',
       body: 'Fire reported in Block B, 2nd Floor. Evacuate immediately.',
@@ -504,22 +488,26 @@ class NotificationListenerService {
         'Do Not Use Elevators — Use stairwell only',
         'Report to Assembly Point — Main ground area',
       ],
-    ));
+    );
+    addNotification(n);
+    _persistNotification(n);
   }
 
   void injectPriority1ForDebug() {
-    addNotification(BoardNotification(
+    final n = BoardNotification(
       id: 'debug-p1-${DateTime.now().millisecondsSinceEpoch}',
       title: 'Faculty Meeting Reminder',
       body: 'All faculty members are requested to attend the urgent meeting in Conference Room A at 12:00 PM.',
       type: 'alert',
       timestamp: TimeSyncService.timeNow,
       priority: NotificationPriority.high,
-    ));
+    );
+    addNotification(n);
+    _persistNotification(n);
   }
 
   void injectP2ForDebug() {
-    addNotification(BoardNotification(
+    final n = BoardNotification(
       id: 'debug-reminder-${DateTime.now().millisecondsSinceEpoch}',
       title: 'Library Book Due',
       body: 'Please return "Introduction to Machine Learning" to the library by tomorrow.',
@@ -530,7 +518,9 @@ class NotificationListenerService {
       requiresAcknowledgement: false,
       durationSeconds: null,
       displayMode: NotificationPayload.displayModeReminder,
-    ));
+    );
+    addNotification(n);
+    _persistNotification(n);
   }
 
   void injectDefaultForDebug() {
@@ -548,6 +538,7 @@ class NotificationListenerService {
     );
     _cachedNotifications.insert(0, notification);
     _notificationsController.add(_cachedNotifications);
+    _persistNotification(notification);
     Log.d('[NotificationListener] Added P3 debug notification to inbox: ${notification.title}');
   }
 

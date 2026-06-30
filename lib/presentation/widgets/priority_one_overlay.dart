@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:window_manager/window_manager.dart';
 import '../../core/theme/app_theme.dart';
+import '../../models/board_notification.dart';
 import '../../services/notification_listener_service.dart';
 
 class PriorityOneOverlay extends StatefulWidget {
@@ -240,6 +241,7 @@ class _PriorityOneOverlayState extends State<PriorityOneOverlay>
                     ],
                   ),
                   child: Stack(
+                    alignment: Alignment.center,
                     children: [
                       // Progress border as timer (P1 only)
                       if (_isP1)

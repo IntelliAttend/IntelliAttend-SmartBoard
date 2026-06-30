@@ -139,6 +139,50 @@ class HydrationRoster {
 }
 
 
+// ─── Stored Notification ─────────────────────────────────────────────────────
+
+
+@collection
+class StoredNotification {
+  Id id = Isar.autoIncrement;
+
+  @Index(unique: true)
+  late String notificationId;
+
+  late String localId;
+  late String title;
+  late String body;
+  late String type;
+  late DateTime timestamp;
+  bool read = false;
+
+  String? attachmentUrl;
+  String? attachmentName;
+  String? attachmentType;
+  int? attachmentSize;
+
+  late String priority; // emergency / high / normal / low
+
+  List<String> precautionarySteps = [];
+  String? location;
+  String? safeExit;
+  String? assemblyPoint;
+
+  bool requiresAcknowledgement = false;
+  int? durationSeconds;
+  String? displayMode;
+
+  // Timetable context (enriched at storage time)
+  String? slotId;
+  String? courseName;
+  String? facultyName;
+  String? sectionId;
+  String? roomNumber;
+
+  DateTime storedAt = DateTime.now();
+}
+
+
 // ─── Completed Session ───────────────────────────────────────────────────────
 
 

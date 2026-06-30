@@ -7,6 +7,7 @@ import '../models/isar_schemas.dart';
 import '../core/security/secure_storage_service.dart';
 import '../core/utils/logger.dart';
 import 'time_sync_service.dart';
+import '../models/board_notification.dart';
 
 class SessionManager {
   static Isar? _isar;
@@ -30,6 +31,7 @@ class SessionManager {
       CompletedSessionSchema,
       HydrationProfileSchema,
       HydrationRosterSchema,
+      StoredNotificationSchema,
     ];
 
     try {
@@ -256,6 +258,168 @@ class SessionManager {
       Log.i(
           '🧹 [SessionManager] Cleaned ${allCompleted.length} completed-session records for new day.');
     }
+  }
+
+  // ── Notification persistence ─────────────────────────────────────────────
+
+  static StoredNotification _boardNotificationToStored(BoardNotification n) {
+    final now = TimeSyncService.timeNow;
+    TimetableEntry? slot;
+    try {
+      slot = _isar!.timetableEntrys
+          .filter()
+          .dayOfWeekEqualTo(now.weekday)
+          .startTimeLessThan('${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}')
+          .endTimeGreaterThan('${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}')
+          .findFirstSync();
+    } catch (_) {}
+
+    final stored = StoredNotification()
+      ..notificationId = n.notificationId ?? n.id
+      ..localId = n.id
+      ..title = n.title
+      ..body = n.body
+      ..type = n.type
+      ..timestamp = n.timestamp
+      ..read = n.read
+      ..attachmentUrl = n.attachmentUrl
+      ..attachmentName = n.attachmentName
+      ..attachmentType = n.attachmentType
+      ..attachmentSize = n.attachmentSize
+      ..priority = n.priority.name
+      ..precautionarySteps = n.precautionarySteps ?? []
+      ..location = n.location
+      ..safeExit = n.safeExit
+      ..assemblyPoint = n.assemblyPoint
+      ..requiresAcknowledgement = n.requiresAcknowledgement
+      ..durationSeconds = n.durationSeconds
+      ..displayMode = n.displayMode
+      ..slotId = slot?.slotId
+      ..courseName = slot?.courseName
+      ..facultyName = slot?.facultyName
+      ..sectionId = slot?.sectionId
+      ..roomNumber = slot?.roomNumber
+      ..storedAt = now;
+
+    return stored;
+  }
+
+  static BoardNotification _storedToBoardNotification(StoredNotification s) {
+    return BoardNotification(
+      id: s.localId,
+      title: s.title,
+      body: s.body,
+      type: s.type,
+      timestamp: s.timestamp,
+      read: s.read,
+      attachmentUrl: s.attachmentUrl,
+      attachmentName: s.attachmentName,
+      attachmentType: s.attachmentType,
+      attachmentSize: s.attachmentSize,
+      priority: _parsePriority(s.priority),
+      precautionarySteps: s.precautionarySteps.isEmpty ? null : s.precautionarySteps,
+      location: s.location,
+      safeExit: s.safeExit,
+      assemblyPoint: s.assemblyPoint,
+      notificationId: s.notificationId,
+      requiresAcknowledgement: s.requiresAcknowledgement,
+      durationSeconds: s.durationSeconds,
+      displayMode: s.displayMode,
+    );
+  }
+
+  static NotificationPriority _parsePriority(String p) {
+    switch (p) {
+      case 'emergency': return NotificationPriority.emergency;
+      case 'high': return NotificationPriority.high;
+      case 'normal': return NotificationPriority.normal;
+      case 'low': return NotificationPriority.low;
+      default: return NotificationPriority.low;
+    }
+  }
+
+  static Future<void> saveNotification(BoardNotification notification) async {
+    final stored = _boardNotificationToStored(notification);
+    await _isar!.writeTxn(() async {
+      await _isar!.storedNotifications.put(stored);
+    });
+    Log.d('[SessionManager] Notification persisted: ${notification.id}');
+  }
+
+  static Future<void> saveNotifications(List<BoardNotification> notifications) async {
+    if (notifications.isEmpty) return;
+    final stored = notifications.map(_boardNotificationToStored).toList();
+    await _isar!.writeTxn(() async {
+      await _isar!.storedNotifications.putAll(stored);
+    });
+    Log.d('[SessionManager] Persisted ${stored.length} notifications');
+  }
+
+  static Future<List<BoardNotification>> getAllStoredNotifications() async {
+    final all = await _isar!.storedNotifications
+        .where()
+        .sortByTimestampDesc()
+        .findAll();
+    return all.map(_storedToBoardNotification).toList();
+  }
+
+  static Future<BoardNotification?> getStoredNotification(String notificationId) async {
+    final result = await _isar!.storedNotifications
+        .filter()
+        .notificationIdEqualTo(notificationId)
+        .findFirst();
+    return result != null ? _storedToBoardNotification(result) : null;
+  }
+
+  static Future<void> deleteStoredNotification(String notificationId) async {
+    await _isar!.writeTxn(() async {
+      await _isar!.storedNotifications
+          .filter()
+          .notificationIdEqualTo(notificationId)
+          .deleteAll();
+    });
+  }
+
+  static Future<void> deleteStoredNotifications(List<String> notificationIds) async {
+    await _isar!.writeTxn(() async {
+      await _isar!.storedNotifications.deleteAllByNotificationId(notificationIds);
+    });
+  }
+
+  static Future<void> markStoredNotificationRead(String notificationId) async {
+    await _isar!.writeTxn(() async {
+      final existing = await _isar!.storedNotifications
+          .filter()
+          .notificationIdEqualTo(notificationId)
+          .findFirst();
+      if (existing != null) {
+        existing.read = true;
+        await _isar!.storedNotifications.put(existing);
+      }
+    });
+  }
+
+  static Future<int> getUnreadNotificationCount() async {
+    return await _isar!.storedNotifications
+        .filter()
+        .readEqualTo(false)
+        .count();
+  }
+
+  static Future<List<BoardNotification>> getStoredNotificationsByType(String type) async {
+    final results = await _isar!.storedNotifications
+        .filter()
+        .typeEqualTo(type)
+        .sortByTimestampDesc()
+        .findAll();
+    return results.map(_storedToBoardNotification).toList();
+  }
+
+  static Future<void> clearAllStoredNotifications() async {
+    await _isar!.writeTxn(() async {
+      await _isar!.storedNotifications.where().deleteAll();
+    });
+    Log.i('[SessionManager] All stored notifications cleared');
   }
 
   static Future<void> saveAttendanceSnapshot({

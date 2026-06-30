@@ -591,7 +591,7 @@ Future<void> startBackgroundProtocols() async {
 
     await globalDeviceRepository.hydrateFromServer();
 
-    NotificationListenerService().start(boardId);
+    await NotificationListenerService().start(boardId);
     if (AppConfig.enableDocuments) {
       await NotificationListenerService().injectSampleData();
     }

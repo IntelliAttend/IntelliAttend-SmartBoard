@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:window_manager/window_manager.dart';
 import '../../core/theme/app_theme.dart';
+import '../../models/board_notification.dart';
 import '../../services/alert_audio_service.dart';
 import '../../services/notification_listener_service.dart';
 import 'glass_container.dart';

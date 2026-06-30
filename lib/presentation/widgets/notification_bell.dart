@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../models/board_notification.dart';
 import '../../services/notification_listener_service.dart';
 
 class NotificationBell extends StatefulWidget {

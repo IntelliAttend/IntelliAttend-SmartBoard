@@ -1,4 +1,5 @@
 import '../core/utils/logger.dart';
+import '../models/board_notification.dart';
 import 'api_service.dart';
 import 'notification_listener_service.dart';
 
@@ -19,7 +20,7 @@ class ResourceService {
         courseName: courseName,
       );
       return raw.mapIndexed((i, map) =>
-          BoardNotification.fromMap('my-resource-$i', map)).toList();
+          NotificationListenerService.fromMap('my-resource-$i', map)).toList();
     } catch (e) {
       Log.e('[ResourceService] Failed to fetch my resources: $e');
       return [];
@@ -35,7 +36,7 @@ class ResourceService {
         courseName: courseName,
       );
       return raw.mapIndexed((i, map) =>
-          BoardNotification.fromMap('college-resource-$i', map)).toList();
+          NotificationListenerService.fromMap('college-resource-$i', map)).toList();
     } catch (e) {
       Log.e('[ResourceService] Failed to fetch college resources: $e');
       return [];
