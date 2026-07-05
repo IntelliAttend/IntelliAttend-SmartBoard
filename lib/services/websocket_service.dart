@@ -142,29 +142,79 @@ class StudentVerifiedEvent {
 }
 
 class SystemCommandEvent {
-  final String command;
-  final String? reason;
-  final int delaySeconds;
   final String commandId;
-  final DateTime issuedAt;
+  final String command;
+  final int delaySeconds;
+  final String reason;
 
   SystemCommandEvent({
-    required this.command,
-    this.reason,
-    this.delaySeconds = 60,
     required this.commandId,
-    required this.issuedAt,
+    required this.command,
+    required this.delaySeconds,
+    required this.reason,
   });
 
   factory SystemCommandEvent.fromJson(Map<String, dynamic> json) {
     return SystemCommandEvent(
-      command: json['command'] as String? ?? 'shutdown',
-      reason: json['reason'] as String?,
-      delaySeconds: json['delay_seconds'] as int? ?? 60,
       commandId: json['command_id'] as String? ?? '',
-      issuedAt: json['issued_at'] != null
-          ? DateTime.parse(json['issued_at'] as String)
-          : TimeSyncService.timeNow,
+      command: json['command'] as String? ?? '',
+      delaySeconds: json['delay_seconds'] as int? ?? 0,
+      reason: json['reason'] as String? ?? '',
+    );
+  }
+}
+
+class ScheduleUpdateEvent {
+  final String type;
+  final String action;
+  final String slotId;
+  final String courseCode;
+  final String sectionId;
+  final String roomId;
+  final int dayOfWeek;
+  final String startTime;
+  final String endTime;
+  final String facultyId;
+  final String slotType;
+  final DateTime timestamp;
+  final String? overrideDate;
+  final String? newFacultyId;
+
+  ScheduleUpdateEvent({
+    required this.type,
+    required this.action,
+    required this.slotId,
+    required this.courseCode,
+    required this.sectionId,
+    required this.roomId,
+    required this.dayOfWeek,
+    required this.startTime,
+    required this.endTime,
+    required this.facultyId,
+    required this.slotType,
+    required this.timestamp,
+    this.overrideDate,
+    this.newFacultyId,
+  });
+
+  factory ScheduleUpdateEvent.fromJson(Map<String, dynamic> json) {
+    return ScheduleUpdateEvent(
+      type: json['type'] as String? ?? '',
+      action: json['action'] as String? ?? '',
+      slotId: json['slot_id'] as String? ?? '',
+      courseCode: json['course_code'] as String? ?? '',
+      sectionId: json['section_id'] as String? ?? '',
+      roomId: json['room_id'] as String? ?? '',
+      dayOfWeek: json['day_of_week'] as int? ?? 1,
+      startTime: json['start_time'] as String? ?? '',
+      endTime: json['end_time'] as String? ?? '',
+      facultyId: json['faculty_id'] as String? ?? '',
+      slotType: json['slot_type'] as String? ?? 'regular',
+      timestamp: json['timestamp'] != null
+          ? DateTime.parse(json['timestamp'] as String)
+          : DateTime.now(),
+      overrideDate: json['override_date'] as String?,
+      newFacultyId: json['new_faculty_id'] as String?,
     );
   }
 }
@@ -248,8 +298,14 @@ class WebsocketService {
   final StreamController<NotificationEvent> _notificationEventController =
       StreamController<NotificationEvent>.broadcast();
 
+  final StreamController<ScheduleUpdateEvent> _scheduleUpdateController =
+      StreamController<ScheduleUpdateEvent>.broadcast();
+
   Stream<NotificationEvent> get onNotificationEvent =>
       _notificationEventController.stream;
+
+  Stream<ScheduleUpdateEvent> get onScheduleUpdate =>
+      _scheduleUpdateController.stream;
 
   Stream<FullStateSync> get onFullStateSync => _syncController.stream;
   Stream<AttendanceMarkedEvent> get onAttendanceMarked =>
@@ -272,7 +328,16 @@ class WebsocketService {
 
   final SessionStateService _sessionState = SessionStateService();
 
+  /// Device repository for re-hydration after schedule updates.
+  /// Must be set via [setDeviceRepository] before schedule updates can trigger re-hydration.
+  dynamic _deviceRepository;
+
   WebsocketService(this._host);
+
+  /// Set the device repository for re-hydration support.
+  void setDeviceRepository(dynamic repository) {
+    _deviceRepository = repository;
+  }
 
   Future<void> connectSmartBoard(String boardId, [String? accessToken]) async {
     if (_disposed) return;
@@ -570,6 +635,11 @@ class WebsocketService {
           PowerCommandService().handleSystemCommand(event);
           break;
 
+        case 'SCHEDULE_UPDATED':
+        case 'FACULTY_REASSIGNED':
+          _handleScheduleUpdate(message);
+          break;
+
         default:
           Log.d('[WS] Unknown message type: $type');
       }
@@ -590,6 +660,41 @@ class WebsocketService {
     } catch (e) {
       Log.w('[WS] Failed to parse notification event: $e');
     }
+  }
+
+  void _handleScheduleUpdate(Map<String, dynamic> message) {
+    try {
+      final event = ScheduleUpdateEvent.fromJson(message);
+      Log.i('[WS] Schedule update: ${event.type} action=${event.action} '
+          'slot=${event.slotId} faculty=${event.facultyId} '
+          '${event.newFacultyId != null ? "new_faculty=${event.newFacultyId}" : ""}');
+
+      _scheduleUpdateController.add(event);
+
+      // Trigger re-hydration to fetch updated timetable from server
+      _triggerReHydration();
+    } catch (e) {
+      Log.w('[WS] Failed to parse schedule update: $e');
+    }
+  }
+
+  void _triggerReHydration() {
+    // Use Future.microtask to avoid blocking the WebSocket message handler
+    Future.microtask(() async {
+      try {
+        // Import is done at the top of the file via device_repository
+        // We need to access the Isar instance to re-hydrate
+        // The DeviceRepository will be injected via the setDeviceRepository method
+        if (_deviceRepository != null) {
+          await _deviceRepository!.hydrateFromServer();
+          Log.i('[WS] Re-hydration triggered after schedule update');
+        } else {
+          Log.w('[WS] DeviceRepository not set, cannot re-hydrate');
+        }
+      } catch (e) {
+        Log.e('[WS] Re-hydration failed: $e');
+      }
+    });
   }
 
   void _handleBoardConnected(Map<String, dynamic> message) {
@@ -705,5 +810,6 @@ class WebsocketService {
     _systemCommandController.close();
     _boardStatusController.close();
     _notificationEventController.close();
+    _scheduleUpdateController.close();
   }
 }
