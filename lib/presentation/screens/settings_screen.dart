@@ -20,7 +20,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _idleTheme = 'auto';
   HydrationProfile? _profile;
   DeviceRegistration? _registration;
-  int _timetableCount = 0;
 
   @override
   void initState() {
@@ -31,7 +30,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadData() async {
     await _loadIdleTheme();
     await _loadDeviceInfo();
-    await _loadTimetableCount();
   }
 
   Future<void> _loadIdleTheme() async {
@@ -58,18 +56,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _loadTimetableCount() async {
-    try {
-      final isar = Isar.getInstance();
-      if (isar == null) return;
-
-      final count = await isar.timetableEntrys.count();
-      if (mounted) setState(() => _timetableCount = count);
-    } catch (e) {
-      Log.e('[Settings] Failed to load timetable count: $e');
-    }
-  }
-
   Future<void> _handleSyncTimetable() async {
     setState(() => _isSyncing = true);
     try {
@@ -87,7 +73,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         TimetableCache().updateAll(allEntries);
 
         if (mounted) {
-          setState(() => _timetableCount = allEntries.length);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Timetable synced — ${allEntries.length} slots loaded'),
@@ -166,24 +151,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _buildSectionHeader('DEVICE INFORMATION'),
                     const SizedBox(height: 24),
                     _buildInfoCard([
-                      _buildInfoRow('Device Name', _profile?.boardName ?? _registration?.roomName ?? 'Unknown'),
                       _buildInfoRow('Room', _profile?.roomNumber ?? _registration?.roomName ?? 'Unknown'),
                       _buildInfoRow('Building', _profile?.building ?? _registration?.building ?? 'Unknown'),
-                      _buildInfoRow('Floor', _profile?.floor ?? 'Unknown'),
                       _buildInfoRow('Department', _registration?.department ?? 'Unknown'),
                       _buildInfoRow('Capacity', '${_registration?.capacity ?? 0} Students'),
                       _buildInfoRow('Institution', _profile?.institutionName ?? 'Unknown'),
-                      _buildInfoRow('Timezone', _profile?.timezone ?? 'Unknown'),
-                    ]),
-
-                    const SizedBox(height: 48),
-                    _buildSectionHeader('SYSTEM'),
-                    const SizedBox(height: 24),
-                    _buildInfoCard([
-                      _buildInfoRow('Board ID', _profile?.boardId ?? _registration?.smartBoardId ?? 'Unknown'),
-                      _buildInfoRow('Hardware ID', _registration?.hardwareId ?? 'Unknown'),
-                      _buildInfoRow('Timetable Slots', '$_timetableCount loaded'),
-                      _buildInfoRow('Status', _profile?.isRegistered == true ? 'Registered' : 'Not Registered'),
                     ]),
 
                     if (AppConfig.enableVideoBreaks) ...[
@@ -196,17 +168,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 48),
                     _buildSectionHeader('SYSTEM ACTIONS'),
                     const SizedBox(height: 24),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _buildActionButton(
-                            icon: Icons.sync_rounded,
-                            label: 'SYNC TIMETABLE',
-                            onTap: _isSyncing ? null : _handleSyncTimetable,
-                            isLoading: _isSyncing,
-                          ),
-                        ),
-                      ],
+                    _buildActionButton(
+                      icon: Icons.sync_rounded,
+                      label: 'SYNC TIMETABLE',
+                      onTap: _isSyncing ? null : _handleSyncTimetable,
+                      isLoading: _isSyncing,
+                      height: 80,
                     ),
                   ],
                 ),
@@ -380,42 +347,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required VoidCallback? onTap,
     Color? color,
     bool isLoading = false,
+    double height = 120,
   }) {
     final primaryColor = color ?? AppColors.primaryTeal;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: BorderRadius.circular(16),
       child: Container(
-        height: 120,
-        padding: const EdgeInsets.all(20),
+        height: height,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(16),
           border: Border.all(color: primaryColor.withValues(alpha: 0.1)),
           boxShadow: [
             BoxShadow(
               color: primaryColor.withValues(alpha: 0.05),
-              blurRadius: 15,
-              offset: const Offset(0, 8),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
             ),
           ],
         ),
-        child: Column(
+        child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             if (isLoading)
-              const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primaryTeal))
+              const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primaryTeal))
             else
-              Icon(icon, size: 28, color: primaryColor),
-            const SizedBox(height: 12),
+              Icon(icon, size: 22, color: primaryColor),
+            const SizedBox(width: 12),
             Text(
               label,
               textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w900,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
                 color: color ?? AppColors.textPrimaryLight,
-                letterSpacing: 1,
+                letterSpacing: 0.5,
               ),
             ),
           ],
