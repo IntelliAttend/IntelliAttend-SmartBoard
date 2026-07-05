@@ -67,6 +67,15 @@ jobs:
       - name: Run analyzer
         run: dart analyze lib/
 
+      - name: Update version in pubspec
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.flutter_version }}"
+          $pubspec = Get-Content pubspec.yaml -Raw
+          $pubspec = $pubspec -replace 'version: .*', "version: $version"
+          $pubspec | Out-File -FilePath pubspec.yaml -Encoding UTF8
+          Write-Host "Updated pubspec.yaml to version $version"
+
       - name: Build Windows release
         run: flutter build windows --release
 

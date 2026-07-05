@@ -1,6 +1,6 @@
 name: intelliattend_smartboard
 description: Offline-resilient, TOTP-based attendance engine for university classrooms.
-version: 5.4.0+3
+version: 5.4.0+5
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
