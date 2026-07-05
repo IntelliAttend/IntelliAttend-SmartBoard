@@ -12,6 +12,7 @@ import '../../services/session_state_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/api_service.dart';
 import '../../core/security/secure_storage_service.dart';
+import '../../main.dart' show globalDeviceRepository;
 import 'idle_screen.dart';
 import 'preparing_screen.dart';
 import 'igniting_screen.dart';
@@ -83,6 +84,7 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
 
       try {
         _wsService = WebsocketService(AppConfig.baseUrl);
+        _wsService!.setDeviceRepository(globalDeviceRepository);
         await _wsService!.connectSmartBoard(
           widget.registration.smartBoardId,
         );
