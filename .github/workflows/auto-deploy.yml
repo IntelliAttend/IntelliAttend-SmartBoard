@@ -1,0 +1,217 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Auto-Deploy Workflow — IntelliAttend SmartBoard
+#
+# Triggered on push to school-main. Automatically:
+#   1. Builds Windows MSI
+#   2. Creates GitHub Release with version tag
+#   3. Publishes latest.json manifest for auto-update
+#
+# SmartBoard devices poll latest.json and auto-download new versions.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Auto-Deploy
+
+on:
+  push:
+    branches: [school-main]
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: IntelliAttendSmartBoard
+  BUILD_CONFIG: release
+
+jobs:
+  build-and-deploy:
+    name: Build & Deploy
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for version calculation
+
+      - name: Calculate version
+        id: version
+        shell: pwsh
+        run: |
+          # Auto-increment based on commit count
+          $commitCount = (git rev-list --count HEAD)
+          $shortHash = (git rev-parse --short HEAD)
+          $version = "1.0.$commitCount"
+          $tag = "v$version"
+          
+          Write-Host "Version: $version"
+          Write-Host "Tag: $tag"
+          
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Run analyzer
+        run: dart analyze lib/
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Create .env file from secrets
+        shell: pwsh
+        run: |
+          @"
+          API_BASE_URL=${{ vars.API_BASE_URL || 'https://api-dev.balaseetharamanjaneyulu.com' }}
+          LOCAL_API_URL=http://127.0.0.1:8000/v1/board/telemetry
+          FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID || 'intelliattend-a2564' }}
+          FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_MESSAGING_SENDER_ID=${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
+          ENABLE_DOCUMENTS=true
+          "@ | Out-File -FilePath .env -Encoding UTF8
+          Write-Host ".env created for production build"
+
+      - name: Update version in pubspec
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $pubspec = Get-Content pubspec.yaml -Raw
+          $pubspec = $pubspec -replace 'version: .*', "version: $version"
+          $pubspec | Out-File -FilePath pubspec.yaml -Encoding UTF8
+          Write-Host "Updated pubspec.yaml to version $version"
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Verify build output
+        shell: pwsh
+        run: |
+          $exe = "build\windows\x64\runner\Release\${{ env.APP_NAME }}.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Host "ERROR: Build output not found at $exe" -Foreground Red
+            exit 1
+          }
+          Write-Host "Build output size: $((Get-Item $exe).Length / 1MB) MB"
+
+      - name: Setup WiX Toolset
+        shell: pwsh
+        run: |
+          $wixPath = "$env:WIX"
+          if (-not (Test-Path "$wixPath\bin\candle.exe")) {
+            choco install wixtoolset --no-progress -y
+          }
+          $wixPath = "$env:WIX"
+          Write-Host "WiX installed at: $wixPath"
+
+      - name: Package MSI
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $buildDir = "build\windows\x64\runner\Release"
+          $installerDir = "windows\installer"
+
+          Push-Location $installerDir
+
+          & "$env:WIX\bin\candle.exe" `
+            -dAppName="${{ env.APP_NAME }}" `
+            -dVersion="$version" `
+            -dSourceDir="..\..\$buildDir" `
+            product.wxs `
+            -out product.wixobj
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          & "$env:WIX\bin\light.exe" `
+            -ext WixUIExtension `
+            product.wixobj `
+            -out "..\..\$buildDir\${{ env.APP_NAME }}-$version.msi"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Pop-Location
+
+          $msi = "$buildDir\${{ env.APP_NAME }}-$version.msi"
+          if (-not (Test-Path $msi)) {
+            Write-Host "ERROR: MSI not created at $msi" -Foreground Red
+            exit 1
+          }
+
+          $msiSize = (Get-Item $msi).Length / 1MB
+          Write-Host "MSI created: $msi ($([math]::Round($msiSize, 2)) MB)"
+
+      - name: Compute SHA-256
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $buildDir = "build\windows\x64\runner\Release"
+          $msi = "$buildDir\${{ env.APP_NAME }}-$version.msi"
+
+          $hash = (Get-FileHash -Path $msi -Algorithm SHA256).Hash.ToLower()
+          Write-Host "SHA-256: $hash"
+
+          $hashFile = "$buildDir\${{ env.APP_NAME }}-$version.sha256"
+          $hash | Out-File -FilePath $hashFile -NoNewline
+
+          "sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        id: hash
+
+      - name: Create version manifest
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $tag = "${{ steps.version.outputs.tag }}"
+          $sha256 = "${{ steps.hash.outputs.sha256 }}"
+          $commitHash = (git rev-parse HEAD)
+
+          $manifest = @{
+            latest_version = $version
+            download_url    = "https://github.com/${{ github.repository }}/releases/download/$tag/${{ env.APP_NAME }}-$version.msi"
+            sha256          = $sha256
+            release_date    = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
+            force           = $true
+            rollout_percentage = 100
+            minimum_version = $version
+            release_notes   = "Auto-deploy from commit $commitHash"
+            commit_hash     = $commitHash
+          }
+
+          $manifestPath = "build\windows\x64\runner\Release\latest.json"
+          $manifest | ConvertTo-Json | Out-File -FilePath $manifestPath -Encoding UTF8
+          Write-Host "Manifest created: $manifestPath"
+          Write-Host ($manifest | ConvertTo-Json)
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.tag }}
+          body: |
+            ## Auto-Deploy from school-main
+
+            **Version:** ${{ steps.version.outputs.version }}
+            **Commit:** ${{ github.sha }}
+            **Auto-generated:** true
+
+            ### Auto-Update
+            SmartBoard devices will automatically download and install this update.
+          files: |
+            build\windows\x64\runner\Release\*.msi
+            build\windows\x64\runner\Release\*.sha256
+            build\windows\x64\runner\Release\latest.json
+          draft: false
+          prerelease: false
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: smartboard-${{ steps.version.outputs.version }}
+          path: |
+            build\windows\x64\runner\Release\*.msi
+            build\windows\x64\runner\Release\*.sha256
+            build\windows\x64\runner\Release\latest.json
+          retention-days: 30

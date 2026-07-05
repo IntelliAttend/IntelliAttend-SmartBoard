@@ -1,6 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
 
 import '../core/utils/logger.dart';
+import '../models/remote_config.dart';
 import 'auto_updater.dart';
 import 'remote_config_service.dart';
 
@@ -8,19 +12,9 @@ import 'remote_config_service.dart';
 // UpdateChecker
 //
 // Lightweight service that schedules periodic checks for binary updates.
-// It reads the [UpdateManifest] from [RemoteConfigService.updateManifest] and
-// delegates to [AutoUpdater.checkForUpdate].
-//
-// Two triggering paths:
-//
-//   1. **Scheduled** — a timer runs every N minutes while the board is idle.
-//      This catches updates that arrive between heartbeats, and handles the
-//      case where the heartbeat response didn't include an update block but
-//      the dedicated check-update endpoint has one.
-//
-//   2. **On heartbeat** — whenever a new [RemoteConfig] arrives (see
-//      [HeartbeatService]), we call [checkNow] immediately. This is the
-//      primary path; the timer is a safety net.
+// Two sources:
+//   1. Server manifest via heartbeat (RemoteConfigService)
+//   2. GitHub releases latest.json (direct poll)
 //
 // ── Rationale ───────────────────────────────────────────────────────────────
 // Separating the scheduling concern from [AutoUpdater] keeps the download /
@@ -34,6 +28,22 @@ class UpdateChecker {
 
   /// How often to check for updates during idle periods.
   static const Duration _checkInterval = Duration(minutes: 15);
+
+  /// GitHub releases latest.json URL (set via configure).
+  static String? _githubManifestUrl;
+
+  /// Last version seen from GitHub (to avoid re-processing).
+  static String? _lastGithubVersion;
+
+  // ── Configuration ──────────────────────────────────────────────────────────
+
+  /// Configure the GitHub releases manifest URL.
+  ///
+  /// Example: `https://github.com/IntelliAttend/IntelliAttend-SmartBoard/releases/latest/download/latest.json`
+  static void configure({String? githubManifestUrl}) {
+    _githubManifestUrl = githubManifestUrl;
+    Log.d('[UpdateChecker] Configured GitHub URL: $_githubManifestUrl');
+  }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -76,17 +86,53 @@ class UpdateChecker {
   // ── Internal ──────────────────────────────────────────────────────────────
 
   static Future<void> _check() async {
-    final manifest = RemoteConfigService.updateManifest;
-    if (manifest == null) {
-      return; // no manifest configured
+    // Source 1: Server manifest via heartbeat
+    final serverManifest = RemoteConfigService.updateManifest;
+    if (serverManifest != null) {
+      Log.d('[UpdateChecker] Server manifest: v${serverManifest.minimumVersion}');
+      try {
+        await AutoUpdater.checkForUpdate(serverManifest);
+        return; // Server manifest takes priority
+      } catch (e) {
+        Log.e('[UpdateChecker] Server check failed: $e');
+      }
     }
 
-    Log.d('[UpdateChecker] Checking for update (target: ${manifest.minimumVersion})');
+    // Source 2: GitHub releases latest.json
+    if (_githubManifestUrl != null) {
+      await _checkGithubReleases();
+    }
+  }
 
+  static Future<void> _checkGithubReleases() async {
     try {
+      Log.d('[UpdateChecker] Checking GitHub releases: $_githubManifestUrl');
+
+      final response = await http.get(
+        Uri.parse(_githubManifestUrl!),
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode != 200) {
+        Log.w('[UpdateChecker] GitHub returned ${response.statusCode}');
+        return;
+      }
+
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final manifest = UpdateManifest.fromJson(json);
+
+      // Skip if same version already processed
+      if (manifest.minimumVersion == _lastGithubVersion) {
+        Log.d('[UpdateChecker] GitHub version unchanged: v${manifest.minimumVersion}');
+        return;
+      }
+
+      _lastGithubVersion = manifest.minimumVersion;
+      Log.i('[UpdateChecker] GitHub update available: v${manifest.minimumVersion}');
+
       await AutoUpdater.checkForUpdate(manifest);
     } catch (e) {
-      Log.e('[UpdateChecker] Check failed: $e');
+      Log.e('[UpdateChecker] GitHub check failed: $e');
     }
   }
 }
