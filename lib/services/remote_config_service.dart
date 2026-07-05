@@ -189,15 +189,23 @@ class RemoteConfigService {
   /// The raw flags map (for debugging / admin panel).
   static Map<String, dynamic>? get rawFlags => _config?.flags;
 
+  /// Reset all static state. Call in test setUp to avoid cross-test pollution.
+  static void reset() {
+    _config = null;
+    _lastVersion = 0;
+    _listeners.clear();
+  }
+
   static bool _isTruthy(dynamic value) {
     if (value is bool) return value;
     if (value is int) return value != 0;
     if (value is String) {
-      return value == '1' ||
-          value.toLowerCase() == 'true' ||
-          value.toLowerCase() == 'yes';
+      final lower = value.toLowerCase();
+      if (lower == '0' || lower == 'false' || lower == 'no') return false;
+      if (lower == '1' || lower == 'true' || lower == 'yes') return true;
+      return value.isNotEmpty;
     }
-    return value != null; // anything non-null is truthy
+    return value != null;
   }
 }
 

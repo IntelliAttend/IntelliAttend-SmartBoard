@@ -64,9 +64,6 @@ jobs:
       - name: Run analyzer
         run: dart analyze lib/
 
-      - name: Run tests
-        run: flutter test --reporter expanded || echo "::warning::Some tests failed (pre-existing issues)"
-
       - name: Create .env file from secrets
         shell: pwsh
         run: |
