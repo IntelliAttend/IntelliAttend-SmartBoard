@@ -33,11 +33,17 @@
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
         <Directory Id="APPLICATIONFOLDER" Name="$(var.AppName)">
-          <Component Id="C_App" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
-            <File Id="F_exe" Name="$(var.AppName).exe" DiskId="1" Source="$(var.SourceDir)\$(var.AppName).exe" KeyPath="yes" />
+
+          <!-- App files -->
+          <Component Id="C_App" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890" KeyPath="yes">
+            <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\Files" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+            <File Id="F_exe" Name="$(var.AppName).exe" DiskId="1" Source="$(var.SourceDir)\$(var.AppName).exe" />
             <File Id="F_flutter_windows" Name="flutter_windows.dll" DiskId="1" Source="$(var.SourceDir)\flutter_windows.dll" />
             <File Id="F_isar" Name="isar.dll" DiskId="1" Source="$(var.SourceDir)\isar.dll" />
           </Component>
+
+          <!-- RemoveFolder entry for ICE64 compliance -->
+          <RemoveFolder Id="RemoveAppFolder" On="uninstall" />
         </Directory>
       </Directory>
 
