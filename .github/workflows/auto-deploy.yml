@@ -58,6 +58,9 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
+      - name: Create .env file for tests
+        run: echo "API_BASE_URL=https://api-dev.balaseetharamanjaneyulu.com" > .env
+
       - name: Run analyzer
         run: dart analyze lib/
 
