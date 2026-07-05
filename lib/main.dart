@@ -579,12 +579,6 @@ Future<void> startBackgroundProtocols() async {
     // any pending forced update is caught within seconds of launch.
     await AutoUpdater.init(boardId: boardId);
 
-    // Configure GitHub releases as update source.
-    // SmartBoard polls this URL for latest.json manifest.
-    UpdateChecker.configure(
-      githubManifestUrl: 'https://github.com/IntelliAttend/IntelliAttend-SmartBoard/releases/latest/download/latest.json',
-    );
-
     // Initialise the update health monitor with the current version. This
     // detects whether this is the first launch after an update and tracks
     // crash loops that are specific to the new version.
