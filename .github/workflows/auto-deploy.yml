@@ -106,7 +106,7 @@ jobs:
           Write-Host "MSI: $msi"
           Write-Host "SHA-256: $sha256"
 
-          $hash | Out-File -FilePath "$buildDir\$appName-$version.sha256" -NoNewline
+          Set-Content -Path "$buildDir\$appName-$version.sha256" -Value $sha256 -Encoding UTF8
 
           "msi_name=$appName-$version.msi" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
