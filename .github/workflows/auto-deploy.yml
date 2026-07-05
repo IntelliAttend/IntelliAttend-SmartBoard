@@ -145,3 +145,52 @@ jobs:
             build\windows\x64\runner\Release\latest.json
           draft: false
           prerelease: false
+
+      - name: Upload to server
+        if: ${{ vars.SERVER_URL != '' && secrets.UPDATE_TOKEN != '' }}
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $appName = "${{ steps.detect.outputs.app_name }}"
+          $msiPath = "build\windows\x64\runner\Release\$appName-$version.msi"
+          $sha256 = "${{ steps.msi.outputs.sha256 }}"
+          
+          Write-Host "Uploading v$version to server..."
+          
+          $boundary = [System.Guid]::NewGuid().ToString()
+          
+          $body = @"
+--$boundary
+Content-Disposition: form-data; name="version"
+
+$version
+--$boundary
+Content-Disposition: form-data; name="release_notes"
+
+Auto-deploy from commit ${{ github.sha }}
+--$boundary
+Content-Disposition: form-data; name="force"
+
+true
+--$boundary
+Content-Disposition: form-data; name="file"; filename="$appName-$version.msi"
+Content-Type: application/octet-stream
+
+$([System.IO.File]::ReadAllBytes($msiPath) -join ',')
+--$boundary--
+"@
+          
+          $headers = @{
+            "Authorization" = "Bearer ${{ secrets.UPDATE_TOKEN }}"
+          }
+          
+          try {
+            Invoke-RestMethod -Uri "${{ vars.SERVER_URL }}/api/v1/board/upload-update" `
+              -Method Post `
+              -Headers $headers `
+              -ContentType "multipart/form-data; boundary=$boundary" `
+              -Body $body
+            Write-Host "Successfully uploaded v$version to server"
+          } catch {
+            Write-Host "Warning: Upload to server failed: $_"
+          }
