@@ -1924,6 +1924,49 @@ class _IdleScreenState extends State<IdleScreen>
                   content: Text('IntelliAttend Support: Help is on the way!')));
             },
             icon: Icon(Icons.help_outline, color: iconColor)),
+        // ── Board Info Widget ──────────────────────────────────────────────
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.access_time, size: 14, color: iconColor),
+              const SizedBox(width: 6),
+              Text(
+                _formatCurrentTime(),
+                style: TextStyle(
+                  color: iconColor,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Container(
+                width: 1,
+                height: 14,
+                color: Colors.white.withValues(alpha: 0.3),
+              ),
+              const SizedBox(width: 10),
+              Icon(Icons.wifi, size: 14, color: iconColor),
+              const SizedBox(width: 4),
+              Text(
+                _getCurrentSlotInfo(),
+                style: TextStyle(
+                  color: iconColor,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+        // ──────────────────────────────────────────────────────────────────
         IconButton(
           onPressed: () => KioskService.setMode(KioskMode.suspended),
           icon: Icon(Icons.minimize_rounded, color: iconColor),
@@ -1938,6 +1981,39 @@ class _IdleScreenState extends State<IdleScreen>
             icon: Icon(Icons.settings_outlined, color: iconColor)),
       ],
     );
+  }
+
+  String _formatCurrentTime() {
+    final now = TimeSyncService.timeNow;
+    final hour = now.hour.toString().padLeft(2, '0');
+    final minute = now.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
+  String _getCurrentSlotInfo() {
+    final now = TimeSyncService.timeNow;
+    final currentMinutes = now.hour * 60 + now.minute;
+
+    // Check for breaks first
+    if (_isBioBreak()) return 'Bio Break';
+    if (_isLunchBreak()) return 'Lunch Break';
+
+    // Check current slot
+    final entry = _bedrockEntry;
+    if (entry != null) {
+      final startParts = entry.startTime.split(':');
+      final endParts = entry.endTime.split(':');
+      if (startParts.length == 2 && endParts.length == 2) {
+        final startMins = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
+        final endMins = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+        if (currentMinutes >= startMins && currentMinutes < endMins) {
+          return entry.courseName;
+        }
+      }
+    }
+
+    // Default
+    return 'No Class';
   }
 
   Widget _buildCourseInfo(
