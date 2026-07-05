@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:isar/isar.dart';
 import '../../core/theme/app_theme.dart';
-import '../../models/isar_schemas.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../core/config/app_config.dart';
+import '../../core/utils/logger.dart';
+import '../../models/isar_schemas.dart';
+import '../../services/hydration_service.dart';
+import '../../services/timetable_cache.dart';
 
 class SettingsScreen extends StatefulWidget {
-  final DeviceRegistration registration;
-  const SettingsScreen({super.key, required this.registration});
+  const SettingsScreen({super.key});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -15,11 +18,20 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _isSyncing = false;
   String _idleTheme = 'auto';
+  HydrationProfile? _profile;
+  DeviceRegistration? _registration;
+  int _timetableCount = 0;
 
   @override
   void initState() {
     super.initState();
-    _loadIdleTheme();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    await _loadIdleTheme();
+    await _loadDeviceInfo();
+    await _loadTimetableCount();
   }
 
   Future<void> _loadIdleTheme() async {
@@ -27,18 +39,79 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() => _idleTheme = theme ?? 'auto');
   }
 
-  Future<void> _handleForceSync() async {
-    setState(() => _isSyncing = true);
+  Future<void> _loadDeviceInfo() async {
     try {
+      final isar = Isar.getInstance();
+      if (isar == null) return;
+
+      final profile = await isar.hydrationProfiles.where().findFirst();
+      final registration = await isar.deviceRegistrations.where().findFirst();
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Timetable synced successfully')),
-        );
+        setState(() {
+          _profile = profile;
+          _registration = registration;
+        });
       }
     } catch (e) {
+      Log.e('[Settings] Failed to load device info: $e');
+    }
+  }
+
+  Future<void> _loadTimetableCount() async {
+    try {
+      final isar = Isar.getInstance();
+      if (isar == null) return;
+
+      final count = await isar.timetableEntrys.count();
+      if (mounted) setState(() => _timetableCount = count);
+    } catch (e) {
+      Log.e('[Settings] Failed to load timetable count: $e');
+    }
+  }
+
+  Future<void> _handleSyncTimetable() async {
+    setState(() => _isSyncing = true);
+    try {
+      final isar = Isar.getInstance();
+      if (isar == null) throw Exception('Database not initialized');
+
+      final result = await HydrationService.hydrate(isar: isar);
+
+      if (result.changed) {
+        final allEntries = await isar.timetableEntrys
+            .where()
+            .sortByDayOfWeek()
+            .thenByStartTime()
+            .findAll();
+        TimetableCache().updateAll(allEntries);
+
+        if (mounted) {
+          setState(() => _timetableCount = allEntries.length);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Timetable synced — ${allEntries.length} slots loaded'),
+              backgroundColor: AppColors.primaryTeal,
+            ),
+          );
+        }
+      } else if (result.fromCache) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Timetable already up to date')),
+          );
+        }
+      } else {
+        throw Exception(result.error ?? 'Unknown error');
+      }
+    } catch (e) {
+      Log.e('[Settings] Sync failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sync failed'), backgroundColor: AppColors.error),
+          SnackBar(
+            content: Text('Sync failed: $e'),
+            backgroundColor: AppColors.error,
+          ),
         );
       }
     } finally {
@@ -48,8 +121,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Force Light Theme aesthetics as requested
-
     return Scaffold(
       backgroundColor: AppColors.bgLight,
       appBar: AppBar(
@@ -61,10 +132,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
-          'DISPLAY SETTINGS', 
+          'DISPLAY SETTINGS',
           style: TextStyle(
             color: AppColors.textPrimaryLight,
-            letterSpacing: 1.5, 
+            letterSpacing: 1.5,
             fontWeight: FontWeight.w900,
             fontSize: 18,
           )
@@ -74,7 +145,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       body: Stack(
         children: [
-          // Subtle background pattern
           Opacity(
             opacity: 0.02,
             child: Center(
@@ -96,19 +166,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _buildSectionHeader('DEVICE INFORMATION'),
                     const SizedBox(height: 24),
                     _buildInfoCard([
-                      _buildInfoRow('Device Name', widget.registration.roomName),
-                      _buildInfoRow('Building', widget.registration.building),
-                      _buildInfoRow('Department', widget.registration.department),
-                      _buildInfoRow('Capacity', '${widget.registration.capacity} Students'),
+                      _buildInfoRow('Device Name', _profile?.boardName ?? _registration?.roomName ?? 'Unknown'),
+                      _buildInfoRow('Room', _profile?.roomNumber ?? _registration?.roomName ?? 'Unknown'),
+                      _buildInfoRow('Building', _profile?.building ?? _registration?.building ?? 'Unknown'),
+                      _buildInfoRow('Floor', _profile?.floor ?? 'Unknown'),
+                      _buildInfoRow('Department', _registration?.department ?? 'Unknown'),
+                      _buildInfoRow('Capacity', '${_registration?.capacity ?? 0} Students'),
+                      _buildInfoRow('Institution', _profile?.institutionName ?? 'Unknown'),
+                      _buildInfoRow('Timezone', _profile?.timezone ?? 'Unknown'),
                     ]),
-                    
+
+                    const SizedBox(height: 48),
+                    _buildSectionHeader('SYSTEM'),
+                    const SizedBox(height: 24),
+                    _buildInfoCard([
+                      _buildInfoRow('Board ID', _profile?.boardId ?? _registration?.smartBoardId ?? 'Unknown'),
+                      _buildInfoRow('Hardware ID', _registration?.hardwareId ?? 'Unknown'),
+                      _buildInfoRow('Timetable Slots', '$_timetableCount loaded'),
+                      _buildInfoRow('Status', _profile?.isRegistered == true ? 'Registered' : 'Not Registered'),
+                    ]),
+
                     if (AppConfig.enableVideoBreaks) ...[
                       const SizedBox(height: 48),
                       _buildSectionHeader('DISPLAY PREFERENCES'),
                       const SizedBox(height: 24),
                       _buildThemeToggle(),
                     ],
-                    
+
                     const SizedBox(height: 48),
                     _buildSectionHeader('SYSTEM ACTIONS'),
                     const SizedBox(height: 24),
@@ -117,12 +201,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         Expanded(
                           child: _buildActionButton(
                             icon: Icons.sync_rounded,
-                            label: 'FORCE SYNC',
-                            onTap: _isSyncing ? null : _handleForceSync,
+                            label: 'SYNC TIMETABLE',
+                            onTap: _isSyncing ? null : _handleSyncTimetable,
                             isLoading: _isSyncing,
                           ),
                         ),
-
                       ],
                     ),
                   ],
@@ -173,7 +256,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text(label, style: const TextStyle(color: AppColors.textSecondaryLight, fontSize: 14, fontWeight: FontWeight.w500)),
-        Text(value, style: const TextStyle(color: AppColors.textPrimaryLight, fontSize: 14, fontWeight: FontWeight.w700)),
+        Flexible(
+          child: Text(
+            value,
+            style: const TextStyle(color: AppColors.textPrimaryLight, fontSize: 14, fontWeight: FontWeight.w700),
+            textAlign: TextAlign.end,
+          ),
+        ),
       ],
     );
   }

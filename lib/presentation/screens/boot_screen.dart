@@ -3,11 +3,9 @@ import 'package:provider/provider.dart';
 import '../../core/theme/app_theme.dart';
 import 'registration_screen.dart';
 import 'session_orchestrator_screen.dart';
-import 'settings_screen.dart';
 import '../../data/repositories/device_repository.dart';
 import '../../services/api_service.dart';
 import '../../core/utils/logger.dart';
-import '../../models/isar_schemas.dart';
 
 class BootScreen extends StatefulWidget {
   const BootScreen({super.key});
@@ -102,51 +100,6 @@ class _BootScreenState extends State<BootScreen> {
                   width: 400,
                   fit: BoxFit.contain,
                 ),
-              ),
-            ),
-
-            // Top Left Settings Button
-            Positioned(
-              top: 40,
-              left: 40,
-              child: Consumer<IDeviceRepository>(
-                builder: (context, deviceRepository, child) {
-                  return FutureBuilder<DeviceRegistration?>(
-                    future: deviceRepository.getRegistration(),
-                    builder: (context, snapshot) {
-                      return Tooltip(
-                        message: 'System Settings',
-                        child: MouseRegion(
-                          cursor: SystemMouseCursors.click,
-                          child: GestureDetector(
-                            onTap: () {
-                              final reg = snapshot.data ?? (DeviceRegistration()
-                                ..smartBoardId = 'UNREGISTERED'
-                                ..roomName = 'New Device'
-                                ..building = 'Unknown'
-                                ..department = 'Unknown'
-                                ..hardwareId = 'Unknown');
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) => SettingsScreen(registration: reg),
-                                ),
-                              );
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: Colors.black12),
-                              ),
-                              child: const Icon(Icons.settings_outlined, color: AppColors.textPrimaryLight, size: 28),
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                },
               ),
             ),
 

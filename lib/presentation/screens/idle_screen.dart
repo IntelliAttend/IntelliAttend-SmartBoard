@@ -1932,8 +1932,7 @@ class _IdleScreenState extends State<IdleScreen>
         IconButton(
             onPressed: () async {
               await Navigator.of(context).push(MaterialPageRoute(
-                  builder: (context) =>
-                      SettingsScreen(registration: widget.registration)));
+                  builder: (context) => const SettingsScreen()));
               _loadPreferences();
             },
             icon: Icon(Icons.settings_outlined, color: iconColor)),
