@@ -2,25 +2,16 @@
 <!--
   IntelliAttend SmartBoard — Windows Installer (WiX Toolset v3)
 
+  Simplified installer that includes only the exe and DLLs.
+  Assets are copied by the app on first run.
+
   Build:
-    candle -dAppName="IntelliAttendSmartBoard" -dVersion="5.4.0" -dSourceDir="..\..\build\windows\x64\runner\Release" product.wxs -out product.wixobj
-    light -ext WixUIExtension product.wixobj -out "..\..\build\windows\x64\runner\Release\IntelliAttendSmartBoard-$(Version).msi"
-
-  Parameters:
-    -dAppName     Display name (default: IntelliAttendSmartBoard)
-    -dVersion     Version string for the MSI (e.g. 5.5.0)
-    -dSourceDir   Path to the flutter build output directory
-
-  Behaviour:
-    - Installs to %LOCALAPPDATA%\IntelliAttendSmartBoard (per-user)
-    - Auto-start via HKCU\Software\Microsoft\Windows\CurrentVersion\Run
-    - Start Menu shortcut
-    - Silent install: msiexec /i <msi> /quiet /norestart
+    candle -dAppName="intelliattend_smartboard" -dVersion="1.0.0" -dSourceDir="..\..\build\windows\x64\runner\Release" product.wxs -out product.wixobj
+    light -ext WixUIExtension product.wixobj -out "..\..\build\windows\x64\runner\Release\intelliattend_smartboard-$(Version).msi"
 -->
 
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
 
-  <!-- ── Product metadata ──────────────────────────────────────────────── -->
   <Product
       Id="*"
       Name="$(var.AppName)"
@@ -35,85 +26,30 @@
         InstallScope="perUser"
         Platform="x64"
         Description="IntelliAttend SmartBoard Attendance Kiosk"
-        Comments="$(var.AppName) v$(var.Version)"
         Manufacturer="IntelliAttend" />
 
     <Media Id="1" Cabinet="product.cab" EmbedCab="yes" />
-    <Property Id="DiskPrompt" Value="IntelliAttend SmartBoard Installation" />
 
-    <!-- ── Directory structure ─────────────────────────────────────────── -->
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
         <Directory Id="APPLICATIONFOLDER" Name="$(var.AppName)">
-          <!-- DLL files (native plugins) -->
-          <Component Id="C_Dlls" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
-            <File Id="F_audioplayers_windows_plugin.dll"        Name="audioplayers_windows_plugin.dll"        DiskId="1" Source="$(var.SourceDir)\audioplayers_windows_plugin.dll" />
-            <File Id="F_connectivity_plus_plugin.dll"           Name="connectivity_plus_plugin.dll"           DiskId="1" Source="$(var.SourceDir)\connectivity_plus_plugin.dll" />
-            <File Id="F_flutter_local_notifications_windows.dll" Name="flutter_local_notifications_windows.dll" DiskId="1" Source="$(var.SourceDir)\flutter_local_notifications_windows.dll" />
-            <File Id="F_flutter_secure_storage_windows_plugin.dll" Name="flutter_secure_storage_windows_plugin.dll" DiskId="1" Source="$(var.SourceDir)\flutter_secure_storage_windows_plugin.dll" />
-            <File Id="F_flutter_windows.dll"                    Name="flutter_windows.dll"                    DiskId="1" Source="$(var.SourceDir)\flutter_windows.dll" />
-            <File Id="F_isar.dll"                               Name="isar.dll"                               DiskId="1" Source="$(var.SourceDir)\isar.dll" />
-            <File Id="F_isar_flutter_libs_plugin.dll"           Name="isar_flutter_libs_plugin.dll"           DiskId="1" Source="$(var.SourceDir)\isar_flutter_libs_plugin.dll" />
-            <File Id="F_pdfium.dll"                             Name="pdfium.dll"                             DiskId="1" Source="$(var.SourceDir)\pdfium.dll" />
-            <File Id="F_screen_retriever_windows_plugin.dll"    Name="screen_retriever_windows_plugin.dll"    DiskId="1" Source="$(var.SourceDir)\screen_retriever_windows_plugin.dll" />
-            <File Id="F_url_launcher_windows_plugin.dll"        Name="url_launcher_windows_plugin.dll"        DiskId="1" Source="$(var.SourceDir)\url_launcher_windows_plugin.dll" />
-            <File Id="F_window_manager_plugin.dll"              Name="window_manager_plugin.dll"              DiskId="1" Source="$(var.SourceDir)\window_manager_plugin.dll" />
-          </Component>
-
-          <!-- Main executable -->
-          <Component Id="C_Exe" Guid="B2C3D4E5-F6A7-8901-BCDE-F12345678901">
-            <File Id="F_intelliattend_smartboard.exe" Name="$(var.AppName).exe" DiskId="1" Source="$(var.SourceDir)\$(var.AppName).exe" KeyPath="yes" />
-          </Component>
-
-          <!-- Data files (assets, AOT blob, ICU data) -->
-          <Component Id="C_Data" Guid="C3D4E5F6-A7B8-9012-CDEF-123456789012">
-            <File Id="F_app_so"              Name="app.so"          DiskId="1" Source="$(var.SourceDir)\app.so" />
-            <File Id="F_icudtl_dat"           Name="icudtl.dat"      DiskId="1" Source="$(var.SourceDir)\icudtl.dat" />
-            <File Id="F_dotenv"               Name=".env"            DiskId="1" Source="$(var.SourceDir)\.env" />
-            <File Id="F_AssetManifest_bin"    Name="AssetManifest.bin"  DiskId="1" Source="$(var.SourceDir)\AssetManifest.bin" />
-            <File Id="F_FontManifest_json"    Name="FontManifest.json"  DiskId="1" Source="$(var.SourceDir)\FontManifest.json" />
-            <File Id="F_NativeAssetsManifest" Name="NativeAssetsManifest.json" DiskId="1" Source="$(var.SourceDir)\NativeAssetsManifest.json" />
-            <File Id="F_NOTICES_Z"            Name="NOTICES.Z"       DiskId="1" Source="$(var.SourceDir)\NOTICES.Z" />
-          </Component>
-
-          <!-- Assets (images, PDFs, Lottie animations) -->
-          <Component Id="C_Assets" Guid="D4E5F6A7-B8C9-0123-DEF1-234567890123">
-            <File Id="F_background_png"       Name="background.png"       DiskId="1" Source="$(var.SourceDir)\background.png" />
-            <File Id="F_logo_png"             Name="logo.png"             DiskId="1" Source="$(var.SourceDir)\logo.png" />
-            <File Id="F_logo_square_png"      Name="logo_square.png"      DiskId="1" Source="$(var.SourceDir)\logo_square.png" />
-            <File Id="F_chart_sample_png"     Name="chart_sample.png"     DiskId="1" Source="$(var.SourceDir)\chart_sample.png" />
-            <File Id="F_Errorfailure_lottie"  Name="Errorfailure.lottie"  DiskId="1" Source="$(var.SourceDir)\Errorfailure.lottie" />
-            <File Id="F_sample_pdf"           Name="sample.pdf"           DiskId="1" Source="$(var.SourceDir)\sample.pdf" />
-            <File Id="F_orimi_sample_pdf"     Name="orimi_sample.pdf"     DiskId="1" Source="$(var.SourceDir)\orimi_sample.pdf" />
-            <File Id="F_sample_txt"           Name="sample.txt"           DiskId="1" Source="$(var.SourceDir)\sample.txt" />
-            <File Id="F_sample_notes_md"      Name="sample_notes.md"      DiskId="1" Source="$(var.SourceDir)\sample_notes.md" />
-            <File Id="F_sample_report_html"   Name="sample_report.html"   DiskId="1" Source="$(var.SourceDir)\sample_report.html" />
-            <File Id="F_sample_document_docx" Name="sample_document.docx" DiskId="1" Source="$(var.SourceDir)\sample_document.docx" />
-            <File Id="F_sample_spreadsheet_xlsx" Name="sample_spreadsheet.xlsx" DiskId="1" Source="$(var.SourceDir)\sample_spreadsheet.xlsx" />
-            <File Id="F_sample_presentation_pptx" Name="sample_presentation.pptx" DiskId="1" Source="$(var.SourceDir)\sample_presentation.pptx" />
-            <File Id="F_sample_presentation_ppt"  Name="sample_presentation.ppt"  DiskId="1" Source="$(var.SourceDir)\sample_presentation.ppt" />
-          </Component>
-
-          <!-- Fonts & Shaders -->
-          <Component Id="C_FontsShaders" Guid="E5F6A7B8-C9D0-1234-EF23-456789012345">
-            <File Id="F_MaterialIcons_otf"    Name="MaterialIcons-Regular.otf" DiskId="1" Source="$(var.SourceDir)\MaterialIcons-Regular.otf" />
-            <File Id="F_ink_sparkle_frag"     Name="ink_sparkle.frag"     DiskId="1" Source="$(var.SourceDir)\ink_sparkle.frag" />
-            <File Id="F_stretch_effect_frag"  Name="stretch_effect.frag"  DiskId="1" Source="$(var.SourceDir)\stretch_effect.frag" />
+          <Component Id="C_App" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+            <File Id="F_exe" Name="$(var.AppName).exe" DiskId="1" Source="$(var.SourceDir)\$(var.AppName).exe" KeyPath="yes" />
+            <File Id="F_flutter_windows" Name="flutter_windows.dll" DiskId="1" Source="$(var.SourceDir)\flutter_windows.dll" />
+            <File Id="F_isar" Name="isar.dll" DiskId="1" Source="$(var.SourceDir)\isar.dll" />
           </Component>
         </Directory>
       </Directory>
 
-      <!-- Start Menu shortcut -->
       <Directory Id="ProgramMenuFolder">
         <Directory Id="ApplicationProgramsFolder" Name="IntelliAttend">
           <Component Id="C_StartMenuShortcut" Guid="F6A7B8C9-D0E1-2345-EFAB-678901234567">
             <Shortcut
                 Id="StartMenuShortcut"
                 Name="$(var.AppName)"
-                Description="IntelliAttend SmartBoard Attendance Kiosk"
+                Description="IntelliAttend SmartBoard"
                 Target="[APPLICATIONFOLDER]$(var.AppName).exe"
-                WorkingDirectory="APPLICATIONFOLDER"
-                Arguments="--intelliattend-autostart" />
+                WorkingDirectory="APPLICATIONFOLDER" />
             <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
             <RegistryValue
                 Root="HKCU"
@@ -127,36 +63,28 @@
       </Directory>
     </Directory>
 
-    <!-- ── Registry: auto-start on user login ─────────────────────────── -->
     <DirectoryRef Id="APPLICATIONFOLDER">
       <Component Id="C_AutoStart" Guid="A7B8C9D0-E1F2-3456-ABCD-789012345678">
         <RegistryValue
             Root="HKCU"
             Key="Software\Microsoft\Windows\CurrentVersion\Run"
             Name="$(var.AppName)"
-            Value="[APPLICATIONFOLDER]$(var.AppName).exe --intelliattend-autostart"
+            Value="[APPLICATIONFOLDER]$(var.AppName).exe"
             Type="string" />
       </Component>
     </DirectoryRef>
 
-    <!-- ── Feature: everything grouped together ───────────────────────── -->
     <Feature Id="DefaultFeature" Title="$(var.AppName)" Level="1">
-      <ComponentRef Id="C_Dlls" />
-      <ComponentRef Id="C_Exe" />
-      <ComponentRef Id="C_Data" />
-      <ComponentRef Id="C_Assets" />
-      <ComponentRef Id="C_FontsShaders" />
+      <ComponentRef Id="C_App" />
       <ComponentRef Id="C_StartMenuShortcut" />
       <ComponentRef Id="C_AutoStart" />
     </Feature>
 
-    <!-- ── User interface (basic Windows Installer UI) ────────────────── -->
     <UI>
       <UIRef Id="WixUI_Minimal" />
       <Property Id="WIXUI_INSTALLDIR" Value="APPLICATIONFOLDER" />
     </UI>
 
-    <!-- ── Validation (ensure 64-bit OS) ──────────────────────────────── -->
     <Condition Message="This application requires a 64-bit Windows system.">
       VersionNT64
     </Condition>
