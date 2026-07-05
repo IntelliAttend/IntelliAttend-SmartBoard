@@ -83,7 +83,12 @@ class Version implements Comparable<Version> {
     if (majorCmp != 0) return majorCmp;
     final minorCmp = minor.compareTo(other.minor);
     if (minorCmp != 0) return minorCmp;
-    return patch.compareTo(other.patch);
+    final patchCmp = patch.compareTo(other.patch);
+    if (patchCmp != 0) return patchCmp;
+    // Compare build numbers (e.g., +3 vs +6)
+    final thisBuild = int.tryParse(buildNumber ?? '0') ?? 0;
+    final otherBuild = int.tryParse(other.buildNumber ?? '0') ?? 0;
+    return thisBuild.compareTo(otherBuild);
   }
 
   /// True when [other] has the same major.minor.patch (build & pre-release
@@ -93,7 +98,7 @@ class Version implements Comparable<Version> {
       other is Version && compareTo(other) == 0;
 
   @override
-  int get hashCode => Object.hash(major, minor, patch);
+  int get hashCode => Object.hash(major, minor, patch, buildNumber);
 
   bool operator <(Version other) => compareTo(other) < 0;
   bool operator <=(Version other) => compareTo(other) <= 0;
