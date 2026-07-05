@@ -33,8 +33,15 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $commitCount = (git rev-list --count HEAD)
-          $version = "1.0.$commitCount"
+          # Read version from pubspec.yaml
+          $pubspec = Get-Content pubspec.yaml -Raw
+          if ($pubspec -match 'version:\s*(\d+\.\d+\.\d+)\+(\d+)') {
+            $baseVersion = $Matches[1]
+            $buildNumber = [int]$Matches[2] + 1
+            $version = "$baseVersion+$buildNumber"
+          } else {
+            $version = "5.4.0+1"
+          }
           $tag = "v$version"
           Write-Host "Version: $version"
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
@@ -54,14 +61,6 @@ jobs:
 
       - name: Run analyzer
         run: dart analyze lib/
-
-      - name: Update version in pubspec
-        shell: pwsh
-        run: |
-          $version = "${{ steps.version.outputs.version }}"
-          $pubspec = Get-Content pubspec.yaml -Raw
-          $pubspec = $pubspec -replace 'version: .*', "version: $version"
-          $pubspec | Out-File -FilePath pubspec.yaml -Encoding UTF8
 
       - name: Build Windows release
         run: flutter build windows --release
