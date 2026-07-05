@@ -35,16 +35,21 @@ jobs:
         run: |
           # Read version from pubspec.yaml
           $pubspec = Get-Content pubspec.yaml -Raw
-          if ($pubspec -match 'version:\s*(\d+\.\d+\.\d+)\+(\d+)') {
-            $baseVersion = $Matches[1]
-            $buildNumber = [int]$Matches[2] + 1
-            $version = "$baseVersion+$buildNumber"
+          if ($pubspec -match 'version:\s*(\d+)\.(\d+)\.(\d+)\+(\d+)') {
+            $major = $Matches[1]
+            $minor = $Matches[2]
+            $patch = $Matches[3]
+            $build = [int]$Matches[4] + 1
+            $version = "$major.$minor.$patch.$build"
+            $flutterVersion = "$major.$minor.$patch+$build"
           } else {
-            $version = "5.4.0+1"
+            $version = "5.4.0.1"
+            $flutterVersion = "5.4.0+1"
           }
           $tag = "v$version"
-          Write-Host "Version: $version"
+          Write-Host "Version: $version (Flutter: $flutterVersion)"
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "flutter_version=$flutterVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Install Flutter
