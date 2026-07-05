@@ -119,17 +119,18 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
+          $flutterVersion = "${{ steps.version.outputs.flutter_version }}"
           $tag = "${{ steps.version.outputs.tag }}"
           $sha256 = "${{ steps.msi.outputs.sha256 }}"
           $msiName = "${{ steps.msi.outputs.msi_name }}"
 
           $manifest = @{
-            latest_version = $version
+            latest_version = $flutterVersion
             download_url = "https://github.com/${{ github.repository }}/releases/download/$tag/$msiName"
             sha256 = $sha256
             force = $true
             rollout_percentage = 100
-            minimum_version = $version
+            minimum_version = $flutterVersion
           }
 
           $manifest | ConvertTo-Json | Out-File -FilePath "build\windows\x64\runner\Release\latest.json" -Encoding UTF8
@@ -155,16 +156,17 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+          FLUTTER_VERSION="${{ steps.version.outputs.flutter_version }}"
           APP_NAME="${{ steps.detect.outputs.app_name }}"
           MSI_PATH="build/windows/x64/runner/Release/${APP_NAME}-${VERSION}.msi"
           SERVER_URL="${{ vars.SERVER_URL }}"
           
-          echo "Uploading v${VERSION} to ${SERVER_URL}..."
+          echo "Uploading v${FLUTTER_VERSION} (MSI: ${VERSION}) to ${SERVER_URL}..."
           
           curl -X POST "${SERVER_URL}/api/v1/board/upload-update" \
-            -F "version=${VERSION}" \
+            -F "version=${FLUTTER_VERSION}" \
             -F "release_notes=Auto-deploy from commit ${{ github.sha }}" \
             -F "force=true" \
             -F "file=@${MSI_PATH}" \
-            && echo "Successfully uploaded v${VERSION}" \
+            && echo "Successfully uploaded v${FLUTTER_VERSION}" \
             || echo "Warning: Upload failed"
