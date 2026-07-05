@@ -880,6 +880,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                         sectionId: widget.sectionId,
                         slotId: widget.slotId,
                         initialPresentCount: widget.presentCount,
+                        boardId: '',
                       ),
                     ),
                   );

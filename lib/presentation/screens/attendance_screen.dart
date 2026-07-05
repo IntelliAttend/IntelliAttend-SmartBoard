@@ -23,6 +23,7 @@ class AttendanceScreen extends StatefulWidget {
   final String roomName;
   final String? sectionId;
   final String? slotId;
+  final String? boardId;
 
   final WebsocketService websocketService;
   final int initialPresentCount;
@@ -38,6 +39,7 @@ class AttendanceScreen extends StatefulWidget {
     this.initialPresentCount = 0,
     this.sectionId,
     this.slotId,
+    this.boardId,
   });
 
   @override
@@ -222,7 +224,12 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         index = idx;
       }
       final i = index;
-      if (!_presentSeatIndices.contains(i)) {
+      if (event.isAbsent) {
+        setState(() {
+          _absentSeatIndices.add(i);
+          _presentSeatIndices.remove(i);
+        });
+      } else if (!_presentSeatIndices.contains(i)) {
           setState(() {
             _presentSeatIndices.add(i);
             _absentSeatIndices.remove(i);
@@ -250,7 +257,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
           });
         }
       Log.i(
-          '[Attendance] student_verified: ${event.studentId} seat=${event.seat}');
+          '[Attendance] student_verified: ${event.studentId} seat=${event.seat} status=${event.status}');
     });
 
     _wsAttendanceUpdatedSubscription =
@@ -285,15 +292,30 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   void _handleCellTapDown(int index) {
+    final student = index < _students.length ? _students[index] : null;
+    final boardId = widget.boardId ?? _wsService.boardId ?? '';
+
     if (_presentSeatIndices.contains(index)) {
       _presentSeatIndices.remove(index);
       _absentSeatIndices.add(index);
+      _sendTap(student, 'absent', boardId);
     } else if (_absentSeatIndices.contains(index)) {
       _absentSeatIndices.remove(index);
     } else {
       _presentSeatIndices.add(index);
+      _sendTap(student, 'present', boardId);
     }
     if (mounted) setState(() {});
+  }
+
+  void _sendTap(StudentInfo? student, String status, String boardId) {
+    if (student == null || boardId.isEmpty) return;
+    _wsService.sendTap(
+      sessionId: widget.sessionId,
+      studentId: student.email,
+      status: status,
+      boardId: boardId,
+    );
   }
 
   void _handleSplitReviewTap(int index, bool isInPresent) {
@@ -314,6 +336,17 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       presentIndices: _presentSeatIndices.toList(),
       absentIndices: _absentSeatIndices.toList(),
     );
+    if (_wsService.isConnected) {
+      final presentEmails =
+          _presentSeatIndices.map((i) => _students[i].email).toList();
+      final absentEmails =
+          _absentSeatIndices.map((i) => _students[i].email).toList();
+      _wsService.saveDraft(
+        sessionId: widget.sessionId,
+        presentEmails: presentEmails,
+        absentEmails: absentEmails,
+      );
+    }
     if (mounted) setState(() => _stage = _Stage.splitReview);
   }
 

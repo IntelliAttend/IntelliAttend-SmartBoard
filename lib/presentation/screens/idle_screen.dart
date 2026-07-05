@@ -1371,6 +1371,7 @@ class _IdleScreenState extends State<IdleScreen>
               sectionId: sectionId,
               roomName: widget.registration.roomName,
               slotId: slotId,
+              boardId: widget.registration.smartBoardId,
             ),
           ),
         );
@@ -1428,6 +1429,7 @@ class _IdleScreenState extends State<IdleScreen>
             sectionId: 'debug',
             roomName: widget.registration.roomName,
             slotId: null,
+            boardId: widget.registration.smartBoardId,
           ),
         ),
       );
@@ -1896,6 +1898,7 @@ class _IdleScreenState extends State<IdleScreen>
                       sectionId: 'sec-b',
                       roomName: 'Lab-101',
                       slotId: null,
+                      boardId: '',
                     ),
                   ),
                 );
@@ -2468,6 +2471,7 @@ class _IdleScreenState extends State<IdleScreen>
                             sectionId: session.sectionId,
                             slotId: null,
                             initialPresentCount: session.presentIndices.length,
+                            boardId: widget.registration.smartBoardId,
                           )),
                         );
                       },

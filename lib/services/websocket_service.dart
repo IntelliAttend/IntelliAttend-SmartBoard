@@ -119,18 +119,24 @@ class StudentVerifiedEvent {
   final String studentId;
   final String studentName;
   final String seat;
+  final String status;
 
   StudentVerifiedEvent({
     required this.studentId,
     this.studentName = '',
     required this.seat,
+    this.status = 'PRESENT',
   });
+
+  bool get isPresent => status.toUpperCase() == 'PRESENT';
+  bool get isAbsent => status.toUpperCase() == 'ABSENT';
 
   factory StudentVerifiedEvent.fromJson(Map<String, dynamic> json) {
     return StudentVerifiedEvent(
       studentId: json['student_id'] as String,
       studentName: json['student_name'] as String? ?? '',
       seat: json['seat'] as String? ?? '',
+      status: (json['status'] as String? ?? 'PRESENT').toUpperCase(),
     );
   }
 }
@@ -236,6 +242,9 @@ class WebsocketService {
   final StreamController<SystemCommandEvent> _systemCommandController =
       StreamController<SystemCommandEvent>.broadcast();
 
+  final StreamController<Map<String, dynamic>> _boardStatusController =
+      StreamController<Map<String, dynamic>>.broadcast();
+
   final StreamController<NotificationEvent> _notificationEventController =
       StreamController<NotificationEvent>.broadcast();
 
@@ -256,6 +265,9 @@ class WebsocketService {
       _attendanceSubmittedController.stream;
   Stream<SystemCommandEvent> get onSystemCommand =>
       _systemCommandController.stream;
+  Stream<Map<String, dynamic>> get onBoardStatus =>
+      _boardStatusController.stream;
+  String? get boardId => _boardId;
   bool get isConnected => _channel != null;
 
   final SessionStateService _sessionState = SessionStateService();
@@ -396,6 +408,36 @@ class WebsocketService {
     Log.i('[WS] attendance_submit sent: ${presentEmails.length} present, ${absentEmails.length} absent');
   }
 
+  void saveDraft({
+    required String sessionId,
+    required List<String> presentEmails,
+    required List<String> absentEmails,
+  }) {
+    send({
+      'type': 'attendance_save_draft',
+      'session_id': sessionId,
+      'present_emails': presentEmails,
+      'absent_emails': absentEmails,
+    });
+    Log.i('[WS] attendance_save_draft sent: ${presentEmails.length} present, ${absentEmails.length} absent');
+  }
+
+  void sendTap({
+    required String sessionId,
+    required String studentId,
+    required String status,
+    required String boardId,
+  }) {
+    send({
+      'type': 'attendance_tap',
+      'session_id': sessionId,
+      'student_id': studentId,
+      'status': status,
+      'board_id': boardId,
+    });
+    Log.i('[WS] attendance_tap sent: $studentId = $status');
+  }
+
   void _startPingTimer() {
     _pingTimer?.cancel();
     _pingTimer = Timer.periodic(pingInterval, (_) {
@@ -481,6 +523,11 @@ class WebsocketService {
           Log.i('[WS] attendance_updated: ${event.present} present ${event.absent} absent');
           break;
 
+        case 'board_status':
+          Log.i('[WS] board_status: ${message['status']} board=${message['board_id']}');
+          _boardStatusController.add(message);
+          break;
+
         case 'attendance_submitted':
         case 'attendance_submit_ack':
           final event = AttendanceSubmittedEvent.fromJson(message);
@@ -492,11 +539,19 @@ class WebsocketService {
           Log.e('[WS] attendance_submit_error: ${message['error']}');
           break;
 
+        case 'attendance_tap_ack':
+          Log.i('[WS] attendance_tap_ack: ${message['student_id']} success=${message['success']} status=${message['status']}');
+          break;
+
+        case 'attendance_save_draft_ack':
+          Log.i('[WS] attendance_save_draft_ack: success=${message['success']}');
+          break;
+
         case 'student_verified':
           final event = StudentVerifiedEvent.fromJson(message);
           _sessionState.notifyStudentVerified(event.seat);
           _studentVerifiedController.add(event);
-          Log.i('[WS] student_verified: ${event.studentId} seat=${event.seat}');
+          Log.i('[WS] student_verified: ${event.studentId} seat=${event.seat} status=${event.status}');
           break;
 
         case 'attendance_closed':
@@ -648,6 +703,7 @@ class WebsocketService {
     _attendanceUpdatedController.close();
     _attendanceSubmittedController.close();
     _systemCommandController.close();
+    _boardStatusController.close();
     _notificationEventController.close();
   }
 }
