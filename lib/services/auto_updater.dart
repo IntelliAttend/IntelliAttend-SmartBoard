@@ -50,14 +50,16 @@ class UpdateProgress {
   final double fraction; // 0.0 – 1.0 (download progress)
   final String? error;
   final bool force;
+  final DateTime startedAt;
 
-  const UpdateProgress({
+  UpdateProgress({
     required this.state,
     required this.targetVersion,
     this.fraction = 0.0,
     this.error,
     this.force = false,
-  });
+    DateTime? startedAt,
+  }) : startedAt = startedAt ?? DateTime.now();
 
   /// Human-readable status line for the overlay UI.
   String get statusText {
@@ -150,21 +152,33 @@ class AutoUpdater {
   /// Returns `true` if an update was started, `false` if no update is needed
   /// or the board is not in the rollout cohort.
   static Future<bool> checkForUpdate(UpdateManifest manifest) async {
+    final installed = _installedVersion;
+    final required = manifest.parsedMinimum;
+    final forceUpdate = manifest.force;
+
+    Log.i('[AutoUpdater] checkForUpdate: installed=$installed, required=${manifest.minimumVersion}, force=$forceUpdate');
+
     // Guard: don't start a second update while one is running.
+    // BUT: if force is true OR progress is stuck (>5 min), allow override.
     if (progress.value != null && progress.value!.state != UpdateState.failed) {
-      Log.d('[AutoUpdater] Update already in progress — ignoring');
+      final elapsed = DateTime.now().difference(progress.value!.startedAt);
+      if (forceUpdate && elapsed > const Duration(minutes: 5)) {
+        Log.w('[AutoUpdater] Force update with stuck progress (${elapsed.inMinutes}min) — resetting');
+        progress.value = null;
+      } else if (!forceUpdate) {
+        Log.d('[AutoUpdater] Update already in progress — ignoring');
+        return false;
+      }
+    }
+
+    // Already up to date (unless force).
+    if (installed >= required && !forceUpdate) {
+      Log.d('[AutoUpdater] Already at v$installed — no update needed');
       return false;
     }
 
-    final installed = _installedVersion;
-    final required = manifest.parsedMinimum;
-
-    Log.d('[AutoUpdater] Installed=$installed, required=${manifest.minimumVersion}');
-
-    // Already up to date.
-    if (installed >= required) {
-      Log.d('[AutoUpdater] Already at v$installed — no update needed');
-      return false;
+    if (installed >= required && forceUpdate) {
+      Log.i('[AutoUpdater] Force update requested even though v$installed >= v${manifest.minimumVersion}');
     }
 
     // No download URL — can't update.
@@ -174,8 +188,8 @@ class AutoUpdater {
       return false;
     }
 
-    // Check rollout cohort.
-    if (_boardId != null && !manifest.includesBoard(_boardId!)) {
+    // Check rollout cohort (skip if force).
+    if (!forceUpdate && _boardId != null && !manifest.includesBoard(_boardId!)) {
       Log.d('[AutoUpdater] Board $_boardId not in rollout cohort '
           '(${manifest.rolloutPercentage}%) — skipping');
       return false;
@@ -184,15 +198,12 @@ class AutoUpdater {
     // Check disk space.
     if (!await _hasEnoughDiskSpace()) {
       Log.e('[AutoUpdater] Insufficient disk space for update');
-      if (manifest.force) {
-        // Even a forced update can't proceed without disk space.
-        progress.value = UpdateProgress(
-          state: UpdateState.failed,
-          targetVersion: manifest.minimumVersion,
-          error: 'Insufficient disk space. Free at least 200 MB.',
-          force: manifest.force,
-        );
-      }
+      progress.value = UpdateProgress(
+        state: UpdateState.failed,
+        targetVersion: manifest.minimumVersion,
+        error: 'Insufficient disk space. Free at least 200 MB.',
+        force: forceUpdate,
+      );
       return false;
     }
 
