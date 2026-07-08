@@ -115,10 +115,30 @@ class HeartbeatService {
       Log.w('[Heartbeat] Token refresh failed; will retry next beat: $e');
     }
 
-    // §3 — Stop HTTP polling when WebSocket is connected.
-    // Real-time updates arrive via WS (attendance, session state, etc.).
+    // §3 — When WebSocket is connected, skip the full HTTP heartbeat
+    // but still fetch config periodically to receive update manifests.
     if (_wsConnected) {
-      Log.d('[Heartbeat] WS connected — skipping HTTP heartbeat');
+      // Fetch config every ~60 seconds (4th beat cycle) to ensure
+      // update manifests arrive even when WS is the primary channel.
+      if (_heartbeatCount % 4 == 0) {
+        try {
+          final configData = await ApiService.getBoardConfig();
+          if (configData != null && configData.isNotEmpty) {
+            final config = RemoteConfig.fromJson(configData);
+            final applied = await RemoteConfigService.applyConfig(config);
+            if (applied) {
+              Log.i('[Heartbeat] WS-connected config refresh: v${config.configVersion}');
+              if (config.update != null) {
+                unawaited(UpdateChecker.checkNow());
+              }
+            }
+          }
+        } catch (e) {
+          Log.d('[Heartbeat] WS config fetch failed (non-critical): $e');
+        }
+      } else {
+        Log.d('[Heartbeat] WS connected — skipping HTTP heartbeat');
+      }
       return;
     }
 

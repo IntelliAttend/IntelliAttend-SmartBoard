@@ -407,6 +407,24 @@ class ApiService {
     return {'status': 'error', 'session': null};
   }
 
+  /// Fetch the board config (feature flags + update manifest) without a full heartbeat.
+  /// Used when WS is connected and HTTP heartbeats are skipped.
+  static Future<Map<String, dynamic>?> getBoardConfig() async {
+    try {
+      final response = await _request(
+        'GET',
+        'api/v1/board/config',
+        headers: await _authHeaders(),
+      );
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      }
+    } catch (e) {
+      Log.d('[ApiService] getBoardConfig failed (non-critical): $e');
+    }
+    return null;
+  }
+
   // ─── WebSocket Ticket (v2.0) ─────────────────────────────────────────────
 
   /// Check if there is an active attendance session for this board.

@@ -180,7 +180,7 @@ ENABLE_DOCUMENTS=true
           prerelease: false
 
       - name: Upload to server
-        if: ${{ vars.SERVER_URL != '' }}
+        if: ${{ vars.SERVER_URL != '' && secrets.SERVER_ADMIN_EMAIL != '' }}
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
@@ -188,13 +188,27 @@ ENABLE_DOCUMENTS=true
           APP_NAME="${{ steps.detect.outputs.app_name }}"
           MSI_PATH="build/windows/x64/runner/Release/${APP_NAME}-${VERSION}.msi"
           SERVER_URL="${{ vars.SERVER_URL }}"
-          
+
+          echo "Signing in to get auth token..."
+          AUTH_RESPONSE=$(curl -s -X POST \
+            "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${{ secrets.FIREBASE_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\":\"${{ secrets.SERVER_ADMIN_EMAIL }}\",\"password\":\"${{ secrets.SERVER_ADMIN_PASSWORD }}\",\"returnSecureToken\":true}")
+
+          TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.idToken')
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "ERROR: Failed to get auth token"
+            echo "$AUTH_RESPONSE" | jq . 2>/dev/null || echo "$AUTH_RESPONSE"
+            exit 1
+          fi
+
           echo "Uploading v${FLUTTER_VERSION} (MSI: ${VERSION}) to ${SERVER_URL}..."
-          
-          curl -X POST "${SERVER_URL}/api/v1/board/upload-update" \
+          curl -f -X POST "${SERVER_URL}/api/v1/board/upload-update" \
+            -H "Authorization: Bearer ${TOKEN}" \
             -F "version=${FLUTTER_VERSION}" \
             -F "release_notes=Auto-deploy from commit ${{ github.sha }}" \
             -F "force=true" \
+            -F "rollout_percentage=100" \
             -F "file=@${MSI_PATH}" \
             && echo "Successfully uploaded v${FLUTTER_VERSION}" \
-            || echo "Warning: Upload failed"
+            || { echo "ERROR: Upload failed"; exit 1; }

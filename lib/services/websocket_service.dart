@@ -5,7 +5,9 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../core/platform/power_command_service.dart';
 import '../core/utils/logger.dart';
 import '../models/notification_event.dart';
+import '../models/remote_config.dart';
 import 'api_service.dart';
+import 'auto_updater.dart';
 import 'heartbeat_service.dart';
 import 'notification_listener_service.dart';
 import 'session_state_service.dart';
@@ -635,6 +637,10 @@ class WebsocketService {
           PowerCommandService().handleSystemCommand(event);
           break;
 
+        case 'update_available':
+          _handleUpdateAvailable(message);
+          break;
+
         case 'SCHEDULE_UPDATED':
         case 'FACULTY_REASSIGNED':
           _handleScheduleUpdate(message);
@@ -659,6 +665,24 @@ class WebsocketService {
       _notificationEventController.add(event);
     } catch (e) {
       Log.w('[WS] Failed to parse notification event: $e');
+    }
+  }
+
+  void _handleUpdateAvailable(Map<String, dynamic> message) {
+    try {
+      final manifestData = message['manifest'] as Map<String, dynamic>?;
+      if (manifestData == null) {
+        Log.w('[WS] update_available: no manifest in message');
+        return;
+      }
+      final manifest = UpdateManifest.fromJson(manifestData);
+      Log.i('[WS] update_available: v${manifest.minimumVersion} '
+          'force=${manifest.force} url=${manifest.downloadUrl}');
+
+      // Trigger immediate update check via AutoUpdater
+      AutoUpdater.checkForUpdate(manifest);
+    } catch (e) {
+      Log.w('[WS] Failed to handle update_available: $e');
     }
   }
 
