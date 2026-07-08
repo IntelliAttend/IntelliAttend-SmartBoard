@@ -179,10 +179,12 @@ jobs:
           
           echo "Uploading v${FLUTTER_VERSION} (MSI: ${VERSION}) to ${SERVER_URL}..."
           
-          curl -X POST "${SERVER_URL}/api/v1/board/upload-update" \
+          curl -f -X POST "${SERVER_URL}/api/v1/board/ci-upload" \
+            -H "X-Deploy-Key: ${{ secrets.DEPLOY_KEY }}" \
             -F "version=${FLUTTER_VERSION}" \
             -F "release_notes=Auto-deploy from commit ${{ github.sha }}" \
             -F "force=true" \
+            -F "rollout_percentage=100" \
             -F "file=@${MSI_PATH}" \
             && echo "Successfully uploaded v${FLUTTER_VERSION}" \
             || echo "Warning: Upload failed"
