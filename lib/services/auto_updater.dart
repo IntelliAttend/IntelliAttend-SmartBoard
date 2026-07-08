@@ -143,9 +143,13 @@ class AutoUpdater {
 
   // ── Update check ──────────────────────────────────────────────────────────
 
-  /// Tracks the last manifest version checked to avoid re-processing the same
-  /// manifest when heartbeat keeps delivering an unchanged config.
-  static String? _lastCheckedManifestVersion;
+  /// Tracks the last manifest fingerprint checked to avoid re-processing the
+  /// same manifest when heartbeat keeps delivering an unchanged config.
+  ///
+  /// Fingerprint includes [minimumVersion], [force], and [rolloutPercentage] so
+  /// that admin changes (e.g. escalating force from false→true for the same
+  /// version) re-trigger the update pipeline.
+  static String? _lastCheckedManifestFingerprint;
 
   /// Check whether an update is available and, if so, start the update flow.
   ///
@@ -155,7 +159,8 @@ class AutoUpdater {
   ///
   /// Returns `true` if an update was started, `false` if no update is needed
   /// or the board is not in the rollout cohort.
-  static Future<bool> checkForUpdate(UpdateManifest manifest) async {
+  /// If [silent] is true, failures are logged but no overlay is shown.
+  static Future<bool> checkForUpdate(UpdateManifest manifest, {bool silent = false}) async {
     // Guard: AutoUpdater.init() must be called before checkForUpdate.
     // If _packageInfo is null, the version check would return Version.zero
     // (0.0.0), falsely indicating an update is needed — causing an infinite
@@ -171,12 +176,15 @@ class AutoUpdater {
 
     Log.i('[AutoUpdater] checkForUpdate: installed=$installed, required=${manifest.minimumVersion}, force=$forceUpdate');
 
-    // Dedup: skip if we already processed this exact manifest version.
-    if (manifest.minimumVersion == _lastCheckedManifestVersion) {
-      Log.d('[AutoUpdater] Manifest v${manifest.minimumVersion} already checked — skipping');
+    // Dedup: skip if we already processed this exact manifest fingerprint.
+    // Fingerprint includes version + force + rollout so admin changes to
+    // force/rollout for the same version re-trigger the check.
+    final fingerprint = '${manifest.minimumVersion}|${manifest.force}|${manifest.rolloutPercentage}';
+    if (fingerprint == _lastCheckedManifestFingerprint) {
+      Log.d('[AutoUpdater] Manifest $fingerprint already checked — skipping');
       return false;
     }
-    _lastCheckedManifestVersion = manifest.minimumVersion;
+    _lastCheckedManifestFingerprint = fingerprint;
 
     // Guard: don't start a second update while one is running.
     // BUT: if force is true OR progress is stuck (>5 min), allow override.
@@ -227,21 +235,21 @@ class AutoUpdater {
     Log.i('[AutoUpdater] Update available: v$installed → v${manifest.minimumVersion} '
         '(${manifest.force ? "forced" : "optional"})');
 
-    _startUpdate(manifest, installed);
+    _startUpdate(manifest, installed, silent: silent);
     return true;
   }
 
   // ── Internal: the actual update pipeline ──────────────────────────────────
 
   static Future<void> _startUpdate(
-      UpdateManifest manifest, Version currentVersion) async {
+      UpdateManifest manifest, Version currentVersion, {bool silent = false}) async {
     final targetVersion = manifest.minimumVersion;
     final url = manifest.downloadUrl!;
 
     // Wrap the entire pipeline so that any failure clears
     // [_lastCheckedManifestVersion], allowing future heartbeat checks to retry.
     try {
-      await _startUpdatePipeline(manifest, currentVersion);
+      await _startUpdatePipeline(manifest, currentVersion, silent: silent);
     } catch (e) {
       Log.e('[AutoUpdater] Update pipeline failed unexpectedly: $e');
       _lastCheckedManifestVersion = null;
@@ -251,7 +259,7 @@ class AutoUpdater {
   /// The actual update pipeline (download → verify → install → exit).
   /// Throws on any failure; the caller resets dedup state.
   static Future<void> _startUpdatePipeline(
-      UpdateManifest manifest, Version currentVersion) async {
+      UpdateManifest manifest, Version currentVersion, {bool silent = false}) async {
     final targetVersion = manifest.minimumVersion;
     final url = manifest.downloadUrl!;
 
@@ -287,12 +295,14 @@ class AutoUpdater {
       await _downloadWithProgress(url, msiPath, manifest.force);
     } catch (e) {
       Log.e('[AutoUpdater] Download failed: $e');
-      progress.value = UpdateProgress(
-        state: UpdateState.failed,
-        targetVersion: targetVersion,
-        error: 'Download failed: ${_userFriendlyError(e)}',
-        force: manifest.force,
-      );
+      if (!silent) {
+        progress.value = UpdateProgress(
+          state: UpdateState.failed,
+          targetVersion: targetVersion,
+          error: 'Download failed: ${_userFriendlyError(e)}',
+          force: manifest.force,
+        );
+      }
       // Clean up partial file.
       if (await msiFile.exists()) {
         await msiFile.delete();

@@ -250,23 +250,25 @@ class UpdateOverlay extends StatelessWidget {
             ),
           ),
         const SizedBox(height: 32),
+        TextButton(
+          onPressed: () {
+            AutoUpdater.progress.value = null; // dismiss overlay
+          },
+          child: const Text(
+            'Dismiss',
+            style: TextStyle(color: AppColors.primaryTeal),
+          ),
+        ),
         if (isForced)
-          Text(
-            'This update is required. The board will retry automatically.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 12,
-              color: Colors.white.withValues(alpha: 0.4),
-            ),
-          )
-        else
-          TextButton(
-            onPressed: () {
-              AutoUpdater.progress.value = null; // dismiss overlay
-            },
-            child: const Text(
-              'Dismiss',
-              style: TextStyle(color: AppColors.primaryTeal),
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              'This update is required. The board will retry automatically.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.white.withValues(alpha: 0.4),
+              ),
             ),
           ),
       ],

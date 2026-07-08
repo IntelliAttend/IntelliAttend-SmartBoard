@@ -80,7 +80,7 @@ class UpdateChecker {
     if (serverManifest != null) {
       Log.d('[UpdateChecker] Server manifest: v${serverManifest.minimumVersion}');
       try {
-        await AutoUpdater.checkForUpdate(serverManifest);
+        await AutoUpdater.checkForUpdate(serverManifest, silent: true);
         return;
       } catch (e) {
         Log.e('[UpdateChecker] Server manifest check failed: $e');
@@ -132,7 +132,7 @@ class UpdateChecker {
       _lastServerVersion = manifest.minimumVersion;
       Log.i('[UpdateChecker] Server update available: v${manifest.minimumVersion}');
       
-      await AutoUpdater.checkForUpdate(manifest);
+      await AutoUpdater.checkForUpdate(manifest, silent: true);
     } catch (e) {
       Log.e('[UpdateChecker] Server check failed: $e');
     }
@@ -164,7 +164,7 @@ class UpdateChecker {
       _lastGithubVersion = manifest.minimumVersion;
       Log.i('[UpdateChecker] GitHub update available: v${manifest.minimumVersion}');
 
-      await AutoUpdater.checkForUpdate(manifest);
+      await AutoUpdater.checkForUpdate(manifest, silent: true);
     } catch (e) {
       Log.e('[UpdateChecker] GitHub check failed: $e');
     }
