@@ -675,6 +675,10 @@ class WebsocketService {
         Log.w('[WS] update_available: no manifest in message');
         return;
       }
+      // Fix relative download URL
+      if (manifestData['download_url']?.toString().startsWith('/') == true) {
+        manifestData['download_url'] = '$_host${manifestData['download_url']}';
+      }
       final manifest = UpdateManifest.fromJson(manifestData);
       Log.i('[WS] update_available: v${manifest.minimumVersion} '
           'force=${manifest.force} url=${manifest.downloadUrl}');

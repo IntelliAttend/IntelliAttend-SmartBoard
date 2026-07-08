@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../core/auth/token_manager.dart';
+import '../core/config/app_config.dart';
 import '../core/utils/logger.dart';
 import '../core/state/board_state_machine.dart';
 import '../data/repositories/device_repository.dart';
@@ -201,6 +202,11 @@ class HeartbeatService {
       // feature flags take effect within 15 seconds.
       final configData = result['config'] as Map<String, dynamic>?;
       if (configData != null && configData.isNotEmpty) {
+        // Fix relative download URL in force_update manifest
+        final forceUpdate = configData['force_update'] as Map<String, dynamic>?;
+        if (forceUpdate != null && forceUpdate['download_url']?.toString().startsWith('/') == true) {
+          forceUpdate['download_url'] = '${AppConfig.baseUrl}${forceUpdate['download_url']}';
+        }
         final config = RemoteConfig.fromJson(configData);
         final applied = await RemoteConfigService.applyConfig(config);
         if (applied) {
