@@ -157,6 +157,9 @@ class NotificationListenerService {
   /// When true, new notifications are emitted immediately. When false they are
   /// queued and released when [drainQueue] is called (e.g. returning to idle).
   bool _isIdle = true;
+
+  /// Prevents stored notifications from triggering overlays during startup.
+  bool _isStartingUp = true;
   final List<BoardNotification> _notificationQueue = [];
 
   // ── Contract v1 dedup state ──────────────────────────────────────
@@ -294,9 +297,15 @@ class NotificationListenerService {
     if (isListening && _currentBoardId == boardId) return;
     stop();
     _currentBoardId = boardId;
+    _isStartingUp = true;
 
     // Restore any notifications persisted from previous sessions
     await loadFromLocalVault();
+
+    // Allow real-time notifications to trigger overlays after startup settles.
+    Future.delayed(const Duration(seconds: 5), () {
+      _isStartingUp = false;
+    });
 
     Log.i('[NotificationListener] Started for board: $boardId');
   }
@@ -548,6 +557,11 @@ class NotificationListenerService {
   void addNotification(BoardNotification notification) {
     _cachedNotifications.insert(0, notification);
     _notificationsController.add(_cachedNotifications);
+
+    // During startup, only populate the list — don't trigger overlay pop-ups.
+    if (_isStartingUp) {
+      return;
+    }
 
     if (_isIdle) {
       _incomingController.add(notification);

@@ -54,8 +54,8 @@ class UpdateChecker {
     });
     Log.d('[UpdateChecker] Started (interval: ${_checkInterval.inMinutes} min)');
 
-    // Also run an immediate check.
-    _check();
+    // Delay first check by 30s to let the app fully initialize.
+    Timer(const Duration(seconds: 30), () => _check());
   }
 
   /// Stop the timer.
