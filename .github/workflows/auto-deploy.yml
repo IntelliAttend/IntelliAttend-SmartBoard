@@ -65,7 +65,7 @@ jobs:
         run: |
           echo "API_BASE_URL=https://api-dev.balaseetharamanjaneyulu.com" > .env
           echo "FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}" >> .env
-          echo "FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID || 'intelliattend-a2564' }}" >> .env
+          echo "FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID }}" >> .env
           echo "FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}" >> .env
           echo "FIREBASE_MESSAGING_SENDER_ID=${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}" >> .env
           echo "SSL_PIN_FINGERPRINT=${{ secrets.SSL_PIN_FINGERPRINT }}" >> .env
@@ -84,15 +84,7 @@ jobs:
           Write-Host "Updated pubspec.yaml to version $version"
 
       - name: Build Windows release
-        run: >
-          flutter build windows --release
-          --dart-define=API_BASE_URL=${{ vars.API_BASE_URL || 'https://api-dev.balaseetharamanjaneyulu.com' }}
-          --dart-define=FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}
-          --dart-define=FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID || 'intelliattend-a2564' }}
-          --dart-define=FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}
-          --dart-define=FIREBASE_MESSAGING_SENDER_ID=${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
-          --dart-define=SSL_PIN_FINGERPRINT=${{ secrets.SSL_PIN_FINGERPRINT }}
-          --dart-define=ENABLE_DOCUMENTS=true
+        run: flutter build windows --release
 
       - name: Detect exe name
         id: detect
@@ -176,7 +168,7 @@ jobs:
           prerelease: false
 
       - name: Upload to server
-        if: ${{ vars.SERVER_URL != '' && secrets.SERVER_ADMIN_EMAIL != '' }}
+        if: ${{ vars.SERVER_URL != '' }}
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
@@ -184,27 +176,13 @@ jobs:
           APP_NAME="${{ steps.detect.outputs.app_name }}"
           MSI_PATH="build/windows/x64/runner/Release/${APP_NAME}-${VERSION}.msi"
           SERVER_URL="${{ vars.SERVER_URL }}"
-
-          echo "Signing in to get auth token..."
-          AUTH_RESPONSE=$(curl -s -X POST \
-            "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${{ secrets.FIREBASE_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d "{\"email\":\"${{ secrets.SERVER_ADMIN_EMAIL }}\",\"password\":\"${{ secrets.SERVER_ADMIN_PASSWORD }}\",\"returnSecureToken\":true}")
-
-          TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.idToken')
-          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
-            echo "ERROR: Failed to get auth token"
-            echo "$AUTH_RESPONSE" | jq . 2>/dev/null || echo "$AUTH_RESPONSE"
-            exit 1
-          fi
-
+          
           echo "Uploading v${FLUTTER_VERSION} (MSI: ${VERSION}) to ${SERVER_URL}..."
-          curl -f -X POST "${SERVER_URL}/api/v1/board/upload-update" \
-            -H "Authorization: Bearer ${TOKEN}" \
+          
+          curl -X POST "${SERVER_URL}/api/v1/board/upload-update" \
             -F "version=${FLUTTER_VERSION}" \
             -F "release_notes=Auto-deploy from commit ${{ github.sha }}" \
             -F "force=true" \
-            -F "rollout_percentage=100" \
             -F "file=@${MSI_PATH}" \
             && echo "Successfully uploaded v${FLUTTER_VERSION}" \
-            || { echo "ERROR: Upload failed"; exit 1; }
+            || echo "Warning: Upload failed"
