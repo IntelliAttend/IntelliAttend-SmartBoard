@@ -1,8 +1,12 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import '../core/security/secure_storage_service.dart';
 import '../core/utils/logger.dart';
 
 class TimeSyncService {
+  static bool _initialized = false;
+
   /// The precise millisecond difference between the SmartBoard's hardware clock
   /// and the true time reported by the Python server.
   static int _timeDriftOffset = 0;
@@ -12,6 +16,16 @@ class TimeSyncService {
 
   /// Maximum age (1 hour) before cached skew is considered stale.
   static const int _maxSkewAgeMs = Duration.millisecondsPerHour;
+
+  /// Skew threshold (1 second) above which we attempt to auto-correct the
+  /// system clock via PowerShell (requires admin rights).
+  static const int _autoCorrectThresholdMs = 1000;
+
+  /// Minimum interval between auto-correct attempts (1 hour).
+  static const int _minAutoCorrectIntervalMs = Duration.millisecondsPerHour;
+
+  /// When the last auto-correct was attempted.
+  static int? _lastAutoCorrectAt;
 
   /// Initializes the service by loading the last known skew from secure storage.
   static Future<void> init() async {
@@ -24,16 +38,19 @@ class TimeSyncService {
     } else {
       Log.i('[TimeSyncService] No cached skew found. Starting at 0ms offset.');
     }
+    _initialized = true;
   }
 
   /// Returns true when no skew data exists or the last sync is older than 1 hour.
   static bool get isSkewStale {
+    if (!_initialized) return true;
     if (_lastSyncedAt == null) return true;
     final age = DateTime.now().millisecondsSinceEpoch - _lastSyncedAt!;
     return age > _maxSkewAgeMs;
   }
 
   static void _persistSkew() {
+    if (!_initialized) return;
     _lastSyncedAt = DateTime.now().millisecondsSinceEpoch;
     SecureStorageService.storeClockSkew(_timeDriftOffset);
     SecureStorageService.storeClockSkewTimestamp(_lastSyncedAt!);
@@ -57,6 +74,7 @@ class TimeSyncService {
     final offset = serverReceivedAtMs - (t0 + rtt ~/ 2);
     _timeDriftOffset = offset;
     _persistSkew();
+    _tryAutoCorrectSystemClock();
 
     if (kDebugMode) {
       Log.i('[TimeSyncService] NTP sync: rtt=${rtt}ms, offset=${_timeDriftOffset}ms');
@@ -76,6 +94,7 @@ class TimeSyncService {
     final int localTimeAtArrival = responseReceivedAt.millisecondsSinceEpoch;
     _timeDriftOffset = trueTimeAtArrival - localTimeAtArrival;
     _persistSkew();
+    _tryAutoCorrectSystemClock();
 
     if (kDebugMode) {
       Log.i('[TimeSyncService] RTT Handshake (legacy): rtt=${roundTripTime}ms, skew=${_timeDriftOffset}ms');
@@ -86,8 +105,54 @@ class TimeSyncService {
   static void setSkew(int skewMs) {
     _timeDriftOffset = skewMs;
     _persistSkew();
+    _tryAutoCorrectSystemClock();
     Log.i('[TimeSyncService] Clock skew updated & persisted: ${_timeDriftOffset}ms');
   }
+
+  /// Attempt to correct the Windows system clock via PowerShell if skew exceeds
+  /// [_autoCorrectThresholdMs]. Requires admin rights; silently falls back on failure.
+  static Future<void> _tryAutoCorrectSystemClock() async {
+    if (!Platform.isWindows) return;
+    if (_timeDriftOffset.abs() < _autoCorrectThresholdMs) return;
+
+    // Rate-limit auto-correct attempts
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_lastAutoCorrectAt != null &&
+        (now - _lastAutoCorrectAt!) < _minAutoCorrectIntervalMs) {
+      return;
+    }
+    _lastAutoCorrectAt = now;
+
+    try {
+      final targetTime = DateTime.now()
+          .add(Duration(milliseconds: _timeDriftOffset));
+      final timeStr = '${targetTime.year}-'
+          '${_pad(targetTime.month)}-${_pad(targetTime.day)} '
+          '${_pad(targetTime.hour)}:${_pad(targetTime.minute)}:${_pad(targetTime.second)}';
+      Log.i('[TimeSyncService] Attempting system clock correction via PowerShell '
+          '(skew=${_timeDriftOffset}ms, target=$timeStr)...');
+
+      final result = await Process.run(
+        'powershell',
+        ['-Command', "Set-Date '$timeStr'"],
+      ).timeout(const Duration(seconds: 10));
+
+      if (result.exitCode == 0) {
+        Log.i('[TimeSyncService] System clock corrected successfully.');
+        _timeDriftOffset = 0;
+        _persistSkew();
+      } else {
+        Log.w('[TimeSyncService] System clock correction failed '
+            '(exit ${result.exitCode}): ${result.stderr}');
+      }
+    } catch (e) {
+      Log.w('[TimeSyncService] System clock correction not available '
+          '(admin rights may be required): $e');
+    }
+  }
+
+  /// Pad a 2-digit number (e.g. month, day, hour).
+  static String _pad(int n) => n.toString().padLeft(2, '0');
 
   /// Returns the current clock skew in milliseconds.
   static int getSkew() => _timeDriftOffset;

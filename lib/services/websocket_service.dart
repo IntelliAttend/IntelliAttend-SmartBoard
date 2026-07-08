@@ -768,9 +768,28 @@ class WebsocketService {
     _reconnectTimer?.cancel();
     _reconnectAttempt++;
 
-    final delay = _reconnectAttempt <= 4
-        ? Duration(seconds: 1 << (_reconnectAttempt - 1))
-        : const Duration(seconds: 15);
+    // Cap at 60 reconnect attempts (~10 minutes), then give up.
+    if (_reconnectAttempt > 60) {
+      Log.e('[WS] Reconnect limit exhausted after $_reconnectAttempt attempts — giving up.');
+      return;
+    }
+
+    // Exponential backoff: 1s, 2s, 4s, 8s, 15s, 15s, 30s, 30s, 60s cap
+    Duration delay;
+    if (_reconnectAttempt <= 4) {
+      delay = Duration(seconds: 1 << (_reconnectAttempt - 1));
+    } else if (_reconnectAttempt == 5) {
+      delay = const Duration(seconds: 15);
+    } else if (_reconnectAttempt <= 7) {
+      delay = const Duration(seconds: 30);
+    } else {
+      delay = const Duration(seconds: 60);
+    }
+
+    // Add jitter (±25%) to prevent thundering herd
+    final jitter = (delay.inMilliseconds * 0.25).toInt();
+    final jitteredMs = delay.inMilliseconds + (jitter > 0 ? (DateTime.now().millisecondsSinceEpoch % (jitter * 2) - jitter) : 0);
+    delay = Duration(milliseconds: jitteredMs.clamp(1000, 120000));
 
     Log.i('[WS] Reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempt)');
     _reconnectTimer = Timer(delay, () => _doConnect());

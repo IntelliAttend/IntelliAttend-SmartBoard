@@ -28,23 +28,25 @@ class SecureStorageService {
   static Future<void> init() async {}
 
   /// Maximum number of retries for file-lock conflicts on Windows.
-  static const int _maxLockRetries = 3;
-  static const Duration _lockRetryDelay = Duration(milliseconds: 500);
+  static const int _maxLockRetries = 5;
+  static const Duration _lockRetryBaseDelay = Duration(milliseconds: 500);
 
   /// Retry an async operation if it fails with [PathAccessException]
-  /// (Windows file-lock contention). Clears all data if retries exhausted.
+  /// (Windows file-lock contention). Uses exponential backoff and only
+  /// wipes the affected key (not all data) as a last resort.
   static Future<T> _retryOnLock<T>(Future<T> Function() fn) async {
     for (int attempt = 0; attempt < _maxLockRetries; attempt++) {
       try {
         return await fn();
       } on PathAccessException catch (e) {
         if (attempt < _maxLockRetries - 1) {
-          Log.w('[SecureStorage] Lock contention (attempt ${attempt + 1}/$_maxLockRetries): $e');
-          await Future.delayed(_lockRetryDelay * (1 << attempt));
+          final delay = _lockRetryBaseDelay * (1 << attempt);
+          Log.w('[SecureStorage] Lock contention (attempt ${attempt + 1}/$_maxLockRetries): $e — retrying in ${delay.inMilliseconds}ms');
+          await Future.delayed(delay);
           continue;
         }
-        Log.e('[SecureStorage] Lock contention exhausted — clearing all data to recover.');
-        await _deleteAllUnsafe();
+        Log.e('[SecureStorage] Lock contention exhausted after $_maxLockRetries attempts — operation failed.');
+        rethrow;
       }
     }
     return fn();

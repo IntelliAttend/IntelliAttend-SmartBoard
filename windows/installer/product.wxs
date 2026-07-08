@@ -1,15 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  IntelliAttend SmartBoard — Windows Installer (WiX Toolset v3)
-
-  Simplified installer that includes only the exe and DLLs.
-  Assets are copied by the app on first run.
-
-  Build:
-    candle -dAppName="intelliattend_smartboard" -dVersion="1.0.0" -dSourceDir="..\..\build\windows\x64\runner\Release" product.wxs -out product.wixobj
-    light -ext WixUIExtension product.wixobj -out "..\..\build\windows\x64\runner\Release\intelliattend_smartboard-$(Version).msi"
--->
-
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
 
   <Product
@@ -34,13 +23,77 @@
       <Directory Id="LocalAppDataFolder">
         <Directory Id="APPLICATIONFOLDER" Name="$(var.AppName)">
 
-          <!-- App files -->
-          <Component Id="C_App" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+          <!-- App executable and core DLLs -->
+          <Component Id="C_App_Core" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
             <File Id="F_exe" Name="$(var.AppName).exe" DiskId="1" Source="$(var.SourceDir)\$(var.AppName).exe" />
             <File Id="F_flutter_windows" Name="flutter_windows.dll" DiskId="1" Source="$(var.SourceDir)\flutter_windows.dll" />
             <File Id="F_isar" Name="isar.dll" DiskId="1" Source="$(var.SourceDir)\isar.dll" />
+            <File Id="F_isar_flutter_libs" Name="isar_flutter_libs_plugin.dll" DiskId="1" Source="$(var.SourceDir)\isar_flutter_libs_plugin.dll" />
+            <File Id="F_pdfium" Name="pdfium.dll" DiskId="1" Source="$(var.SourceDir)\pdfium.dll" />
+            <File Id="F_window_manager" Name="window_manager_plugin.dll" DiskId="1" Source="$(var.SourceDir)\window_manager_plugin.dll" />
+            <File Id="F_audioplayers" Name="audioplayers_windows_plugin.dll" DiskId="1" Source="$(var.SourceDir)\audioplayers_windows_plugin.dll" />
+            <File Id="F_connectivity" Name="connectivity_plus_plugin.dll" DiskId="1" Source="$(var.SourceDir)\connectivity_plus_plugin.dll" />
+            <File Id="F_notifications" Name="flutter_local_notifications_windows.dll" DiskId="1" Source="$(var.SourceDir)\flutter_local_notifications_windows.dll" />
+            <File Id="F_secure_storage" Name="flutter_secure_storage_windows_plugin.dll" DiskId="1" Source="$(var.SourceDir)\flutter_secure_storage_windows_plugin.dll" />
+            <File Id="F_url_launcher" Name="url_launcher_windows_plugin.dll" DiskId="1" Source="$(var.SourceDir)\url_launcher_windows_plugin.dll" />
+            <File Id="F_screen_retriever" Name="screen_retriever_windows_plugin.dll" DiskId="1" Source="$(var.SourceDir)\screen_retriever_windows_plugin.dll" />
             <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\Files" Name="installed" Type="integer" Value="1" KeyPath="yes" />
           </Component>
+
+          <!-- Data directory: AOT compiled code, ICU data, and Flutter assets -->
+          <Directory Id="DataDir" Name="data">
+            <Component Id="C_Data_Files" Guid="C2D3E4F5-A6B7-4890-CDEF-123456789ABC">
+              <File Id="F_app_so" Name="app.so" DiskId="1" Source="$(var.SourceDir)\data\app.so" />
+              <File Id="F_icudtl" Name="icudtl.dat" DiskId="1" Source="$(var.SourceDir)\data\icudtl.dat" />
+              <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\Data" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+            </Component>
+
+            <Directory Id="FlutterAssetsDir" Name="flutter_assets">
+              <Component Id="C_FlutterAssets" Guid="D3E4F5A6-B7C8-4901-DEF2-3456789ABCDE">
+                <File Id="FA_dotenv" Name=".env" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\.env" />
+                <File Id="FA_AssetManifest" Name="AssetManifest.bin" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\AssetManifest.bin" />
+                <File Id="FA_FontManifest" Name="FontManifest.json" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\FontManifest.json" />
+                <File Id="FA_NativeAssets" Name="NativeAssetsManifest.json" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\NativeAssetsManifest.json" />
+                <File Id="FA_NOTICES" Name="NOTICES.Z" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\NOTICES.Z" />
+                <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\FlutterAssets" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+              </Component>
+
+              <Directory Id="FlutterAssetsAssetsDir" Name="assets">
+                <Component Id="C_FlutterAssets_Assets" Guid="E4F5A6B7-C8D9-4012-EFAB-456789ABCDEF">
+                  <File Id="FA_bg" Name="background.png" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\background.png" />
+                  <File Id="FA_chart" Name="chart_sample.png" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\chart_sample.png" />
+                  <File Id="FA_lottie" Name="Errorfailure.lottie" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\Errorfailure.lottie" />
+                  <File Id="FA_logo" Name="logo.png" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\logo.png" />
+                  <File Id="FA_logo_sq" Name="logo_square.png" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\logo_square.png" />
+                  <File Id="FA_orimi" Name="orimi_sample.pdf" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\orimi_sample.pdf" />
+                  <File Id="FA_sample_pdf" Name="sample.pdf" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample.pdf" />
+                  <File Id="FA_sample_txt" Name="sample.txt" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample.txt" />
+                  <File Id="FA_sample_docx" Name="sample_document.docx" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample_document.docx" />
+                  <File Id="FA_sample_md" Name="sample_notes.md" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample_notes.md" />
+                  <File Id="FA_sample_ppt" Name="sample_presentation.ppt" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample_presentation.ppt" />
+                  <File Id="FA_sample_pptx" Name="sample_presentation.pptx" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample_presentation.pptx" />
+                  <File Id="FA_sample_html" Name="sample_report.html" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample_report.html" />
+                  <File Id="FA_sample_xlsx" Name="sample_spreadsheet.xlsx" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample_spreadsheet.xlsx" />
+                  <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\FlutterAssets\Assets" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+                </Component>
+              </Directory>
+
+              <Directory Id="FlutterAssetsFontsDir" Name="fonts">
+                <Component Id="C_FlutterAssets_Fonts" Guid="F5A6B7C8-D9E0-4123-ABCD-56789ABCDEF0">
+                  <File Id="FA_font" Name="MaterialIcons-Regular.otf" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\fonts\MaterialIcons-Regular.otf" />
+                  <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\FlutterAssets\Fonts" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+                </Component>
+              </Directory>
+
+              <Directory Id="FlutterAssetsShadersDir" Name="shaders">
+                <Component Id="C_FlutterAssets_Shaders" Guid="A6B7C8D9-E0F1-4234-BCDE-67890ABCDEF1">
+                  <File Id="FA_shader1" Name="ink_sparkle.frag" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\shaders\ink_sparkle.frag" />
+                  <File Id="FA_shader2" Name="stretch_effect.frag" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\shaders\stretch_effect.frag" />
+                  <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\FlutterAssets\Shaders" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+                </Component>
+              </Directory>
+            </Directory>
+          </Directory>
 
           <Component Id="C_RemoveFolder" Guid="B1C2D3E4-F5A6-7890-BCDE-123456789012">
             <RemoveFolder Id="RemoveAppFolder" On="uninstall" />
@@ -83,7 +136,12 @@
     </DirectoryRef>
 
     <Feature Id="DefaultFeature" Title="$(var.AppName)" Level="1">
-      <ComponentRef Id="C_App" />
+      <ComponentRef Id="C_App_Core" />
+      <ComponentRef Id="C_Data_Files" />
+      <ComponentRef Id="C_FlutterAssets" />
+      <ComponentRef Id="C_FlutterAssets_Assets" />
+      <ComponentRef Id="C_FlutterAssets_Fonts" />
+      <ComponentRef Id="C_FlutterAssets_Shaders" />
       <ComponentRef Id="C_RemoveFolder" />
       <ComponentRef Id="C_StartMenuShortcut" />
       <ComponentRef Id="C_AutoStart" />
