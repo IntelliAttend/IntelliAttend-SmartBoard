@@ -117,7 +117,7 @@ jobs:
           Push-Location "windows\installer"
           & "$env:WIX\bin\candle.exe" -dAppName="$appName" -dVersion="$version" -dSourceDir="..\..\$buildDir" product.wxs -out product.wixobj
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & "$env:WIX\bin\light.exe" -ext WixUIExtension product.wixobj -out "..\..\$buildDir\$appName-$version.msi"
+          & "$env:WIX\bin\light.exe" -sval -ext WixUIExtension product.wixobj -out "..\..\$buildDir\$appName-$version.msi"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Pop-Location
 
