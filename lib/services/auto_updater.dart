@@ -417,6 +417,14 @@ class AutoUpdater {
             fraction: bytesReceived / contentLength,
             force: force,
           );
+        } else if (bytesReceived > 0 && bytesReceived % (512 * 1024) == 0) {
+          // Unknown total size — show indeterminate progress every 512KB
+          progress.value = UpdateProgress(
+            state: UpdateState.downloading,
+            targetVersion: progress.value?.targetVersion ?? '?',
+            fraction: -1,
+            force: force,
+          );
         }
       }
 
@@ -518,7 +526,9 @@ class AutoUpdater {
   static Version get _installedVersion {
     if (_packageInfo == null) return Version.zero;
     try {
-      return Version.parse('${_packageInfo!.version}+${_packageInfo!.buildNumber}');
+      // PackageInfo.version already contains the build number (e.g. "5.5.0+6").
+      // Do NOT append buildNumber again — it produces "5.5.0+6+6" which breaks parsing.
+      return Version.parse(_packageInfo!.version);
     } catch (_) {
       return Version.zero;
     }

@@ -204,13 +204,15 @@ class UpdateOverlay extends StatelessWidget {
   // ── Progress bar (determinate during download, indeterminate during verify) ─
 
   Widget _buildProgressIndicator(UpdateProgress progress) {
-    if (progress.state == UpdateState.downloading && progress.fraction > 0) {
+    if (progress.state == UpdateState.downloading) {
+      // fraction > 0 = determinate, fraction == -1 = indeterminate (unknown size)
+      final isDeterminate = progress.fraction > 0;
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 80),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: LinearProgressIndicator(
-            value: progress.fraction,
+            value: isDeterminate ? progress.fraction : null,
             minHeight: 6,
             backgroundColor: Colors.white.withValues(alpha: 0.08),
             valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primaryTeal),
