@@ -1966,13 +1966,6 @@ class _IdleScreenState extends State<IdleScreen>
     );
   }
 
-  String _formatCurrentTime() {
-    final now = TimeSyncService.timeNow;
-    final hour = now.hour.toString().padLeft(2, '0');
-    final minute = now.minute.toString().padLeft(2, '0');
-    return '$hour:$minute';
-  }
-
   String _getCurrentSlotInfo() {
     final now = TimeSyncService.timeNow;
     final currentMinutes = now.hour * 60 + now.minute;

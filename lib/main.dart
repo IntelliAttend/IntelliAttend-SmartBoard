@@ -653,7 +653,7 @@ Future<void> _doTimeSync() async {
   try {
     final result = await ApiService.syncTime();
     // Feed the server timestamp back into TimeSyncService to update drift
-    if (result is int && result > 0) {
+    if (result > 0) {
       final now = DateTime.now();
       TimeSyncService.synchronizeWithServerLegacy(
         now.subtract(const Duration(seconds: 2)),

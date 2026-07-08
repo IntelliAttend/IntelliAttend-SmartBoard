@@ -85,8 +85,9 @@ class SecureStorageService {
     });
   }
 
-  /// Deletes every known key without wrapping in retry — called only
+  /// Deletes every known key — called only
   /// as a last-resort recovery when lock retries are exhausted.
+  // ignore: unused_element
   static Future<void> _deleteAllUnsafe() async {
     try {
       await _secure.deleteAll();

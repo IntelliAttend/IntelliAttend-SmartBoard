@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_theme.dart';
 import 'registration_screen.dart';
@@ -17,11 +18,22 @@ class BootScreen extends StatefulWidget {
 class _BootScreenState extends State<BootScreen> {
   final String _statusMessage = 'INITIALIZING SYSTEM...';
   String? _errorMessage;
+  String _appVersion = '';
 
   @override
   void initState() {
     super.initState();
+    _loadVersion();
     _performHandshake();
+  }
+
+  Future<void> _loadVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (mounted) {
+        setState(() => _appVersion = 'v${info.version}+${info.buildNumber}');
+      }
+    } catch (_) {}
   }
 
   Future<void> _performHandshake() async {
@@ -163,7 +175,7 @@ class _BootScreenState extends State<BootScreen> {
               child: Center(
                 child: Opacity(
                   opacity: 0.3,
-                  child: Text('v5.4.1-STABLE', style: Theme.of(context).textTheme.labelLarge),
+                  child: Text(_appVersion.isNotEmpty ? _appVersion : 'v--', style: Theme.of(context).textTheme.labelLarge),
                 ),
               ),
             ),

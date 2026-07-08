@@ -243,11 +243,9 @@ class AutoUpdater {
 
   static Future<void> _startUpdate(
       UpdateManifest manifest, Version currentVersion, {bool silent = false}) async {
-    final targetVersion = manifest.minimumVersion;
-    final url = manifest.downloadUrl!;
 
     // Wrap the entire pipeline so that any failure clears
-    // [_lastCheckedManifestVersion], allowing future heartbeat checks to retry.
+    // [_lastCheckedManifestFingerprint], allowing future heartbeat checks to retry.
     try {
       await _startUpdatePipeline(manifest, currentVersion, silent: silent);
     } catch (e) {
@@ -307,7 +305,7 @@ class AutoUpdater {
       if (await msiFile.exists()) {
         await msiFile.delete();
       }
-      throw e; // Propagate to caller for dedup reset.
+      rethrow;
     }
 
     // ── 2. Verify SHA-256 ────────────────────────────────────────────────────
@@ -336,7 +334,7 @@ class AutoUpdater {
           force: manifest.force,
         );
         await msiFile.delete();
-        throw e; // Propagate to caller for dedup reset.
+        rethrow;
       }
     } else {
       Log.w('[AutoUpdater] No SHA-256 in manifest — skipping verification');
@@ -361,7 +359,7 @@ class AutoUpdater {
         error: 'Installation failed: ${_userFriendlyError(e)}',
         force: manifest.force,
       );
-      throw e; // Propagate to caller for dedup reset.
+      rethrow;
     }
 
     // ── 4. Done ──────────────────────────────────────────────────────────────
@@ -501,16 +499,15 @@ class AutoUpdater {
       try {
         final exePath = Platform.resolvedExecutable;
         Log.i('[AutoUpdater] Starting: $exePath --post-update');
-        // Fire-and-forget the new process. The current process will exit
-        // immediately after, so the lock file becomes stale immediately.
         Process.start(exePath, ['--post-update']);
       } catch (e) {
         Log.e('[AutoUpdater] Failed to launch updated binary: $e');
       }
     }
 
-    // Small delay to let the progress notification reach the UI.
-    Future.delayed(const Duration(milliseconds: 500), () {
+    // Wait for new process to start, then exit old one.
+    Future.delayed(const Duration(seconds: 3), () {
+      Log.i('[AutoUpdater] Exiting old process.');
       exit(0);
     });
   }
