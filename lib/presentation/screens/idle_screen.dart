@@ -1920,52 +1920,35 @@ class _IdleScreenState extends State<IdleScreen>
         ],
         IconButton(
             onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text('IntelliAttend Support: Help is on the way!')));
+              final now = TimeSyncService.timeNow;
+              final hour = now.hour.toString().padLeft(2, '0');
+              final minute = now.minute.toString().padLeft(2, '0');
+              final slotInfo = _getCurrentSlotInfo();
+              showDialog(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('System Info'),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Time: $hour:$minute'),
+                      const SizedBox(height: 8),
+                      Text('Current: $slotInfo'),
+                      const SizedBox(height: 8),
+                      Text('Date: ${now.day}/${now.month}/${now.year}'),
+                    ],
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      child: const Text('Close'),
+                    ),
+                  ],
+                ),
+              );
             },
             icon: Icon(Icons.help_outline, color: iconColor)),
-        // ── Board Info Widget ──────────────────────────────────────────────
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.access_time, size: 14, color: iconColor),
-              const SizedBox(width: 6),
-              Text(
-                _formatCurrentTime(),
-                style: TextStyle(
-                  color: iconColor,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
-              ),
-              const SizedBox(width: 10),
-              Container(
-                width: 1,
-                height: 14,
-                color: Colors.white.withValues(alpha: 0.3),
-              ),
-              const SizedBox(width: 10),
-              Icon(Icons.wifi, size: 14, color: iconColor),
-              const SizedBox(width: 4),
-              Text(
-                _getCurrentSlotInfo(),
-                style: TextStyle(
-                  color: iconColor,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-        ),
         // ──────────────────────────────────────────────────────────────────
         IconButton(
           onPressed: () => KioskService.setMode(KioskMode.suspended),
