@@ -252,7 +252,7 @@ class AutoUpdater {
       await _startUpdatePipeline(manifest, currentVersion, silent: silent);
     } catch (e) {
       Log.e('[AutoUpdater] Update pipeline failed unexpectedly: $e');
-      _lastCheckedManifestVersion = null;
+      _lastCheckedManifestFingerprint = null;
     }
   }
 
