@@ -15,8 +15,6 @@ class SessionManager {
   static Future<void> init() async {
     if (_isar != null) return;
 
-    await _migrateFromOldPath();
-
     // Pre-generate and persist AES-256 key in OS keychain for future Isar 3.2+
     // encryption support. Not yet passed to Isar.open() (3.1.0 limitation).
     // ignore: unused_local_variable
@@ -86,26 +84,6 @@ class SessionManager {
     } catch (e) {
       Log.w('⚠️ [SessionManager] Encryption key setup failed, proceeding without encryption: $e');
       return null;
-    }
-  }
-
-  static Future<void> _migrateFromOldPath() async {
-    try {
-      final oldDir = await getApplicationDocumentsDirectory();
-      final newDir = await getApplicationSupportDirectory();
-
-      final oldFile = File('${oldDir.path}/intelliattend_vault_v2.isar');
-      final newFile = File('${newDir.path}/intelliattend_vault_v2.isar');
-
-      if (await oldFile.exists() && !await newFile.exists()) {
-        await newFile.parent.create(recursive: true);
-        await oldFile.copy(newFile.path);
-        await oldFile.delete();
-        Log.i(
-            '📦 [SessionManager] Isar database migrated from Documents to AppSupport');
-      }
-    } catch (e) {
-      Log.w('⚠️ [SessionManager] Migration from old path skipped: $e');
     }
   }
 

@@ -343,15 +343,24 @@ void _traceStartup(String message) {
 bool _startupCompleted = false;
 
 /// Starts a one-shot timer that force-releases kiosk constraints if
-/// [_startupCompleted] is not set within 45 seconds of app launch.
+/// [_startupCompleted] is not set within 60 seconds of app launch.
 void _startStartupWatchdog() {
-  Future.delayed(const Duration(seconds: 45), () async {
+  Future.delayed(const Duration(seconds: 60), () async {
     if (!_startupCompleted) {
-      Log.w('🚨 [Startup] Watchdog fired — startup not complete after 45s. '
+      Log.w('🚨 [Startup] Watchdog fired — startup not complete after 60s. '
           'Releasing kiosk constraints.');
-      _traceStartup('watchdog: startup incomplete after 45s');
+      _traceStartup('watchdog: startup incomplete after 60s');
       await StartupService.markLaunchFailed('Startup watchdog timed out.');
       await KioskService.forceRelease();
+      // Show error screen with retry option
+      navigatorKey.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => const InitFailureScreen(
+            message: 'Startup timed out. The board will retry automatically.',
+          ),
+        ),
+        (_) => false,
+      );
     }
   });
 }
@@ -625,19 +634,29 @@ void _startPeriodicTimeSync() {
   // Force an immediate sync if the cached skew is >1 hour old or missing
   if (TimeSyncService.isSkewStale) {
     Log.i('[TimeSync] Cached skew stale — forcing initial sync...');
-    ApiService.syncTime().catchError((e) {
-      Log.w('[TimeSync] Initial sync failed (will retry in 30s): $e');
-      return 0;
-    });
+    _doTimeSync();
   }
 
   _timeSyncTimer = Timer.periodic(const Duration(minutes: 30), (_) async {
-    try {
-      await ApiService.syncTime();
-    } catch (e) {
-      Log.w('[TimeSync] Periodic sync failed: $e');
-    }
+    await _doTimeSync();
   });
+}
+
+Future<void> _doTimeSync() async {
+  try {
+    final result = await ApiService.syncTime();
+    // Feed the server timestamp back into TimeSyncService to update drift
+    if (result is int && result > 0) {
+      final now = DateTime.now();
+      TimeSyncService.synchronizeWithServerLegacy(
+        now.subtract(const Duration(seconds: 2)),
+        now,
+        result,
+      );
+    }
+  } catch (e) {
+    Log.w('[TimeSync] Periodic sync failed: $e');
+  }
 }
 
 // ─── Shared helpers ──────────────────────────────────────────────────────
@@ -697,7 +716,24 @@ Future<bool> _verifyIntegrity() async {
 // Flutter Firebase plugins. Timetable data is fetched via REST APIs.
 
 Future<void> _loadEnvironment() async {
-  await dotenv.load(fileName: '.env');
+  // Try loading from Flutter assets first (bundled in release builds).
+  bool loaded = false;
+  try {
+    await dotenv.load();
+    loaded = dotenv.isLoaded && dotenv.env.isNotEmpty;
+  } catch (_) {}
+
+  // Fall back to filesystem .env (development / local builds).
+  if (!loaded) {
+    try {
+      await dotenv.load(fileName: '.env');
+      loaded = dotenv.isLoaded && dotenv.env.isNotEmpty;
+    } catch (_) {}
+  }
+
+  if (!loaded) {
+    Log.w('[Startup] No .env file found — using --dart-define fallbacks.');
+  }
   AppConfig.validate();
   Log.i('[Startup] Environment loaded');
 }

@@ -86,12 +86,21 @@ FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}
 FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID || 'intelliattend-a2564' }}
 FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}
 FIREBASE_MESSAGING_SENDER_ID=${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
+SSL_PIN_FINGERPRINT=${{ secrets.SSL_PIN_FINGERPRINT }}
 ENABLE_DOCUMENTS=true
 "@ | Out-File -FilePath .env -Encoding UTF8
         Write-Host ".env created for production build"
 
       - name: Build Windows release
-        run: flutter build windows --release
+        run: >
+          flutter build windows --release
+          --dart-define=API_BASE_URL=${{ vars.API_BASE_URL || 'https://api-dev.balaseetharamanjaneyulu.com' }}
+          --dart-define=FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}
+          --dart-define=FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID || 'intelliattend-a2564' }}
+          --dart-define=FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}
+          --dart-define=FIREBASE_MESSAGING_SENDER_ID=${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
+          --dart-define=SSL_PIN_FINGERPRINT=${{ secrets.SSL_PIN_FINGERPRINT }}
+          --dart-define=ENABLE_DOCUMENTS=true
 
       - name: Verify build output
         shell: pwsh

@@ -23,6 +23,9 @@ from models.sql_models import (
     SessionAttendee,
     AttendeeStatus,
     AttendanceVault,
+    User,
+    UserRole,
+    AuthStatus,
 )
 from services.board_service import HeartbeatService
 from services.session_service import SessionService
@@ -331,6 +334,9 @@ async def board_heartbeat_v2(
     )
     active = session_result.scalar_one_or_none()
 
+    # Build dynamic config block with update manifest
+    config = _build_board_config(board_id)
+
     return {
         "status": "ok",
         "server_time": now.isoformat(),
@@ -338,7 +344,69 @@ async def board_heartbeat_v2(
             "session_id": active.session_id,
             "status": active.status.value,
         } if active else None,
+        "config": config,
     }
+
+
+def _build_board_config(board_id: str) -> dict:
+    """Build the dynamic config block returned in heartbeat responses.
+
+    Checks environment variables for update manifest overrides so that
+    a new version can be staged without a server restart.
+    """
+    config_version = int(os.environ.get("CONFIG_VERSION", "1"))
+
+    flags = {
+        "enable_video_background": os.environ.get("ENABLE_VIDEO_BACKGROUND", "false").lower() == "true",
+        "enable_documents": os.environ.get("ENABLE_DOCUMENTS", "true").lower() == "true",
+        "enable_notifications": True,
+        "enable_workspace": True,
+        "kiosk_mode": "fullscreen",
+        "qr_rotation_interval_ms": int(os.environ.get("QR_ROTATION_INTERVAL_MS", "5000")),
+        "session_window_seconds": int(os.environ.get("SESSION_WINDOW_SECONDS", "300")),
+        "idle_theme": "dark",
+    }
+
+    ui = {
+        "branding": {
+            "title": os.environ.get("BRANDING_TITLE", "IntelliAttend SmartBoard"),
+        },
+        "labels": {
+            "welcome_text": os.environ.get("WELCOME_TEXT", "Welcome to Smart Class"),
+            "footer_text": f"v{os.environ.get('APP_VERSION', '5.4.0')}",
+        },
+    }
+
+    # Check for staged update manifest
+    manifest_version = os.environ.get("UPDATE_MINIMUM_VERSION", "")
+    force_update = None
+    if manifest_version:
+        force_update = {
+            "minimum_version": manifest_version,
+            "download_url": os.environ.get("UPDATE_DOWNLOAD_URL", ""),
+            "sha256": os.environ.get("UPDATE_SHA256", ""),
+            "force": os.environ.get("UPDATE_FORCE", "true").lower() == "true",
+            "rollout_percentage": int(os.environ.get("UPDATE_ROLLOUT_PERCENTAGE", "100")),
+            "release_notes": os.environ.get("UPDATE_RELEASE_NOTES", ""),
+            "published_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    return {
+        "config_version": config_version,
+        "flags": flags,
+        "ui": ui,
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+        "force_update": force_update,
+    }
+
+
+@api_router.get("/config")
+async def get_board_config(
+    board_data: dict = Depends(get_current_board_pg),
+):
+    """Return full config for this board, including feature flags and update manifest."""
+    board_id = board_data.get("user_id", "")
+    return _build_board_config(board_id)
 
 @app.post("/api/v1/board/verify-otp")
 async def verify_otp_v2(
@@ -965,6 +1033,37 @@ async def get_stale_boards(
         "stale_count": len(stale),
         "boards": stale,
     }
+
+@admin_router.post("/board/{board_id}/deregister", dependencies=[Depends(AuthService.require_role(["admin"]))])
+async def admin_deregister_board(
+    board_id: str,
+    pg_session: AsyncSession = Depends(get_pg_session),
+):
+    """Deregister a board by clearing its registration tokens.
+
+    Sets auth_status to pending and clears Firebase UID so the
+    board must re-register before it can authenticate.
+    """
+    from sqlalchemy import update
+
+    result = await pg_session.execute(
+        update(User)
+        .where(User.smart_board_id == board_id)
+        .where(User.role == UserRole.BOARD)
+        .values(
+            auth_status=AuthStatus.PENDING,
+            firebase_uid=None,
+        )
+    )
+    await pg_session.commit()
+
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Board not found or already deregistered")
+
+    logger.info(f"🔓 [Admin] Board {board_id} deregistered by admin")
+    await AlertService.notify_stale_board(board_id, datetime.now(timezone.utc))
+    return {"status": "ok", "board_id": board_id, "deregistered": True}
+
 
 @admin_router.post("/board/{board_id}/power")
 async def admin_board_power(
