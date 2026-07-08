@@ -120,6 +120,10 @@ class AutoUpdater {
 
   static String? _boardId;
 
+  /// Timestamp when AutoUpdater was initialized. Used to skip checks
+  /// during the first 30s of startup (prevents overlay on boot).
+  static DateTime? _initializedAt;
+
   /// The parsed installed version, available after [init] is called.
   static Version get installedVersion => _installedVersion;
 
@@ -133,6 +137,7 @@ class AutoUpdater {
   /// Must be called once at startup before [checkForUpdate].
   static Future<void> init({String? boardId}) async {
     _boardId = boardId;
+    _initializedAt = DateTime.now();
     try {
       _packageInfo = await PackageInfo.fromPlatform();
     } catch (e) {
@@ -162,11 +167,14 @@ class AutoUpdater {
   /// If [silent] is true, failures are logged but no overlay is shown.
   static Future<bool> checkForUpdate(UpdateManifest manifest, {bool silent = false}) async {
     // Guard: AutoUpdater.init() must be called before checkForUpdate.
-    // If _packageInfo is null, the version check would return Version.zero
-    // (0.0.0), falsely indicating an update is needed — causing an infinite
-    // update loop on every startup heartbeat.
     if (_packageInfo == null) {
       Log.w('[AutoUpdater] checkForUpdate skipped — AutoUpdater not yet initialized');
+      return false;
+    }
+
+    // Guard: skip updates during first 30s of startup to prevent overlay on boot.
+    if (_initializedAt != null && DateTime.now().difference(_initializedAt!) < const Duration(seconds: 30)) {
+      Log.d('[AutoUpdater] Skipping update check — app still starting up');
       return false;
     }
 
