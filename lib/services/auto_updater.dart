@@ -143,6 +143,10 @@ class AutoUpdater {
 
   // ── Update check ──────────────────────────────────────────────────────────
 
+  /// Tracks the last manifest version checked to avoid re-processing the same
+  /// manifest when heartbeat keeps delivering an unchanged config.
+  static String? _lastCheckedManifestVersion;
+
   /// Check whether an update is available and, if so, start the update flow.
   ///
   /// This is typically called:
@@ -152,11 +156,27 @@ class AutoUpdater {
   /// Returns `true` if an update was started, `false` if no update is needed
   /// or the board is not in the rollout cohort.
   static Future<bool> checkForUpdate(UpdateManifest manifest) async {
+    // Guard: AutoUpdater.init() must be called before checkForUpdate.
+    // If _packageInfo is null, the version check would return Version.zero
+    // (0.0.0), falsely indicating an update is needed — causing an infinite
+    // update loop on every startup heartbeat.
+    if (_packageInfo == null) {
+      Log.w('[AutoUpdater] checkForUpdate skipped — AutoUpdater not yet initialized');
+      return false;
+    }
+
     final installed = _installedVersion;
     final required = manifest.parsedMinimum;
     final forceUpdate = manifest.force;
 
     Log.i('[AutoUpdater] checkForUpdate: installed=$installed, required=${manifest.minimumVersion}, force=$forceUpdate');
+
+    // Dedup: skip if we already processed this exact manifest version.
+    if (manifest.minimumVersion == _lastCheckedManifestVersion) {
+      Log.d('[AutoUpdater] Manifest v${manifest.minimumVersion} already checked — skipping');
+      return false;
+    }
+    _lastCheckedManifestVersion = manifest.minimumVersion;
 
     // Guard: don't start a second update while one is running.
     // BUT: if force is true OR progress is stuck (>5 min), allow override.
@@ -171,14 +191,10 @@ class AutoUpdater {
       }
     }
 
-    // Already up to date (unless force).
-    if (installed >= required && !forceUpdate) {
+    // Already up to date (build-number-aware comparison).
+    if (installed >= required) {
       Log.d('[AutoUpdater] Already at v$installed — no update needed');
       return false;
-    }
-
-    if (installed >= required && forceUpdate) {
-      Log.i('[AutoUpdater] Force update requested even though v$installed >= v${manifest.minimumVersion}');
     }
 
     // No download URL — can't update.
@@ -218,6 +234,23 @@ class AutoUpdater {
   // ── Internal: the actual update pipeline ──────────────────────────────────
 
   static Future<void> _startUpdate(
+      UpdateManifest manifest, Version currentVersion) async {
+    final targetVersion = manifest.minimumVersion;
+    final url = manifest.downloadUrl!;
+
+    // Wrap the entire pipeline so that any failure clears
+    // [_lastCheckedManifestVersion], allowing future heartbeat checks to retry.
+    try {
+      await _startUpdatePipeline(manifest, currentVersion);
+    } catch (e) {
+      Log.e('[AutoUpdater] Update pipeline failed unexpectedly: $e');
+      _lastCheckedManifestVersion = null;
+    }
+  }
+
+  /// The actual update pipeline (download → verify → install → exit).
+  /// Throws on any failure; the caller resets dedup state.
+  static Future<void> _startUpdatePipeline(
       UpdateManifest manifest, Version currentVersion) async {
     final targetVersion = manifest.minimumVersion;
     final url = manifest.downloadUrl!;
@@ -264,7 +297,7 @@ class AutoUpdater {
       if (await msiFile.exists()) {
         await msiFile.delete();
       }
-      return;
+      throw e; // Propagate to caller for dedup reset.
     }
 
     // ── 2. Verify SHA-256 ────────────────────────────────────────────────────
@@ -293,7 +326,7 @@ class AutoUpdater {
           force: manifest.force,
         );
         await msiFile.delete();
-        return;
+        throw e; // Propagate to caller for dedup reset.
       }
     } else {
       Log.w('[AutoUpdater] No SHA-256 in manifest — skipping verification');
@@ -318,7 +351,7 @@ class AutoUpdater {
         error: 'Installation failed: ${_userFriendlyError(e)}',
         force: manifest.force,
       );
-      return;
+      throw e; // Propagate to caller for dedup reset.
     }
 
     // ── 4. Done ──────────────────────────────────────────────────────────────
@@ -441,11 +474,31 @@ class AutoUpdater {
 
   // ── App exit after install ────────────────────────────────────────────────
 
-  /// Terminate the current process. The MSI installer sets up the registry
-  /// auto-start key, so the app will launch again automatically (either
-  /// immediately after install or on the next user login).
+  /// Terminate the current process after launching the updated binary.
+  ///
+  /// The MSI installs the new version in-place (same path), so we can
+  /// explicitly start the new executable before exiting — this guarantees
+  /// the app relaunches immediately regardless of the Windows auto-start
+  /// registry key (which only fires on user login).
+  ///
+  /// We pass `--post-update` so the new process skips the single-instance
+  /// lock guard (the old process hasn't released the lock yet). The lock
+  /// file PID will be stale within milliseconds when the old process exits.
   static void _exitApp() {
-    Log.i('[AutoUpdater] Exiting current process for update to take effect.');
+    Log.i('[AutoUpdater] Launching updated binary then exiting current process.');
+
+    if (Platform.isWindows) {
+      try {
+        final exePath = Platform.resolvedExecutable;
+        Log.i('[AutoUpdater] Starting: $exePath --post-update');
+        // Fire-and-forget the new process. The current process will exit
+        // immediately after, so the lock file becomes stale immediately.
+        Process.start(exePath, ['--post-update']);
+      } catch (e) {
+        Log.e('[AutoUpdater] Failed to launch updated binary: $e');
+      }
+    }
+
     // Small delay to let the progress notification reach the UI.
     Future.delayed(const Duration(milliseconds: 500), () {
       exit(0);

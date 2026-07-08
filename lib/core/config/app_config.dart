@@ -15,7 +15,7 @@ class AppConfig {
     final fromDotenv = dotenv.env[key];
     if (fromDotenv != null && fromDotenv.isNotEmpty) return fromDotenv;
     try {
-      return const String.fromEnvironment(key);
+      return String.fromEnvironment(key);
     } catch (_) {
       return fallback;
     }

@@ -177,7 +177,14 @@ void main(List<String> args) {
     // (e.g. startup registry entry + manual launch). We use an exclusive file
     // lock in the system temp directory — the OS releases it automatically when
     // the process exits, so no stale-lock problem on crash.
-    if (!kIsWeb && Platform.isWindows) {
+    //
+    // The --post-update flag is passed by AutoUpdater._exitApp() after a
+    // successful MSI install. The old process is still alive (it hasn't exited
+    // yet), so this new process would see a live PID in the lock file and
+    // exit(0). We skip the guard entirely in this case — the old process will
+    // release the lock within milliseconds.
+    final isPostUpdate = args.contains('--post-update');
+    if (!kIsWeb && Platform.isWindows && !isPostUpdate) {
       await _acquireSingleInstanceLock();
       _traceStartup('singleInstance: acquired');
     }
@@ -720,14 +727,14 @@ Future<void> _loadEnvironment() async {
   bool loaded = false;
   try {
     await dotenv.load();
-    loaded = dotenv.isLoaded && dotenv.env.isNotEmpty;
+      loaded = dotenv.env.isNotEmpty;
   } catch (_) {}
 
   // Fall back to filesystem .env (development / local builds).
   if (!loaded) {
     try {
       await dotenv.load(fileName: '.env');
-      loaded = dotenv.isLoaded && dotenv.env.isNotEmpty;
+    loaded = dotenv.env.isNotEmpty;
     } catch (_) {}
   }
 
