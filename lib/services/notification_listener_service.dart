@@ -160,6 +160,7 @@ class NotificationListenerService {
 
   /// Prevents stored notifications from triggering overlays during startup.
   bool _isStartingUp = true;
+  bool get isStartingUp => _isStartingUp;
   final List<BoardNotification> _notificationQueue = [];
 
   // ── Contract v1 dedup state ──────────────────────────────────────
@@ -256,12 +257,30 @@ class NotificationListenerService {
   Future<List<BoardNotification>> loadFromLocalVault() async {
     try {
       final stored = await SessionManager.getAllStoredNotifications();
+      // Filter out stale emergency/high-priority notifications from vault.
+      // These are time-sensitive alerts only meaningful while live via WebSocket.
+      // Loading them from vault causes false overlay activations on boot.
+      final staleIds = stored
+          .where((n) =>
+              n.priority == NotificationPriority.emergency ||
+              n.priority == NotificationPriority.high)
+          .map((n) => n.notificationId ?? n.id)
+          .toList();
+      for (final id in staleIds) {
+        _dismissedNotificationIds.add(id);
+        await SessionManager.deleteStoredNotification(id);
+      }
+      final eligible = stored
+          .where((n) =>
+              n.priority != NotificationPriority.emergency &&
+              n.priority != NotificationPriority.high)
+          .toList();
       // Merge: keep any in-memory items not yet in Isar
       final existingIds = _cachedNotifications.map((n) => n.id).toSet();
-      final newFromVault = stored.where((n) => !existingIds.contains(n.id)).toList();
+      final newFromVault = eligible.where((n) => !existingIds.contains(n.id)).toList();
       _cachedNotifications = [...newFromVault, ..._cachedNotifications];
       _notificationsController.add(_cachedNotifications);
-      Log.i('[NotificationListener] Loaded ${stored.length} notifications from local vault');
+      Log.i('[NotificationListener] Loaded ${eligible.length} notifications from local vault (${stored.length - eligible.length} stale high-priority discarded)');
       return stored;
     } catch (e) {
       Log.w('[NotificationListener] Local vault load failed: $e');
@@ -558,7 +577,6 @@ class NotificationListenerService {
     _cachedNotifications.insert(0, notification);
     _notificationsController.add(_cachedNotifications);
 
-    // During startup, only populate the list — don't trigger overlay pop-ups.
     if (_isStartingUp) {
       return;
     }

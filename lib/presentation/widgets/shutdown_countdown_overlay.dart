@@ -69,6 +69,12 @@ class _ShutdownCountdownOverlayState extends State<ShutdownCountdownOverlay>
           ? AppColors.error.withValues(alpha: 0.1)
           : AppColors.warningAmber.withValues(alpha: 0.1);
 
+  bool get _isRestart => _state.commandType == 'restart';
+
+  String get _statusLabel => _isRestart ? 'RESTART INITIATED' : 'SHUTDOWN INITIATED';
+  String get _titleLabel => _isRestart ? 'System Restart' : 'System Shutdown';
+  String get _cancelLabel => _isRestart ? 'Cancel Restart' : 'Cancel Shutdown';
+
   Widget _buildOverlay() {
     final fraction = _state.totalSeconds > 0
         ? _state.secondsRemaining / _state.totalSeconds
@@ -108,7 +114,7 @@ class _ShutdownCountdownOverlayState extends State<ShutdownCountdownOverlay>
                   children: [
                     // ── Shutdown status label ──
                     Text(
-                      'SHUTDOWN INITIATED',
+                      _statusLabel,
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w900,
@@ -120,7 +126,7 @@ class _ShutdownCountdownOverlayState extends State<ShutdownCountdownOverlay>
 
                     // ── Title ──
                     Text(
-                      'System Shutdown',
+                      _titleLabel,
                       style: Theme.of(context).textTheme.displaySmall?.copyWith(
                         color: Colors.white,
                         fontWeight: FontWeight.w800,
@@ -181,14 +187,8 @@ class _ShutdownCountdownOverlayState extends State<ShutdownCountdownOverlay>
                                 valueColor: AlwaysStoppedAnimation<Color>(_ringColor),
                               ),
                             ),
-                            // Icon inside circular container with pulse
-                            AnimatedBuilder(
-                              animation: _pulseAnim,
-                              builder: (_, child) => Transform.scale(
-                                scale: _pulseAnim.value,
-                                child: child,
-                              ),
-                              child: Container(
+                            // Icon inside circular container (static)
+                            Container(
                                 width: 100,
                                 height: 100,
                                 decoration: BoxDecoration(
@@ -211,7 +211,6 @@ class _ShutdownCountdownOverlayState extends State<ShutdownCountdownOverlay>
                                       : AppColors.warningAmber,
                                 ),
                               ),
-                            ),
                           ],
                         ),
                       ),
@@ -259,8 +258,8 @@ class _ShutdownCountdownOverlayState extends State<ShutdownCountdownOverlay>
       child: ElevatedButton.icon(
         onPressed: () => _powerCmd.cancelFromLocal(),
         icon: const Icon(Icons.close, size: 22),
-        label: const Text(
-          'Cancel Shutdown',
+        label: Text(
+          _cancelLabel,
           style: TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.bold,

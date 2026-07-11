@@ -42,13 +42,27 @@ class _PriorityOneOverlayState extends State<PriorityOneOverlay>
   bool get _isP2 => _active?.priority == NotificationPriority.normal;
 
   bool _wasActive = false;
+  String? _lastShownNotificationId;
+  bool _startupSnapshotCaptured = false;
+  final Set<String> _startupNotificationIds = {};
 
   @override
   void initState() {
     super.initState();
-    _notifications = _notifService.cachedNotifications;
+    // Never populate from vault cache at mount — only live WebSocket
+    // notifications should show overlays.
+    _notifications = [];
     _sub = _notifService.notificationsStream.listen((list) {
       if (mounted) {
+        if (_notifService.isStartingUp) return;
+        // Capture snapshot of ALL existing notifications on first
+        // post-startup stream event. This includes vault-loaded items
+        // that weren't present at mount time. Only notifications
+        // arriving AFTER this snapshot should trigger overlays.
+        if (!_startupSnapshotCaptured) {
+          _startupNotificationIds.addAll(list.map((n) => n.id));
+          _startupSnapshotCaptured = true;
+        }
         setState(() {
           _notifications = list;
           _onHighPriorityChanged();
@@ -63,22 +77,35 @@ class _PriorityOneOverlayState extends State<PriorityOneOverlay>
     _smoothCtrl.addListener(_onSmoothUpdate);
 
     _wasActive = _active != null;
-    if (_wasActive) {
-      _startCountdown();
-      _forceWindowToFront();
-    }
+    // Do NOT auto-activate overlays from persisted vault state on startup.
+    // Only live notifications (via WebSocket) should trigger overlays.
   }
 
   void _onHighPriorityChanged() {
-    final nowActive = _active != null;
-    if (nowActive && !_wasActive) {
+    if (_notifService.isStartingUp) return;
+    final nowActive = _active;
+
+    // If we're currently showing an overlay, check if our notification
+    // is still the active one. If not (dismissed or replaced), deactivate.
+    if (_wasActive) {
+      final currentNid = nowActive?.notificationId ?? nowActive?.id;
+      if (currentNid != _lastShownNotificationId) {
+        _wasActive = false;
+        _lastShownNotificationId = null;
+        _resetCountdown();
+        _releaseWindowFromFront();
+      }
+      return;
+    }
+
+    // Not currently active — check if we should activate.
+    if (nowActive != null) {
+      if (_startupNotificationIds.contains(nowActive.id)) return;
+      final nid = nowActive.notificationId ?? nowActive.id;
       _wasActive = true;
+      _lastShownNotificationId = nid;
       _startCountdown();
       _forceWindowToFront();
-    } else if (!nowActive && _wasActive) {
-      _wasActive = false;
-      _resetCountdown();
-      _releaseWindowFromFront();
     }
   }
 
@@ -185,7 +212,7 @@ class _PriorityOneOverlayState extends State<PriorityOneOverlay>
     return Stack(
       children: [
         widget.child,
-        if (_active != null) _buildOverlay(),
+        if (_active != null && _wasActive) _buildOverlay(),
       ],
     );
   }

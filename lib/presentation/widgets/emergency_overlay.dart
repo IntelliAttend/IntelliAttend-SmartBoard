@@ -39,6 +39,9 @@ class _EmergencyOverlayState extends State<EmergencyOverlay>
   late final AnimationController _routeDashCtrl;
 
   bool _wasActive = false;
+  String? _lastShownNotificationId;
+  bool _startupSnapshotCaptured = false;
+  final Set<String> _startupNotificationIds = {};
 
   static const Color _emergencyCrimson = Color(0xFFC72C31);
   static const Color _emergencyDark = Color(0xFF8B1E22);
@@ -56,9 +59,19 @@ class _EmergencyOverlayState extends State<EmergencyOverlay>
   @override
   void initState() {
     super.initState();
-    _notifications = _notifService.cachedNotifications;
+    // Never populate from vault cache at mount — only live WebSocket
+    // notifications should show overlays.  Vault data is kept in the
+    // service cache for the notification list, not for overlays.
+    _notifications = [];
     _sub = _notifService.notificationsStream.listen((list) {
       if (mounted) {
+        if (_notifService.isStartingUp) return;
+        // Capture snapshot on first post-startup event so vault items
+        // don't trigger the overlay.
+        if (!_startupSnapshotCaptured) {
+          _startupNotificationIds.addAll(list.map((n) => n.id));
+          _startupSnapshotCaptured = true;
+        }
         final wasActive = _emergency != null;
         setState(() => _notifications = list);
         _onEmergencyChanged(wasActive);
@@ -87,24 +100,37 @@ class _EmergencyOverlayState extends State<EmergencyOverlay>
     _routeDashCtrl.repeat();
 
     _wasActive = _emergency != null;
-    if (_wasActive) {
-      _startCountdown();
-      _forceWindowToFront();
-    }
+    // Do NOT auto-activate overlays from persisted vault state on startup.
+    // Only live notifications (via WebSocket) should trigger overlays.
   }
 
   void _onEmergencyChanged(bool wasActive) {
+    if (_notifService.isStartingUp) return;
     final nowActive = _emergency != null;
-    if (nowActive && !wasActive) {
+
+    // If we're currently showing an overlay, check if our notification
+    // is still the active one. If not (dismissed or replaced), deactivate.
+    if (_wasActive) {
+      final currentNid = _emergency?.notificationId ?? _emergency?.id;
+      if (currentNid != _lastShownNotificationId) {
+        _wasActive = false;
+        _lastShownNotificationId = null;
+        _resetCountdown();
+        _releaseWindowFromFront();
+        AlertAudioService().stopAlert();
+      }
+      return;
+    }
+
+    // Not currently active — check if we should activate.
+    if (nowActive) {
+      if (_startupNotificationIds.contains(_emergency!.id)) return;
+      final nid = _emergency!.notificationId ?? _emergency!.id;
       _wasActive = true;
+      _lastShownNotificationId = nid;
       _startCountdown();
       _forceWindowToFront();
       AlertAudioService().playAlert();
-    } else if (!nowActive && _wasActive) {
-      _wasActive = false;
-      _resetCountdown();
-      _releaseWindowFromFront();
-      AlertAudioService().stopAlert();
     }
   }
 
@@ -197,7 +223,7 @@ class _EmergencyOverlayState extends State<EmergencyOverlay>
     return Stack(
       children: [
         widget.child,
-        if (_emergency != null) _buildOverlay(),
+        if (_emergency != null && _wasActive) _buildOverlay(),
         if (_showAllClearToast) _buildAllClearToast(),
       ],
     );

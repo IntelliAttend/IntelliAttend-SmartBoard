@@ -15,6 +15,7 @@ class PowerCommandState {
   final int totalSeconds;
   final String? reason;
   final String? commandId;
+  final String commandType;
 
   const PowerCommandState({
     this.status = PowerCommandStatus.none,
@@ -22,6 +23,7 @@ class PowerCommandState {
     this.totalSeconds = 0,
     this.reason,
     this.commandId,
+    this.commandType = 'shutdown',
   });
 }
 
@@ -55,6 +57,7 @@ class PowerCommandService {
     totalSeconds: _totalDelaySeconds,
     reason: _reason,
     commandId: _currentCommandId,
+    commandType: _currentCommand,
   );
 
   void setWebsocketService(WebsocketService? ws) {
@@ -64,28 +67,9 @@ class PowerCommandService {
   Future<void> init() async {
     final pending = await _loadPendingCommand();
     if (pending != null) {
-      final age = DateTime.now().difference(pending['issued_at'] as DateTime).inSeconds;
-      if (age > _maxStaleAgeSeconds) {
-        Log.w('[PowerCmd] Stale pending command ignored (age=${age}s)');
-        await _clearPendingCommand();
-        return;
-      }
-      final elapsed = pending['elapsed'] as int? ?? 0;
-      final delay = pending['delay_seconds'] as int? ?? 60;
-      final remaining = delay - elapsed;
-      if (remaining <= 0) {
-        Log.w('[PowerCmd] Pending command already expired — executing shutdown');
-        _executeShutdown();
-        return;
-      }
-      Log.i('[PowerCmd] Resuming countdown from $remaining seconds (recovered)');
-      _currentCommand = pending['command'] as String? ?? 'shutdown';
-      _currentCommandId = pending['command_id'] as String?;
-      _reason = pending['reason'] as String?;
-      _secondsRemaining = remaining;
-      _totalDelaySeconds = delay;
-      _ensureFullscreen();
-      _startCountdown();
+      Log.w('[PowerCmd] Clearing stale pending command from previous session');
+      await _clearPendingCommand();
+      return;
     }
   }
 
@@ -219,6 +203,7 @@ class PowerCommandService {
       totalSeconds: _totalDelaySeconds,
       reason: _reason,
       commandId: _currentCommandId,
+      commandType: _currentCommand,
     ));
   }
 
