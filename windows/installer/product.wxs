@@ -130,7 +130,7 @@
             Root="HKCU"
             Key="Software\Microsoft\Windows\CurrentVersion\Run"
             Name="$(var.AppName)"
-            Value="[APPLICATIONFOLDER]$(var.AppName).exe"
+            Value="&quot;[APPLICATIONFOLDER]$(var.AppName).exe&quot; --intelliattend-autostart"
             Type="string" />
       </Component>
     </DirectoryRef>

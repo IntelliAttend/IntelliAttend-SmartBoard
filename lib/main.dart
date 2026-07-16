@@ -180,12 +180,13 @@ void main(List<String> args) {
     //
     // The --post-update flag is passed by AutoUpdater._exitApp() after a
     // successful MSI install. The old process is still alive (it hasn't exited
-    // yet), so this new process would see a live PID in the lock file and
-    // exit(0). We skip the guard entirely in this case — the old process will
-    // release the lock within milliseconds.
+    // yet), so we retry the lock acquisition with a short timeout — the old
+    // process exits within 3 seconds.  We no longer skip the guard entirely
+    // because that left a window where a third manual launch could start a
+    // second concurrent instance.
     final isPostUpdate = args.contains('--post-update');
-    if (!kIsWeb && Platform.isWindows && !isPostUpdate) {
-      await _acquireSingleInstanceLock();
+    if (!kIsWeb && Platform.isWindows) {
+      await _acquireSingleInstanceLock(retryForPostUpdate: isPostUpdate);
       _traceStartup('singleInstance: acquired');
     }
 
@@ -211,11 +212,11 @@ void main(List<String> args) {
 
     // NOTE: Kiosk fullscreen is intentionally deferred until AFTER Tier-1
     // plugin initialization succeeds. If a native C++ exception is thrown
-    // during plugin init, exiting
-    // the process while the window is already in fullscreen popup mode leaves
-    // DWM in a broken state — taskbar hidden, no visible window, system frozen.
-    // By keeping the window in normal mode during init, any crash during
-    // plugin loading allows DWM to recover naturally.
+    // during plugin init, exiting the process while the window is already
+    // in fullscreen popup mode leaves DWM in a broken state — taskbar
+    // hidden, no visible window, system frozen.  By keeping the window in
+    // normal mode during init, any crash during plugin loading allows DWM
+    // to recover naturally.
     final status = await _initTier1();
     _traceStartup(
         'tier1: isar=${status.isar} secure=${status.secureStorage} dotenv=${status.dotenv} fatal=${status.isFatal} errors=${status.errors}');
@@ -232,7 +233,8 @@ void main(List<String> args) {
     // while the window is already in fullscreen popup mode leaves DWM in
     // a broken state — taskbar hidden, no visible window, system frozen.
     // By keeping the window in normal mode during early boot, any crash
-    // allows DWM to recover naturally.
+    // allows DWM to recover naturally.  Fullscreen is applied immediately
+    // after integrity verification passes (see below).
 
     // Register Windows auto-start immediately (before Tier 2) so the
     // registry key is written even if a later step crashes the process.
@@ -282,14 +284,13 @@ void main(List<String> args) {
       return;
     }
 
-    // Integrity and Tiers 1-2 passed — enter soft kiosk mode.
-    // Full hardening (skipTaskbar, preventClose) is deferred to
-    // IdleScreen's post-frame callback AFTER the first frame renders
-    // and background protocols start successfully.  If the app crashes
-    // or freezes during BootScreen / IdleScreen init, the taskbar icon
-    // is still visible and Alt+F4 / right-click → Close works.
+    // Integrity and Tiers 1-2 passed — enable kiosk hardening and go
+    // fullscreen immediately so the taskbar is never visible.  The
+    // skipTaskbar:true in _initWindow() already hides the taskbar button;
+    // this call covers the entire screen and blocks close/sys commands.
     KioskService.enable();
-    _traceStartup('kiosk: enabled, fullscreen deferred');
+    await KioskService.setMode(KioskMode.fullscreen);
+    _traceStartup('kiosk: enabled, fullscreen applied');
 
     // ─── Create repositories & mount app ────────────────────────────────────
     final apiClient = ApiClient();
@@ -383,7 +384,7 @@ void _startStartupWatchdog() {
 // retry the acquire. This replaces the mtime-based stale-lock check, which
 // was a heuristic; PID liveness is authoritative.
 
-Future<void> _acquireSingleInstanceLock() async {
+Future<void> _acquireSingleInstanceLock({bool retryForPostUpdate = false}) async {
   final lockFile =
       File('${Directory.systemTemp.path}/intelliattend_smartboard.lock');
 
@@ -433,6 +434,28 @@ Future<void> _acquireSingleInstanceLock() async {
 
   final alive = heldPid != null && await _isProcessAlive(heldPid);
   if (alive) {
+    if (retryForPostUpdate) {
+      // The old process is exiting after an auto-update (up to 3s).
+      // Poll the lock until it's released or we time out.
+      Log.i('[SingleInstance] Lock held by PID $heldPid (post-update). '
+          'Waiting for old process to exit...');
+      const maxWait = Duration(seconds: 8);
+      const pollInterval = Duration(milliseconds: 500);
+      final deadline = DateTime.now().add(maxWait);
+      while (DateTime.now().isBefore(deadline)) {
+        await Future.delayed(pollInterval);
+        raf = await tryAcquire();
+        if (raf != null) {
+          _retainedLock = raf;
+          Log.i('[SingleInstance] Lock acquired after post-update wait.');
+          return;
+        }
+      }
+      // Timed out — old process is stuck or something else holds the lock.
+      Log.e('[SingleInstance] Timed out waiting for old process to exit. '
+          'Exiting to prevent dual instances.');
+      exit(0);
+    }
     Log.w(
         '[SingleInstance] Another instance is running (PID $heldPid). Exiting.');
     exit(0);
@@ -449,8 +472,14 @@ Future<void> _acquireSingleInstanceLock() async {
   if (raf != null) {
     _retainedLock = raf;
   } else {
-    Log.w(
-        '[SingleInstance] Could not acquire lock after stale cleanup. Continuing without guard.');
+    // Another instance grabbed the lock between our delete and retry,
+    // or the OS hasn't fully released the old lock yet.  Exiting is the
+    // only safe option — continuing without the guard allows two live
+    // instances, which corrupts shared state (Isar DB, SecureStorage,
+    // Firestore listeners, kiosk mode).
+    Log.e(
+        '[SingleInstance] Could not acquire lock after stale cleanup. Another instance may have started. Exiting.');
+    exit(0);
   }
 }
 
@@ -495,6 +524,10 @@ Future<void> _initWindow() async {
       // leave MediaQuery with stale dimensions on certain Windows
       // DPI / multi-monitor configurations — causing stretched / clipped
       // layouts.
+      //
+      // skipTaskbar: true hides the taskbar button from the start so the
+      // taskbar is never visible during boot.  Fullscreen is applied
+      // later after Tier-1 + Tier-2 + integrity checks pass.
       final windowReady = Completer<void>();
       windowManager.waitUntilReadyToShow(
         WindowOptions(
@@ -502,7 +535,7 @@ Future<void> _initWindow() async {
           minimumSize: const Size(800, 600),
           center: true,
           titleBarStyle: TitleBarStyle.hidden,
-          skipTaskbar: false,
+          skipTaskbar: true,
           backgroundColor: AppColors.bgLight,
         ),
         () async {
