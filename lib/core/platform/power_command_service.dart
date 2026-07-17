@@ -28,7 +28,6 @@ class PowerCommandState {
 }
 
 class PowerCommandService {
-  static const int _maxStaleAgeSeconds = 300;
   static const String _pendingKey = 'pending_power_command';
 
   static final PowerCommandService _instance = PowerCommandService._internal();
