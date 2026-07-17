@@ -120,6 +120,7 @@ jobs:
           Write-Host "Updated pubspec.yaml to version $version"
 
       - name: Build Windows release
+        shell: bash
         run: >
           flutter build windows --release
           --dart-define=API_BASE_URL=${{ vars.API_BASE_URL }}
