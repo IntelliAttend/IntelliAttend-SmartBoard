@@ -90,16 +90,19 @@ jobs:
         run: flutter pub get
 
       - name: Create .env file
+        shell: pwsh
         run: |
-          echo "API_BASE_URL=${{ vars.API_BASE_URL }}" > .env
-          echo "LOCAL_API_URL=http://127.0.0.1:8000/v1/board/telemetry" >> .env
-          echo "FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}" >> .env
-          echo "FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID }}" >> .env
-          echo "FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}" >> .env
-          echo "FIREBASE_MESSAGING_SENDER_ID=${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}" >> .env
-          echo "SSL_PIN_FINGERPRINT=${{ secrets.SSL_PIN_FINGERPRINT }}" >> .env
-          echo "ENABLE_DOCUMENTS=true" >> .env
-          echo "DEBUG=false" >> .env
+          @(
+            "API_BASE_URL=${{ vars.API_BASE_URL }}"
+            "LOCAL_API_URL=http://127.0.0.1:8000/v1/board/telemetry"
+            "FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}"
+            "FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID }}"
+            "FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}"
+            "FIREBASE_MESSAGING_SENDER_ID=${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}"
+            "SSL_PIN_FINGERPRINT=${{ secrets.SSL_PIN_FINGERPRINT }}"
+            "ENABLE_DOCUMENTS=true"
+            "DEBUG=false"
+          ) | Set-Content -Path .env -Encoding UTF8 -NoNewline
 
       - name: Run analyzer
         run: dart analyze lib/

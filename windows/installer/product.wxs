@@ -60,19 +60,9 @@
               <Directory Id="FlutterAssetsAssetsDir" Name="assets">
                 <Component Id="C_FlutterAssets_Assets" Guid="E4F5A6B7-C8D9-4012-EFAB-456789ABCDEF">
                   <File Id="FA_bg" Name="background.png" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\background.png" />
-                  <File Id="FA_chart" Name="chart_sample.png" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\chart_sample.png" />
                   <File Id="FA_lottie" Name="Errorfailure.lottie" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\Errorfailure.lottie" />
                   <File Id="FA_logo" Name="logo.png" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\logo.png" />
                   <File Id="FA_logo_sq" Name="logo_square.png" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\logo_square.png" />
-                  <File Id="FA_orimi" Name="orimi_sample.pdf" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\orimi_sample.pdf" />
-                  <File Id="FA_sample_pdf" Name="sample.pdf" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample.pdf" />
-                  <File Id="FA_sample_txt" Name="sample.txt" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample.txt" />
-                  <File Id="FA_sample_docx" Name="sample_document.docx" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample_document.docx" />
-                  <File Id="FA_sample_md" Name="sample_notes.md" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample_notes.md" />
-                  <File Id="FA_sample_ppt" Name="sample_presentation.ppt" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample_presentation.ppt" />
-                  <File Id="FA_sample_pptx" Name="sample_presentation.pptx" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample_presentation.pptx" />
-                  <File Id="FA_sample_html" Name="sample_report.html" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample_report.html" />
-                  <File Id="FA_sample_xlsx" Name="sample_spreadsheet.xlsx" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\sample_spreadsheet.xlsx" />
                   <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\FlutterAssets\Assets" Name="installed" Type="integer" Value="1" KeyPath="yes" />
                 </Component>
               </Directory>
