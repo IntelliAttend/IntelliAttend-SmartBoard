@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [school-main, school-dev]
   pull_request:
-    branches: [main]
+    branches: [school-main]
 
 jobs:
   test:
@@ -22,7 +22,7 @@ jobs:
         run: flutter pub get
 
       - name: Create .env file for tests
-        run: echo "API_BASE_URL=https://api-dev.balaseetharamanjaneyulu.com" > .env
+        run: echo "API_BASE_URL=https://api.intelliattend.app" > .env
 
       - name: Dependency audit (Flutter)
         run: dart pub audit || echo "::warning::dart pub audit found issues"

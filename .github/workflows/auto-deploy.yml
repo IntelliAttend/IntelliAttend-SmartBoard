@@ -63,7 +63,7 @@ jobs:
 
       - name: Create .env file
         run: |
-          echo "API_BASE_URL=https://api-dev.balaseetharamanjaneyulu.com" > .env
+          echo "API_BASE_URL=https://api.intelliattend.app" > .env
           echo "FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}" >> .env
           echo "FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID }}" >> .env
           echo "FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}" >> .env
