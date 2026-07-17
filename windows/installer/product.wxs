@@ -50,7 +50,6 @@
 
             <Directory Id="FlutterAssetsDir" Name="flutter_assets">
               <Component Id="C_FlutterAssets" Guid="D3E4F5A6-B7C8-4901-DEF2-3456789ABCDE">
-                <File Id="FA_dotenv" Name=".env" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\.env" />
                 <File Id="FA_AssetManifest" Name="AssetManifest.bin" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\AssetManifest.bin" />
                 <File Id="FA_FontManifest" Name="FontManifest.json" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\FontManifest.json" />
                 <File Id="FA_NativeAssets" Name="NativeAssetsManifest.json" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\NativeAssetsManifest.json" />

@@ -641,9 +641,6 @@ Future<void> startBackgroundProtocols() async {
     await globalDeviceRepository.hydrateFromServer();
 
     await NotificationListenerService().start(boardId);
-    if (AppConfig.enableDocuments) {
-      await NotificationListenerService().injectSampleData();
-    }
 
     PowerCommandService().init();
     PreFlightService().startCountdownWatcher();
@@ -756,14 +753,16 @@ Future<bool> _verifyIntegrity() async {
 // Flutter Firebase plugins. Timetable data is fetched via REST APIs.
 
 Future<void> _loadEnvironment() async {
-  // Try loading from Flutter assets first (bundled in release builds).
+  // Try loading from Flutter assets first (legacy path — .env is no longer
+  // bundled in assets since Phase 1, but this handles any edge case).
   bool loaded = false;
   try {
     await dotenv.load();
       loaded = dotenv.env.isNotEmpty;
   } catch (_) {}
 
-  // Fall back to filesystem .env (development / local builds).
+  // Fall back to filesystem .env (development / local builds only).
+  // Production builds use --dart-define flags instead.
   if (!loaded) {
     try {
       await dotenv.load(fileName: '.env');

@@ -23,9 +23,11 @@ class AppConfig {
 
   static String get baseUrl {
     final url = _env('API_BASE_URL');
-    return url.isNotEmpty
-        ? url
-        : 'https://api-dev.balaseetharamanjaneyulu.com';
+    if (url.isEmpty) {
+      throw StateError(
+          'API_BASE_URL is not set. Pass it via --dart-define or .env file.');
+    }
+    return url;
   }
 
   static String get sslFingerprint => _env('SSL_PIN_FINGERPRINT');
@@ -69,7 +71,7 @@ class AppConfig {
   static void validate() {
     if (_env('API_BASE_URL').isEmpty) {
       Log.w(
-          '[AppConfig] API_BASE_URL not set. Falling back to default.');
+          '[AppConfig] API_BASE_URL not set — app will throw at startup.');
     }
     if (firebaseApiKey.isEmpty) {
       Log.w('[AppConfig] FIREBASE_API_KEY not set — auth will fail.');

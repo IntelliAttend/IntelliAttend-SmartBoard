@@ -6,8 +6,16 @@
 # that boards can poll to discover the update.
 #
 # Required repository secrets:
-#   - WIX_SIGN_CERT_BASE64   Base64-encoded Authenticode signing certificate
-#   - WIX_SIGN_PASSWORD       Certificate password
+#   - FIREBASE_API_KEY              Firebase Web API key
+#   - FIREBASE_APP_ID               Firebase App ID
+#   - FIREBASE_MESSAGING_SENDER_ID  Firebase Cloud Messaging sender ID
+#   - SSL_PIN_FINGERPRINT            SHA-256 hash of production TLS certificate
+#   - WIX_SIGN_CERT_BASE64          Base64-encoded Authenticode signing certificate (optional)
+#   - WIX_SIGN_PASSWORD             Certificate password (optional)
+#
+# Required repository variables:
+#   - API_BASE_URL         Production API base URL (e.g. https://api.intelliattend.com)
+#   - FIREBASE_PROJECT_ID  Firebase project ID
 #
 # ── Workflow ────────────────────────────────────────────────────────────────
 #   1. Checkout + install Flutter
@@ -38,6 +46,10 @@ on:
 permissions:
   contents: write   # required by softprops/action-gh-release to create releases
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   APP_NAME: IntelliAttendSmartBoard
   BUILD_CONFIG: release
@@ -46,8 +58,27 @@ jobs:
   build:
     name: Build Windows MSI
     runs-on: windows-latest
+    env:
+      HAS_SIGN_CERT: ${{ secrets.WIX_SIGN_CERT_BASE64 != '' }}
 
     steps:
+      - name: Validate required variables
+        shell: pwsh
+        run: |
+          $apiUrl = "${{ vars.API_BASE_URL }}"
+          if ([string]::IsNullOrWhiteSpace($apiUrl)) {
+            Write-Host "ERROR: API_BASE_URL variable is not set. Cannot build release without a production API URL." -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "API_BASE_URL: $apiUrl"
+
+          $projectId = "${{ vars.FIREBASE_PROJECT_ID }}"
+          if ([string]::IsNullOrWhiteSpace($projectId)) {
+            Write-Host "ERROR: FIREBASE_PROJECT_ID variable is not set." -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "FIREBASE_PROJECT_ID: $projectId"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -78,25 +109,27 @@ jobs:
 
       - name: Create .env file from secrets
         run: |
-          echo "API_BASE_URL=${{ vars.API_BASE_URL || 'https://api-dev.balaseetharamanjaneyulu.com' }}" > .env
+          echo "API_BASE_URL=${{ vars.API_BASE_URL }}" > .env
           echo "LOCAL_API_URL=http://127.0.0.1:8000/v1/board/telemetry" >> .env
           echo "FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}" >> .env
-          echo "FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID || 'intelliattend-a2564' }}" >> .env
+          echo "FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID }}" >> .env
           echo "FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}" >> .env
           echo "FIREBASE_MESSAGING_SENDER_ID=${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}" >> .env
           echo "SSL_PIN_FINGERPRINT=${{ secrets.SSL_PIN_FINGERPRINT }}" >> .env
           echo "ENABLE_DOCUMENTS=true" >> .env
+          echo "DEBUG=false" >> .env
 
       - name: Build Windows release
         run: >
           flutter build windows --release
-          --dart-define=API_BASE_URL=${{ vars.API_BASE_URL || 'https://api-dev.balaseetharamanjaneyulu.com' }}
+          --dart-define=API_BASE_URL=${{ vars.API_BASE_URL }}
           --dart-define=FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}
-          --dart-define=FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID || 'intelliattend-a2564' }}
+          --dart-define=FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID }}
           --dart-define=FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}
           --dart-define=FIREBASE_MESSAGING_SENDER_ID=${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
           --dart-define=SSL_PIN_FINGERPRINT=${{ secrets.SSL_PIN_FINGERPRINT }}
           --dart-define=ENABLE_DOCUMENTS=true
+          --dart-define=DEBUG=false
 
       - name: Verify build output
         shell: pwsh
@@ -159,6 +192,32 @@ jobs:
 
           $msiSize = (Get-Item $msi).Length / 1MB
           Write-Host "MSI created: $msi ($([math]::Round($msiSize, 2)) MB)"
+
+      - name: Sign MSI (Authenticode)
+        if: ${{ env.HAS_SIGN_CERT == 'true' }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          $buildDir = "build\windows\x64\runner\Release"
+          $msi = "$buildDir\${{ env.APP_NAME }}-$version.msi"
+
+          # Decode the signing certificate
+          $certBytes = [Convert]::FromBase64String("${{ secrets.WIX_SIGN_CERT_BASE64 }}")
+          $certPath = Join-Path $env:RUNNER_TEMP "signing_cert.pfx"
+          [IO.File]::WriteAllBytes($certPath, $certBytes)
+
+          try {
+            # Sign the MSI with the certificate
+            $password = ConvertTo-SecureString "${{ secrets.WIX_SIGN_PASSWORD }}" -AsPlainText -Force
+            $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certPath, $password)
+            
+            Set-AuthenticodeSignature -FilePath $msi -Certificate $cert -TimestampServer "http://timestamp.digicert.com"
+            Write-Host "MSI signed successfully" -Foreground Green
+          } finally {
+            # Clean up certificate file
+            if (Test-Path $certPath) { Remove-Item $certPath -Force }
+          }
 
       - name: Compute SHA-256
         shell: pwsh

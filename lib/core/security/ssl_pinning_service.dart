@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'package:crypto/crypto.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
+import '../config/app_config.dart';
 import '../utils/logger.dart';
 
 class SslPinningService {
@@ -17,18 +17,18 @@ class SslPinningService {
   }
 
   static http.Client _create() {
-    final fingerprint = dotenv.env['SSL_PIN_FINGERPRINT'];
+    final fingerprint = AppConfig.sslFingerprint;
 
-    if (fingerprint == null || fingerprint.isEmpty) {
+    if (fingerprint.isEmpty) {
       Log.w(
-          '⚠️ [SSL] SSL_PIN_FINGERPRINT not set. Set it in .env for production.');
+          '[SSL] SSL_PIN_FINGERPRINT not set. Certificate pinning disabled.');
     }
 
     final inner = HttpClient()
       ..connectionTimeout = _connectionTimeout
       ..idleTimeout = _idleTimeout;
 
-    if (fingerprint != null && fingerprint.isNotEmpty) {
+    if (fingerprint.isNotEmpty) {
       inner.badCertificateCallback =
           (X509Certificate cert, String host, int port) {
         try {

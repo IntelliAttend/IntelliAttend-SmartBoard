@@ -7,6 +7,20 @@
 #   3. Publishes latest.json manifest for auto-update
 #
 # SmartBoard devices poll latest.json and auto-download new versions.
+#
+# Required repository secrets:
+#   - FIREBASE_API_KEY              Firebase Web API key
+#   - FIREBASE_APP_ID               Firebase App ID
+#   - FIREBASE_MESSAGING_SENDER_ID  Firebase Cloud Messaging sender ID
+#   - SSL_PIN_FINGERPRINT            SHA-256 hash of production TLS certificate
+#   - WIX_SIGN_CERT_BASE64          Base64-encoded Authenticode signing certificate (optional)
+#   - WIX_SIGN_PASSWORD             Certificate password (optional)
+#   - DEPLOY_KEY                    Server deploy key for CI upload
+#
+# Required repository variables:
+#   - API_BASE_URL         Production API base URL (e.g. https://api.intelliattend.com)
+#   - FIREBASE_PROJECT_ID  Firebase project ID
+#   - SERVER_URL           Backend server URL for CI upload (optional)
 # ─────────────────────────────────────────────────────────────────────────────
 
 name: Auto-Deploy
@@ -18,12 +32,26 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: auto-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-and-deploy:
     name: Build & Deploy
     runs-on: windows-latest
 
     steps:
+      - name: Validate required variables
+        shell: pwsh
+        run: |
+          $apiUrl = "${{ vars.API_BASE_URL }}"
+          if ([string]::IsNullOrWhiteSpace($apiUrl)) {
+            Write-Host "ERROR: API_BASE_URL variable is not set. Cannot deploy without a production API URL." -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "API_BASE_URL: $apiUrl"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -43,8 +71,8 @@ jobs:
             $version = "$major.$minor.$patch.$build"
             $flutterVersion = "$major.$minor.$patch+$build"
           } else {
-            $version = "5.4.0.1"
-            $flutterVersion = "5.4.0+1"
+            Write-Host "ERROR: Could not parse version from pubspec.yaml" -ForegroundColor Red
+            exit 1
           }
           $tag = "v$version"
           Write-Host "Version: $version (Flutter: $flutterVersion)"
@@ -63,16 +91,21 @@ jobs:
 
       - name: Create .env file
         run: |
-          echo "API_BASE_URL=https://api-dev.balaseetharamanjaneyulu.com" > .env
+          echo "API_BASE_URL=${{ vars.API_BASE_URL }}" > .env
+          echo "LOCAL_API_URL=http://127.0.0.1:8000/v1/board/telemetry" >> .env
           echo "FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}" >> .env
           echo "FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID }}" >> .env
           echo "FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}" >> .env
           echo "FIREBASE_MESSAGING_SENDER_ID=${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}" >> .env
           echo "SSL_PIN_FINGERPRINT=${{ secrets.SSL_PIN_FINGERPRINT }}" >> .env
           echo "ENABLE_DOCUMENTS=true" >> .env
+          echo "DEBUG=false" >> .env
 
       - name: Run analyzer
-        run: dart analyze lib/ || true
+        run: dart analyze lib/
+
+      - name: Run tests
+        run: flutter test
 
       - name: Update version in pubspec
         shell: pwsh
@@ -84,7 +117,16 @@ jobs:
           Write-Host "Updated pubspec.yaml to version $version"
 
       - name: Build Windows release
-        run: flutter build windows --release
+        run: >
+          flutter build windows --release
+          --dart-define=API_BASE_URL=${{ vars.API_BASE_URL }}
+          --dart-define=FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}
+          --dart-define=FIREBASE_PROJECT_ID=${{ vars.FIREBASE_PROJECT_ID }}
+          --dart-define=FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}
+          --dart-define=FIREBASE_MESSAGING_SENDER_ID=${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
+          --dart-define=SSL_PIN_FINGERPRINT=${{ secrets.SSL_PIN_FINGERPRINT }}
+          --dart-define=ENABLE_DOCUMENTS=true
+          --dart-define=DEBUG=false
 
       - name: Detect exe name
         id: detect
@@ -122,6 +164,24 @@ jobs:
           Pop-Location
 
           $msi = "$buildDir\$appName-$version.msi"
+          
+          # Sign the MSI if certificate is available
+          if ("${{ secrets.WIX_SIGN_CERT_BASE64 }}" -ne "") {
+            $certBytes = [Convert]::FromBase64String("${{ secrets.WIX_SIGN_CERT_BASE64 }}")
+            $certPath = Join-Path $env:RUNNER_TEMP "signing_cert.pfx"
+            [IO.File]::WriteAllBytes($certPath, $certBytes)
+            try {
+              $password = ConvertTo-SecureString "${{ secrets.WIX_SIGN_PASSWORD }}" -AsPlainText -Force
+              $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certPath, $password)
+              Set-AuthenticodeSignature -FilePath $msi -Certificate $cert -TimestampServer "http://timestamp.digicert.com"
+              Write-Host "MSI signed successfully" -Foreground Green
+            } finally {
+              if (Test-Path $certPath) { Remove-Item $certPath -Force }
+            }
+          } else {
+            Write-Host "Warning: No signing certificate — MSI is unsigned" -Foreground Yellow
+          }
+
           $sha256 = (Get-FileHash -Path $msi -Algorithm SHA256).Hash.ToLower()
           Write-Host "MSI: $msi"
           Write-Host "SHA-256: $sha256"
@@ -185,6 +245,5 @@ jobs:
             -F "release_notes=Auto-deploy from commit ${{ github.sha }}" \
             -F "force=true" \
             -F "rollout_percentage=100" \
-            -F "file=@${MSI_PATH}" \
-            && echo "Successfully uploaded v${FLUTTER_VERSION}" \
-            || echo "Warning: Upload failed"
+            -F "file=@${MSI_PATH}"
+          echo "Successfully uploaded v${FLUTTER_VERSION}"

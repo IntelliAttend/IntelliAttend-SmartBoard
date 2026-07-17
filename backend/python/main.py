@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import uvicorn
 from fastapi import FastAPI, Depends, HTTPException, status, Request, Response, APIRouter, Header, WebSocket, WebSocketDisconnect
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from middleware.rate_limit_middleware import RateLimitMiddleware
@@ -26,6 +27,9 @@ from models.sql_models import (
     User,
     UserRole,
     AuthStatus,
+    BoardVersion,
+    UpdateEvent,
+    ReleaseManifest,
 )
 from services.board_service import HeartbeatService
 from services.session_service import SessionService
@@ -41,6 +45,10 @@ from models.board_auth_schema import (
     DeviceRegisterInitiateRequest,
     DeviceRegisterVerifyRequest,
     DeviceRegisterCompleteRequest,
+    UpdateStatusReport,
+    CiUploadRequest,
+    AdminUpdateRequest,
+    AdminRollbackRequest,
 )
 
 # Initialize Firebase Admin SDK (required for token verification + custom tokens)
@@ -79,6 +87,45 @@ logging.basicConfig(
 logger = logging.getLogger("IntelliAttend")
 
 app = FastAPI(title="IntelliAttend SmartBoard Engine")
+
+
+# ─── Health Check (no auth required) ────────────────────────────────────────
+@app.get("/health")
+async def health_check():
+    """Lightweight health probe for load balancers and uptime monitors.
+
+    Checks PostgreSQL and Redis connectivity. Returns 200 if at least
+    the database is reachable; 503 otherwise.
+    """
+    from sqlalchemy import text
+    import redis.asyncio as aioredis
+
+    checks = {"postgres": "unknown", "redis": "unknown"}
+
+    # Check PostgreSQL
+    try:
+        async with async_session_factory() as session:
+            await session.execute(text("SELECT 1"))
+        checks["postgres"] = "ok"
+    except Exception as e:
+        checks["postgres"] = f"error: {e}"
+
+    # Check Redis
+    try:
+        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+        r = aioredis.from_url(redis_url, socket_connect_timeout=3)
+        await r.ping()
+        await r.aclose()
+        checks["redis"] = "ok"
+    except Exception as e:
+        checks["redis"] = f"error: {e}"
+
+    healthy = checks["postgres"] == "ok"
+    return {
+        "status": "healthy" if healthy else "degraded",
+        "checks": checks,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 # --- Background Task: Stale Board Monitor ---
 
@@ -151,6 +198,20 @@ async def startup_event():
 
 # v6.1: Bandwidth Saving - Enable Gzip Compression
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# CORS: restrict to known origins in production.
+# The kiosk communicates via HTTPS directly, not a browser, but this
+# protects any future web-based admin dashboards.
+ALLOWED_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",")
+ALLOWED_ORIGINS = [o.strip() for o in ALLOWED_ORIGINS if o.strip()]
+if ALLOWED_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=ALLOWED_ORIGINS,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Deploy-Key", "X-Request-ID"],
+        max_age=600,
+    )
 
 # O10: Server-side rate limiting (60 requests/min per IP+device)
 app.add_middleware(RateLimitMiddleware, max_requests=60, window_seconds=60)
@@ -325,6 +386,22 @@ async def board_heartbeat_v2(
     )
     pg_session.add(hb)
 
+    # Upsert board_versions with current version and heartbeat time
+    bv_result = await pg_session.execute(
+        select(BoardVersion).where(BoardVersion.board_id == board_id)
+    )
+    bv = bv_result.scalar_one_or_none()
+    if bv is None:
+        bv = BoardVersion(
+            board_id=board_id,
+            current_version=request.appVersion,
+            last_heartbeat_at=now,
+        )
+        pg_session.add(bv)
+    else:
+        bv.current_version = request.appVersion
+        bv.last_heartbeat_at = now
+
     # Check for active session
     session_result = await pg_session.execute(
         select(ActiveSession)
@@ -335,7 +412,7 @@ async def board_heartbeat_v2(
     active = session_result.scalar_one_or_none()
 
     # Build dynamic config block with update manifest
-    config = _build_board_config(board_id)
+    config = await _build_board_config(board_id, pg_session)
 
     return {
         "status": "ok",
@@ -348,11 +425,11 @@ async def board_heartbeat_v2(
     }
 
 
-def _build_board_config(board_id: str) -> dict:
+async def _build_board_config(board_id: str, pg_session: AsyncSession) -> dict:
     """Build the dynamic config block returned in heartbeat responses.
 
-    Checks environment variables for update manifest overrides so that
-    a new version can be staged without a server restart.
+    Checks the release_manifests table first for CI-uploaded manifests,
+    then falls back to environment variables for backward compatibility.
     """
     config_version = int(os.environ.get("CONFIG_VERSION", "1"))
 
@@ -377,19 +454,42 @@ def _build_board_config(board_id: str) -> dict:
         },
     }
 
-    # Check for staged update manifest
-    manifest_version = os.environ.get("UPDATE_MINIMUM_VERSION", "")
+    # Check for active release manifest in database (uploaded by CI/CD)
     force_update = None
-    if manifest_version:
-        force_update = {
-            "minimum_version": manifest_version,
-            "download_url": os.environ.get("UPDATE_DOWNLOAD_URL", ""),
-            "sha256": os.environ.get("UPDATE_SHA256", ""),
-            "force": os.environ.get("UPDATE_FORCE", "true").lower() == "true",
-            "rollout_percentage": int(os.environ.get("UPDATE_ROLLOUT_PERCENTAGE", "100")),
-            "release_notes": os.environ.get("UPDATE_RELEASE_NOTES", ""),
-            "published_at": datetime.now(timezone.utc).isoformat(),
-        }
+    try:
+        rm_result = await pg_session.execute(
+            select(ReleaseManifest)
+            .where(ReleaseManifest.is_active == True)
+            .order_by(ReleaseManifest.created_at.desc())
+            .limit(1)
+        )
+        rm = rm_result.scalar_one_or_none()
+        if rm:
+            force_update = {
+                "minimum_version": rm.version,
+                "download_url": rm.download_url,
+                "sha256": rm.sha256 or "",
+                "force": rm.force,
+                "rollout_percentage": rm.rollout_percentage,
+                "release_notes": rm.release_notes or "",
+                "published_at": rm.created_at.isoformat() if rm.created_at else "",
+            }
+    except Exception as e:
+        logger.warning(f"⚠️ [Config] Failed to query release_manifests: {e}")
+
+    # Fall back to environment variables if no DB manifest
+    if force_update is None:
+        manifest_version = os.environ.get("UPDATE_MINIMUM_VERSION", "")
+        if manifest_version:
+            force_update = {
+                "minimum_version": manifest_version,
+                "download_url": os.environ.get("UPDATE_DOWNLOAD_URL", ""),
+                "sha256": os.environ.get("UPDATE_SHA256", ""),
+                "force": os.environ.get("UPDATE_FORCE", "true").lower() == "true",
+                "rollout_percentage": int(os.environ.get("UPDATE_ROLLOUT_PERCENTAGE", "100")),
+                "release_notes": os.environ.get("UPDATE_RELEASE_NOTES", ""),
+                "published_at": datetime.now(timezone.utc).isoformat(),
+            }
 
     return {
         "config_version": config_version,
@@ -403,10 +503,11 @@ def _build_board_config(board_id: str) -> dict:
 @api_router.get("/config")
 async def get_board_config(
     board_data: dict = Depends(get_current_board_pg),
+    pg_session: AsyncSession = Depends(get_pg_session),
 ):
     """Return full config for this board, including feature flags and update manifest."""
     board_id = board_data.get("user_id", "")
-    return _build_board_config(board_id)
+    return await _build_board_config(board_id, pg_session)
 
 @app.post("/api/v1/board/verify-otp")
 async def verify_otp_v2(
@@ -829,6 +930,66 @@ async def receive_telemetry(
     pg_session.add(hb)
     return {"status": "success"}
 
+
+@api_router.post("/update-status")
+async def report_update_status(
+    report: UpdateStatusReport,
+    board_data: dict = Depends(get_current_board_pg),
+    pg_session: AsyncSession = Depends(get_pg_session),
+):
+    """Board reports the outcome of a binary auto-update.
+
+    Updates board_versions table and appends an audit event to update_events.
+    """
+    board_id = board_data.get("user_id", "")
+    now = datetime.now(timezone.utc)
+
+    # Upsert board_versions
+    bv_result = await pg_session.execute(
+        select(BoardVersion).where(BoardVersion.board_id == board_id)
+    )
+    bv = bv_result.scalar_one_or_none()
+    if bv is None:
+        bv = BoardVersion(
+            board_id=board_id,
+            current_version=report.current_version,
+            update_status=report.status,
+            last_update_at=now,
+            rollback_count=report.rollback_count,
+        )
+        pg_session.add(bv)
+    else:
+        bv.current_version = report.current_version
+        bv.update_status = report.status
+        bv.last_update_at = now
+        bv.rollback_count = report.rollback_count
+        if report.status == "completed":
+            bv.target_version = None
+            bv.download_progress = 1.0
+        elif report.status in ("failed", "rolled_back"):
+            bv.last_error = report.status
+
+    # Append audit event
+    event = UpdateEvent(
+        board_id=board_id,
+        event_type="status_report",
+        current_version=report.current_version,
+        previous_version=report.previous_version,
+        status=report.status,
+        stable_startups=report.stable_startups,
+        rollback_count=report.rollback_count,
+        created_at=now,
+    )
+    pg_session.add(event)
+
+    logger.info(
+        f"📊 [Update] Board {board_id} reported: {report.status} "
+        f"v{report.previous_version} → v{report.current_version}"
+    )
+
+    return {"status": "ok"}
+
+
 @api_router.get("/sync-context")
 async def sync_context(board_data: dict = Depends(get_current_board_pg)):
     return {"status": "success", "data": board_data}
@@ -1002,6 +1163,66 @@ async def board_hydrate(
 app.include_router(auth_router)
 app.include_router(api_router)
 
+
+# ─── CI/CD Upload Endpoint ──────────────────────────────────────────────────
+# Called by GitHub Actions after building a new MSI. Authenticates via
+# X-Deploy-Key header matching the DEPLOY_KEY environment variable.
+
+DEPLOY_KEY = os.environ.get("DEPLOY_KEY", "")
+
+
+@app.post("/api/v1/board/ci-upload")
+async def ci_upload(
+    version: str = "",
+    release_notes: str = "",
+    force: str = "true",
+    rollout_percentage: str = "100",
+    file: Optional[str] = None,
+    x_deploy_key: str = Header(default=""),
+):
+    """Accept a release manifest from CI/CD and store it in the database.
+
+    The actual MSI file is hosted on GitHub Releases; this endpoint only
+    records the manifest metadata so boards receive it via heartbeat.
+    """
+    if not DEPLOY_KEY:
+        raise HTTPException(status_code=503, detail="CI upload not configured (DEPLOY_KEY not set)")
+    if x_deploy_key != DEPLOY_KEY:
+        raise HTTPException(status_code=401, detail="Invalid deploy key")
+
+    if not version:
+        raise HTTPException(status_code=400, detail="version is required")
+
+    # Build the download URL from the version
+    repo = os.environ.get("GITHUB_REPOSITORY", "unknown/unknown")
+    download_url = f"https://github.com/{repo}/releases/download/v{version}/IntelliAttendSmartBoard-{version}.msi"
+
+    async with async_session_factory() as session:
+        # Deactivate any previous active manifests
+        prev = await session.execute(
+            select(ReleaseManifest).where(ReleaseManifest.is_active == True)
+        )
+        for old_rm in prev.scalars().all():
+            old_rm.is_active = False
+
+        # Create new manifest
+        rm = ReleaseManifest(
+            version=version,
+            download_url=download_url,
+            sha256="",  # SHA-256 computed by CI and included in GitHub Release
+            force=force.lower() == "true",
+            rollout_percentage=int(rollout_percentage),
+            release_notes=release_notes,
+            is_active=True,
+            uploaded_by="ci",
+        )
+        session.add(rm)
+        await session.commit()
+
+    logger.info(f"🚀 [CI] Release manifest uploaded: v{version} (force={force}, rollout={rollout_percentage}%)")
+    return {"status": "ok", "version": version}
+
+
 # ─── Admin / IT Dashboard Routes (O1/O2) ──────────────────────────────────────
 
 admin_router = APIRouter(prefix="/api/v1/admin")
@@ -1165,6 +1386,276 @@ async def admin_board_notification(
             "board_id": board_id,
             "board_online": False,
         }
+
+
+@admin_router.post("/board/{board_id}/update")
+async def admin_push_update(
+    board_id: str,
+    request: AdminUpdateRequest,
+    admin_data: dict = Depends(AuthService.require_role(["admin"])),
+    pg_session: AsyncSession = Depends(get_pg_session),
+):
+    """Push an update command to a specific board via WebSocket.
+
+    Updates the board_versions table with the target version and sends
+    an update_available message over the board's WebSocket connection.
+    """
+    import uuid
+
+    # Update board_versions with target
+    bv_result = await pg_session.execute(
+        select(BoardVersion).where(BoardVersion.board_id == board_id)
+    )
+    bv = bv_result.scalar_one_or_none()
+    if bv is None:
+        bv = BoardVersion(
+            board_id=board_id,
+            target_version=request.target_version,
+            update_status="downloading",
+        )
+        pg_session.add(bv)
+    else:
+        bv.target_version = request.target_version
+        bv.update_status = "downloading"
+
+    # Log audit event
+    event = UpdateEvent(
+        board_id=board_id,
+        event_type="admin_push",
+        target_version=request.target_version,
+        status="pushed",
+    )
+    pg_session.add(event)
+
+    # Send update_available via WebSocket
+    cmd_id = str(uuid.uuid4())
+    payload = {
+        "type": "update_available",
+        "command_id": cmd_id,
+        "manifest": {
+            "minimum_version": request.target_version,
+            "download_url": request.download_url,
+            "sha256": request.sha256,
+            "force": request.force,
+            "rollout_percentage": request.rollout_percentage,
+            "release_notes": request.release_notes,
+        },
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    sent = await board_manager.send_command(board_id, payload)
+    if sent:
+        logger.info(f"🔄 [Admin] Update command sent to {board_id}: v{request.target_version}")
+        return {"status": "sent", "command_id": cmd_id, "board_id": board_id}
+    else:
+        board_manager.queue_command(board_id, payload)
+        logger.info(f"🔄 [Admin] Update command queued for offline board {board_id}: v{request.target_version}")
+        return {"status": "queued", "command_id": cmd_id, "board_id": board_id}
+
+
+@admin_router.post("/board/{board_id}/rollback")
+async def admin_rollback_board(
+    board_id: str,
+    request: AdminRollbackRequest,
+    admin_data: dict = Depends(AuthService.require_role(["admin"])),
+    pg_session: AsyncSession = Depends(get_pg_session),
+):
+    """Trigger a rollback on a specific board.
+
+    Sends a system_command to restart the board, which will cause
+    UpdateHealthMonitor to detect the crash loop and roll back.
+    Alternatively, pushes an update manifest with the rollback target version.
+    """
+    import uuid
+
+    # Determine rollback target
+    bv_result = await pg_session.execute(
+        select(BoardVersion).where(BoardVersion.board_id == board_id)
+    )
+    bv = bv_result.scalar_one_or_none()
+
+    if bv and not request.target_version:
+        # Use the previous version from the last rollback event
+        ev_result = await pg_session.execute(
+            select(UpdateEvent)
+            .where(UpdateEvent.board_id == board_id)
+            .where(UpdateEvent.event_type == "status_report")
+            .order_by(UpdateEvent.created_at.desc())
+            .limit(1)
+        )
+        last_event = ev_result.scalar_one_or_none()
+        if last_event and last_event.previous_version:
+            request.target_version = last_event.previous_version
+
+    if not request.target_version:
+        raise HTTPException(status_code=400, detail="Cannot determine rollback target version")
+
+    # Update board_versions
+    if bv:
+        bv.target_version = request.target_version
+        bv.update_status = "rolling_back"
+
+    # Log audit event
+    event = UpdateEvent(
+        board_id=board_id,
+        event_type="admin_rollback",
+        target_version=request.target_version,
+        status="triggered",
+        error_message=request.reason,
+    )
+    pg_session.add(event)
+
+    # Send update with the rollback target version
+    cmd_id = str(uuid.uuid4())
+    payload = {
+        "type": "update_available",
+        "command_id": cmd_id,
+        "manifest": {
+            "minimum_version": request.target_version,
+            "download_url": "",
+            "sha256": "",
+            "force": True,
+            "rollout_percentage": 100,
+            "release_notes": f"Admin rollback: {request.reason}",
+        },
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    sent = await board_manager.send_command(board_id, payload)
+    status_text = "sent" if sent else "queued"
+    if not sent:
+        board_manager.queue_command(board_id, payload)
+
+    logger.warning(f"⏪ [Admin] Rollback triggered for {board_id} → v{request.target_version}")
+    return {"status": status_text, "command_id": cmd_id, "board_id": board_id, "target_version": request.target_version}
+
+
+@admin_router.post("/rollback-all")
+async def admin_rollback_all(
+    request: AdminRollbackRequest,
+    admin_data: dict = Depends(AuthService.require_role(["admin"])),
+    pg_session: AsyncSession = Depends(get_pg_session),
+):
+    """Rollback all boards to a specific version.
+
+    Updates the active release manifest and sends update commands to all
+    connected boards via WebSocket.
+    """
+    import uuid
+
+    if not request.target_version:
+        raise HTTPException(status_code=400, detail="target_version is required")
+
+    # Deactivate previous manifest and create rollback manifest
+    prev = await pg_session.execute(
+        select(ReleaseManifest).where(ReleaseManifest.is_active == True)
+    )
+    for old_rm in prev.scalars().all():
+        old_rm.is_active = False
+
+    rm = ReleaseManifest(
+        version=request.target_version,
+        download_url="",
+        sha256="",
+        force=True,
+        rollout_percentage=100,
+        release_notes=f"Fleet rollback: {request.reason}",
+        is_active=True,
+        uploaded_by="admin",
+    )
+    pg_session.add(rm)
+
+    # Log event for all boards
+    boards_result = await pg_session.execute(
+        select(BoardVersion)
+    )
+    boards = boards_result.scalars().all()
+    for bv in boards:
+        bv.target_version = request.target_version
+        bv.update_status = "rolling_back"
+        event = UpdateEvent(
+            board_id=bv.board_id,
+            event_type="admin_rollback",
+            target_version=request.target_version,
+            status="triggered",
+            error_message=f"Fleet rollback: {request.reason}",
+        )
+        pg_session.add(event)
+
+    logger.warning(
+        f"⏪ [Admin] Fleet rollback triggered → v{request.target_version} "
+        f"({len(boards)} boards)"
+    )
+
+    return {
+        "status": "ok",
+        "target_version": request.target_version,
+        "boards_affected": len(boards),
+    }
+
+
+@admin_router.get("/fleet")
+async def get_fleet_status(
+    admin_data: dict = Depends(AuthService.require_role(["admin"])),
+    pg_session: AsyncSession = Depends(get_pg_session),
+):
+    """Return fleet-wide version and update status for all boards.
+
+    This is the operations dashboard data source.
+    """
+    # Get all board versions
+    bv_result = await pg_session.execute(
+        select(BoardVersion)
+        .order_by(BoardVersion.board_id)
+    )
+    versions = bv_result.scalars().all()
+
+    # Get active release manifest
+    rm_result = await pg_session.execute(
+        select(ReleaseManifest)
+        .where(ReleaseManifest.is_active == True)
+        .order_by(ReleaseManifest.created_at.desc())
+        .limit(1)
+    )
+    active_release = rm_result.scalar_one_or_none()
+
+    # Aggregate stats
+    version_counts = {}
+    status_counts = {"idle": 0, "downloading": 0, "installing": 0, "completed": 0, "failed": 0, "rolling_back": 0}
+    for bv in versions:
+        v = bv.current_version or "unknown"
+        version_counts[v] = version_counts.get(v, 0) + 1
+        s = bv.update_status or "idle"
+        status_counts[s] = status_counts.get(s, 0) + 1
+
+    boards = []
+    for bv in versions:
+        boards.append({
+            "board_id": bv.board_id,
+            "current_version": bv.current_version,
+            "target_version": bv.target_version,
+            "update_status": bv.update_status,
+            "download_progress": bv.download_progress,
+            "last_heartbeat_at": bv.last_heartbeat_at.isoformat() if bv.last_heartbeat_at else None,
+            "last_update_at": bv.last_update_at.isoformat() if bv.last_update_at else None,
+            "last_error": bv.last_error,
+            "rollback_count": bv.rollback_count,
+        })
+
+    return {
+        "status": "ok",
+        "total_boards": len(versions),
+        "version_distribution": version_counts,
+        "status_distribution": status_counts,
+        "active_release": {
+            "version": active_release.version,
+            "force": active_release.force,
+            "rollout_percentage": active_release.rollout_percentage,
+            "created_at": active_release.created_at.isoformat() if active_release.created_at else None,
+        } if active_release else None,
+        "boards": boards,
+    }
+
 
 app.include_router(admin_router)
 
