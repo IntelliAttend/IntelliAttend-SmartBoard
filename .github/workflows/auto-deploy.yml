@@ -92,7 +92,7 @@ jobs:
       - name: Create .env file
         shell: pwsh
         run: |
-          @(
+          $lines = @(
             "API_BASE_URL=${{ vars.API_BASE_URL }}"
             "LOCAL_API_URL=http://127.0.0.1:8000/v1/board/telemetry"
             "FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}"
@@ -102,7 +102,8 @@ jobs:
             "SSL_PIN_FINGERPRINT=${{ secrets.SSL_PIN_FINGERPRINT }}"
             "ENABLE_DOCUMENTS=true"
             "DEBUG=false"
-          ) | Set-Content -Path .env -Encoding UTF8 -NoNewline
+          )
+          [System.IO.File]::WriteAllText(".env", ($lines -join "`n"))
 
       - name: Run analyzer
         run: dart analyze lib/
@@ -116,7 +117,7 @@ jobs:
           $version = "${{ steps.version.outputs.flutter_version }}"
           $pubspec = Get-Content pubspec.yaml -Raw
           $pubspec = $pubspec -replace 'version: .*', "version: $version"
-          $pubspec | Out-File -FilePath pubspec.yaml -Encoding UTF8
+          [System.IO.File]::WriteAllText("pubspec.yaml", $pubspec)
           Write-Host "Updated pubspec.yaml to version $version"
 
       - name: Build Windows release
