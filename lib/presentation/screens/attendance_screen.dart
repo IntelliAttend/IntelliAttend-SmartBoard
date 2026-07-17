@@ -98,39 +98,30 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     _presentCount = widget.initialPresentCount;
 
     _startEndSessionCooldown();
-    _loadClassRoster();
+    unawaited(_loadClassRoster());
     _restoreLocalSnapshot();
 
     _connectWebSocket();
   }
 
-  void _loadClassRoster() {
-    const names = [
-      'Aarav Sharma', 'Vivaan Singh', 'Aditya Patel', 'Vihaan Kumar',
-      'Arjun Reddy', 'Sai Gupta', 'Ananya Iyer', 'Diya Nair',
-      'Ishaan Verma', 'Kavya Joshi', 'Reyansh Malhotra', 'Aadhya Kapoor',
-      'Shaurya Mehta', 'Rudra Desai', 'Rohan Bhat', 'Myra Choudhury',
-      'Tanvi Agarwal', 'Pari Saxena', 'Ayush Yadav', 'Aryan Thakur',
-      'Ishita Raj', 'Anika Das', 'Riya Bose', 'Ritika Sen',
-      'Neha Swaminathan', 'Pranav Krishnan', 'Karan Menon', 'Nikhil Pillai',
-      'Sneha Rao', 'Siddharth Shetty', 'Rahul Jain', 'Naina Shah',
-      'Veer Bajwa', 'Jhanvi Rawat', 'Kabir Dutta', 'Aanya Biswas',
-      'Dhruv Gokhale', 'Prisha Purohit', 'Lavanya Rana', 'Aarush Khanna',
-      'Sara Wagh', 'Yash Chauhan',
-    ];
-    _students = List.generate(widget.capacity, (index) {
-      final code = RollNumberUtils.generateSeatCode(index);
-      final name = index < names.length ? names[index] : 'Student ${index + 1}';
-      final email = '${name.toLowerCase().replaceAll(' ', '.')}@college.edu';
-      return StudentInfo(
-        rollNumber: code,
-        name: name,
-        email: email,
-        sectionId: widget.sectionId ?? 'A',
-        classId: 'CS${100 + (index % 4) * 100}',
-      );
-    });
-    _isRosterLoaded = true;
+  Future<void> _loadClassRoster() async {
+    final sectionId = widget.sectionId;
+    if (sectionId == null || sectionId.isEmpty) {
+      _isRosterLoaded = true;
+      return;
+    }
+    try {
+      final students = await StudentService().getStudentsBySection(sectionId);
+      _students = students;
+    } catch (e) {
+      Log.w('[Attendance] Failed to load roster for section $sectionId: $e');
+    }
+    if (mounted) {
+      setState(() {
+        _totalStudents = _students.length;
+        _isRosterLoaded = true;
+      });
+    }
   }
 
   Future<void> _restoreLocalSnapshot() async {
@@ -540,7 +531,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                               child: const Text('EMERGENCY EXIT',
                                   style: TextStyle(
                                       fontWeight: FontWeight.bold,
-                                      letterSpacing: 1)),
+                                      letterSpacing: 1,
+                                      fontSize: 13)),
                             ),
                           ),
                         ],
@@ -899,8 +891,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     final presentLocal = _presentSeatIndices.length;
 
     return Container(
-      height: 72,
-      padding: const EdgeInsets.symmetric(horizontal: 32),
+      height: 80,
+      padding: const EdgeInsets.symmetric(horizontal: 40),
       decoration: BoxDecoration(
         color: isDark ? AppColors.bgDark : AppColors.bgLight,
         border: Border(
@@ -909,21 +901,16 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       ),
       child: Row(
         children: [
-          Text(
-            'IntelliAttend',
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w900,
-              color: AppColors.primaryTeal,
-              letterSpacing: -1.5,
-            ),
-          ),
-          const SizedBox(width: 32),
           Container(
-              width: 1,
-              height: 24,
-              color: isDark ? Colors.white10 : Colors.black12),
-          const SizedBox(width: 24),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.primaryTeal.withValues(alpha: isDark ? 0.12 : 0.08),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.school_rounded,
+                color: AppColors.primaryTeal, size: 24),
+          ),
+          const SizedBox(width: 20),
           Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -931,16 +918,17 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               Text(
                 widget.courseName.toUpperCase(),
                 style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
                   color: isDark ? Colors.white : AppColors.textPrimaryLight,
+                  letterSpacing: 0.3,
                 ),
               ),
-              const SizedBox(height: 2),
+              const SizedBox(height: 4),
               Row(
                 children: [
                   Icon(Icons.person_outline,
-                      size: 14,
+                      size: 13,
                       color: isDark ? Colors.white38 : Colors.black38),
                   const SizedBox(width: 4),
                   Text(widget.facultyName,
@@ -949,7 +937,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                           color: isDark ? Colors.white38 : Colors.black38)),
                   const SizedBox(width: 16),
                   Icon(Icons.meeting_room_outlined,
-                      size: 14,
+                      size: 13,
                       color: isDark ? Colors.white38 : Colors.black38),
                   const SizedBox(width: 4),
                   Text(widget.roomName,
@@ -997,10 +985,11 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.error,
                 foregroundColor: Colors.white,
-                minimumSize: const Size(120, 44),
+                minimumSize: const Size(120, 48),
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
+                    borderRadius: BorderRadius.circular(12)),
+                elevation: 0,
               ),
               child: const Text(
                 'End Session',
@@ -1011,8 +1000,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
           CircleAvatar(
             radius: 18,
             backgroundColor: isDark
-                ? Colors.white10
-                : Colors.black.withValues(alpha: 0.05),
+                ? Colors.white.withValues(alpha: 0.08)
+                : Colors.black.withValues(alpha: 0.04),
             child: Icon(Icons.person,
                 size: 20,
                 color: isDark ? Colors.white54 : Colors.black54),
@@ -1088,17 +1077,17 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                         },
                         child: Container(
                           decoration: BoxDecoration(
-                            color: const Color(0xFFF1F5F9),
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(color: const Color(0xFFE2E8F0)),
+                            color: isDark ? Colors.white.withValues(alpha: 0.05) : const Color(0xFFF1F5F9),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: isDark ? Colors.white10 : const Color(0xFFE2E8F0)),
                           ),
                           child: Center(
                             child: Text(
                               'R${row + 1}',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 10,
                                 fontWeight: FontWeight.w700,
-                                color: Color(0xFF94A3B8),
+                                color: isDark ? Colors.white38 : const Color(0xFF94A3B8),
                               ),
                             ),
                           ),
@@ -1143,17 +1132,17 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     Color textColor;
 
     if (isPresent) {
-      bgColor = const Color(0xFF059669);
-      borderColor = const Color(0xFF34D399);
+      bgColor = AppColors.successLime;
+      borderColor = AppColors.successLime.withValues(alpha: 0.6);
       textColor = Colors.white;
     } else if (isAbsent) {
-      bgColor = const Color(0xFFDC2626);
-      borderColor = const Color(0xFFFCA5A5);
+      bgColor = AppColors.error;
+      borderColor = AppColors.error.withValues(alpha: 0.6);
       textColor = Colors.white;
     } else {
-      bgColor = const Color(0xFFF8FAFC);
-      borderColor = const Color(0xFFCBD5E1);
-      textColor = const Color(0xFF1E293B);
+      bgColor = isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC);
+      borderColor = isDark ? Colors.white10 : const Color(0xFFCBD5E1);
+      textColor = isDark ? Colors.white : const Color(0xFF1E293B);
     }
 
     return GestureDetector(
@@ -1164,7 +1153,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         height: size,
         decoration: BoxDecoration(
           color: bgColor,
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(color: borderColor, width: isPresent || isAbsent ? 2.0 : 1.0),
         ),
         child: Center(
@@ -1237,14 +1226,14 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   Widget _buildReviewPane(List<int> indices, bool isPresent, bool isDark) {
     final accent = isPresent ? AppColors.successLime : AppColors.error;
     final bg = isPresent
-        ? const Color(0xFFF0FDF4)
-        : const Color(0xFFFEF2F2);
+        ? (isDark ? AppColors.successLime.withValues(alpha: 0.06) : const Color(0xFFF0FDF4))
+        : (isDark ? AppColors.error.withValues(alpha: 0.06) : const Color(0xFFFEF2F2));
 
     if (indices.isEmpty) {
       return Container(
         decoration: BoxDecoration(
           color: bg,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(20),
           border: Border.all(color: accent.withValues(alpha: 0.15)),
         ),
         child: Center(
@@ -1261,7 +1250,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     return Container(
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: accent.withValues(alpha: 0.2)),
       ),
       child: Column(
@@ -1323,8 +1312,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                         padding: const EdgeInsets.symmetric(
                             horizontal: 10, vertical: 6),
                         decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
+                          color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                          borderRadius: BorderRadius.circular(10),
                           border: Border.all(
                               color: accent.withValues(alpha: 0.25)),
                         ),
@@ -1335,7 +1324,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                               width: 28, height: 28,
                               decoration: BoxDecoration(
                                 color: accent.withValues(alpha: 0.15),
-                                borderRadius: BorderRadius.circular(6),
+                                borderRadius: BorderRadius.circular(8),
                               ),
                               child: Center(
                                 child: Text(
@@ -1354,7 +1343,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
-                                color: const Color(0xFF1E293B),
+                                color: isDark ? Colors.white : const Color(0xFF1E293B),
                               ),
                             ),
                           ],
@@ -1416,10 +1405,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                 foregroundColor: Colors.white,
                 disabledBackgroundColor: Colors.grey.shade300,
                 disabledForegroundColor: Colors.grey.shade500,
-                minimumSize: const Size(180, 44),
+                minimumSize: const Size(180, 48),
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
+                    borderRadius: BorderRadius.circular(12)),
               ),
             ),
           if (_stage == _Stage.splitReview)
@@ -1437,10 +1426,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primaryTeal,
                 foregroundColor: Colors.white,
-                minimumSize: const Size(200, 44),
+                minimumSize: const Size(200, 48),
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
+                    borderRadius: BorderRadius.circular(12)),
               ),
             ),
           if (_stage == _Stage.grid) const SizedBox(width: 24),

@@ -101,15 +101,13 @@ class DeviceRepository implements IDeviceRepository {
     try {
       final result = await HydrationService.hydrate(isar: _isar);
 
-      if (result.changed) {
-        final allEntries = await getWeeklyTimeline();
-        TimetableCache().updateAll(allEntries);
-        Log.i('[DeviceRepository] Timetable cache refreshed after hydration');
-      }
-
       if (result.error != null) {
         Log.w('[DeviceRepository] Hydration had errors: ${result.error}');
       }
+
+      final allEntries = await getWeeklyTimeline();
+      TimetableCache().updateAll(allEntries);
+      Log.i('[DeviceRepository] Timetable cache refreshed after hydration (changed=${result.changed})');
     } catch (e) {
       Log.e('[DeviceRepository] Hydration failed: $e');
     }
@@ -118,11 +116,15 @@ class DeviceRepository implements IDeviceRepository {
   @override
   Future<List<TimetableEntry>> getTodayTimeline() async {
     final dayOfWeek = TimeSyncService.timeNow.weekday;
-    return await _isar.timetableEntrys
+    final entries = await _isar.timetableEntrys
         .filter()
         .dayOfWeekEqualTo(dayOfWeek)
         .sortByStartTime()
         .findAll();
+    Log.d('[DeviceRepository] getTodayTimeline: weekday=$dayOfWeek, '
+        'totalInDb=${await _isar.timetableEntrys.count()}, '
+        'todayCount=${entries.length}');
+    return entries;
   }
 
   @override

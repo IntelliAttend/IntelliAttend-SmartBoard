@@ -54,12 +54,6 @@ class _IgnitingScreenState extends State<IgnitingScreen> {
       return;
     }
 
-    // DEBUG: OTP 0000 bypasses server verification
-    if (otp == '0000') {
-      await _enterDebugSession();
-      return;
-    }
-
     final rateKey = 'igniting_otp_${widget.smartBoardId ?? 'board'}';
     if (!RateLimiter.isAllowed(rateKey)) {
       setState(() => _errorMessage =
@@ -146,36 +140,6 @@ class _IgnitingScreenState extends State<IgnitingScreen> {
         _isLoading = false;
       });
     }
-  }
-
-  Future<void> _enterDebugSession() async {
-    Log.i('[Igniting] DEBUG: OTP 0000 entered — creating mock session.');
-    final debugSessionId = 'DEBUG_${DateTime.now().millisecondsSinceEpoch}';
-    final debugSecret = 'debug_secret_0000000000000000';
-
-    await SessionManager.saveSession(
-      sessionId: debugSessionId,
-      rosterCount: 0,
-      facultyName: widget.facultyName,
-      courseName: widget.courseName,
-      sectionId: 'debug',
-      endTime: TimeSyncService.timeNow.add(const Duration(hours: 1)),
-    );
-
-    SecureStorageService.storeSessionSecret(debugSessionId, debugSecret);
-
-    SessionStateService().storeSessionSecrets(debugSecret, null);
-    SessionStateService().applyState(SessionState(
-      sessionId: debugSessionId,
-      state: 'ACTIVE',
-      sessionSecretHalf1: debugSecret,
-      websocketToken: null,
-      courseName: widget.courseName,
-      facultyName: widget.facultyName,
-      sectionId: 'debug',
-      roomName: widget.roomName,
-      presentCount: 0,
-    ));
   }
 
   Future<String?> _deriveSecret(String half1) async {

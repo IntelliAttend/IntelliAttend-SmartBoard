@@ -48,3 +48,40 @@ class QueuedScan(BaseModel):
 class VaultSyncRequest(BaseModel):
     session_id: str
     queued_scans: list[QueuedScan]
+
+
+# ── OTA Update Schemas ──────────────────────────────────────────────────────
+
+
+class UpdateStatusReport(BaseModel):
+    """Board reports the outcome of a binary auto-update."""
+    current_version: str
+    previous_version: str = ""
+    status: str = Field(..., description="completed|failed|rolled_back")
+    stable_startups: int = 0
+    rollback_count: int = 0
+    timestamp: str = ""
+
+
+class CiUploadRequest(BaseModel):
+    """CI/CD uploads a new release manifest."""
+    version: str
+    release_notes: str = ""
+    force: bool = True
+    rollout_percentage: int = 100
+
+
+class AdminUpdateRequest(BaseModel):
+    """Admin pushes an update to a specific board or fleet."""
+    target_version: str
+    download_url: str = ""
+    sha256: str = ""
+    force: bool = True
+    rollout_percentage: int = 100
+    release_notes: str = ""
+
+
+class AdminRollbackRequest(BaseModel):
+    """Admin triggers a rollback to a specific version or the previous version."""
+    target_version: str = ""
+    reason: str = ""

@@ -23,7 +23,6 @@ import 'core/startup_service.dart';
 import 'core/platform/window_orchestrator_service.dart';
 import 'services/pre_flight_service.dart';
 import 'services/sync_manager.dart';
-import 'services/timetable_cache.dart';
 import 'services/time_sync_service.dart';
 import 'services/notification_listener_service.dart';
 import 'services/auto_updater.dart';
@@ -634,9 +633,6 @@ Future<void> startBackgroundProtocols() async {
     await UpdateHealthMonitor.init(AutoUpdater.installedVersion);
 
     UpdateChecker.start();
-
-    TimetableCache()
-        .updateAll(await globalDeviceRepository.getWeeklyTimeline());
 
     await globalDeviceRepository.hydrateFromServer();
 

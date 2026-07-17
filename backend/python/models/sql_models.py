@@ -454,3 +454,105 @@ class PendingRegistration(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+# ─── Update Tracking ─────────────────────────────────────────────────────────
+
+
+class BoardVersion(Base):
+    """Tracks the current and target version for each SmartBoard.
+
+    Updated by boards when they report update status and by the admin
+    when pushing updates or rollbacks. This is the single source of truth
+    for fleet version state.
+    """
+    __tablename__ = "board_versions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    board_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id"), nullable=False, unique=True, index=True
+    )
+    current_version: Mapped[Optional[str]] = mapped_column(String(32), default="0.0.0")
+    target_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    update_status: Mapped[str] = mapped_column(
+        String(32), default="idle"
+    )  # idle|downloading|installing|completed|failed|rolled_back
+    download_progress: Mapped[float] = mapped_column(Float, default=0.0)
+    last_update_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rollback_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    board: Mapped["User"] = relationship("User")
+
+    __table_args__ = (
+        Index("ix_board_versions_status", "update_status"),
+    )
+
+
+class UpdateEvent(Base):
+    """Audit log of every update-related event across the fleet.
+
+    Immutable append-only table. Each row is one event: download started,
+    install completed, rollback triggered, etc.
+    """
+    __tablename__ = "update_events"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    board_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id"), nullable=False, index=True
+    )
+    event_type: Mapped[str] = mapped_column(
+        String(32), nullable=False
+    )  # status_report|rollback|admin_push|admin_rollback
+    current_version: Mapped[Optional[str]] = mapped_column(String(32))
+    previous_version: Mapped[Optional[str]] = mapped_column(String(32))
+    target_version: Mapped[Optional[str]] = mapped_column(String(32))
+    status: Mapped[Optional[str]] = mapped_column(String(32))
+    stable_startups: Mapped[Optional[int]] = mapped_column(Integer)
+    rollback_count: Mapped[Optional[int]] = mapped_column(Integer)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+    __table_args__ = (
+        Index("ix_update_events_board", "board_id"),
+        Index("ix_update_events_type", "event_type"),
+    )
+
+
+class ReleaseManifest(Base):
+    """Stores release manifests uploaded by CI/CD.
+
+    The ci-upload endpoint writes here. The _build_board_config function
+    reads from here instead of relying solely on environment variables.
+    """
+    __tablename__ = "release_manifests"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    version: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    download_url: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[Optional[str]] = mapped_column(String(64))
+    force: Mapped[bool] = mapped_column(Boolean, default=True)
+    rollout_percentage: Mapped[int] = mapped_column(Integer, default=100)
+    release_notes: Mapped[Optional[str]] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    uploaded_by: Mapped[Optional[str]] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+    __table_args__ = (
+        Index("ix_release_manifests_active", "is_active"),
+    )

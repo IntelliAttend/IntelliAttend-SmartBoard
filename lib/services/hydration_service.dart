@@ -137,6 +137,22 @@ class HydrationService {
     List<dynamic> scheduleList,
     Isar isar,
   ) async {
+    Log.i('[Hydration] schedule_list count: ${scheduleList.length}');
+    if (scheduleList.isNotEmpty) {
+      final dayDistribution = <int, int>{};
+      for (final raw in scheduleList) {
+        final slot = raw as Map<String, dynamic>;
+        final dow = _parseDayOfWeek(slot['day_of_week']);
+        dayDistribution[dow] = (dayDistribution[dow] ?? 0) + 1;
+      }
+      Log.i('[Hydration] day_of_week distribution: $dayDistribution');
+      final sample = scheduleList.first as Map<String, dynamic>;
+      Log.i('[Hydration] sample slot: day_of_week=${sample['day_of_week']} '
+          'raw_type=${sample['day_of_week'].runtimeType} '
+          'start=${sample['start_time']} end=${sample['end_time']} '
+          'course=${sample['subject_name'] ?? sample['course_name']}');
+    }
+
     await isar.writeTxn(() async {
       await isar.timetableEntrys.clear();
 

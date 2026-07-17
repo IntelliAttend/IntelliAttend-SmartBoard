@@ -4,7 +4,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
@@ -164,14 +163,7 @@ class _IdleScreenState extends State<IdleScreen>
   // Listens to the global TimetableCache — every Firestore snapshot update
   // triggers _onTimetableCacheChanged which re-reads today's entries from RAM
   // and calls setState, keeping the entire idle UI in sync without polling.
-  DateTime? _lastCacheUpdate;
   void _onTimetableCacheChanged() {
-    final now = DateTime.now();
-    if (_lastCacheUpdate != null &&
-        now.difference(_lastCacheUpdate!).inMilliseconds < 1000) {
-      return;
-    }
-    _lastCacheUpdate = now;
     if (mounted) {
       setState(() {
         _todayTimeline = TimetableCache().todayTimeline;
@@ -1261,12 +1253,6 @@ class _IdleScreenState extends State<IdleScreen>
       return;
     }
 
-    // DEBUG: OTP 0000 bypasses server verification
-    if (otp == '0000') {
-      await _enterDebugSession();
-      return;
-    }
-
     // Try pre-flight warm-up once if session ID is missing. If retries
     // exhausted, fall back to the session ID from the initiateSession API.
     if (_preAllocatedSessionId == null && _upcomingAllocatedSessionId == null) {
@@ -1396,43 +1382,6 @@ class _IdleScreenState extends State<IdleScreen>
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _enterDebugSession() async {
-    Log.i('[IdleScreen] DEBUG: OTP 0000 entered — creating mock session.');
-    final debugSessionId = 'DEBUG_${DateTime.now().millisecondsSinceEpoch}';
-    final debugSecret = 'debug_secret_0000000000000000';
-
-    await SessionManager.saveSession(
-      sessionId: debugSessionId,
-      rosterCount: 0,
-      facultyName: 'Debug Faculty',
-      courseName: 'Debug Course',
-      sectionId: 'debug',
-      endTime: TimeSyncService.timeNow.add(const Duration(hours: 1)),
-    );
-
-    await SecureStorageService.storeSessionSecret(
-        debugSessionId, debugSecret);
-
-    if (mounted) {
-      final wsService = WebsocketService(AppConfig.baseUrl);
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => AttendanceScreen(
-            sessionId: debugSessionId,
-            websocketService: wsService,
-            capacity: widget.registration.capacity,
-            courseName: 'Debug Course',
-            facultyName: 'Debug Faculty',
-            sectionId: 'debug',
-            roomName: widget.registration.roomName,
-            slotId: null,
-            boardId: widget.registration.smartBoardId,
-          ),
-        ),
-      );
     }
   }
 
@@ -1777,147 +1726,6 @@ class _IdleScreenState extends State<IdleScreen>
           onViewAll: () => Navigator.of(context).push(MaterialPageRoute(
               builder: (context) => const NotificationsScreen())),
         ),
-        if (kDebugMode) ...[
-          SizedBox(
-            height: 36,
-            child: TextButton.icon(
-              onPressed: () => NotificationListenerService().injectEmergencyForDebug(),
-              style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFFC72C31).withValues(alpha: 0.15),
-                foregroundColor: const Color(0xFFC72C31),
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  side: BorderSide(color: const Color(0xFFC72C31).withValues(alpha: 0.3)),
-                ),
-              ),
-              icon: const Icon(Icons.warning_rounded, size: 16),
-              label: const Text('Emergency', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-            ),
-          ),
-          const SizedBox(width: 6),
-          SizedBox(
-            height: 36,
-            child: TextButton.icon(
-              onPressed: () => NotificationListenerService().injectPriority1ForDebug(),
-              style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFFF59E0B).withValues(alpha: 0.15),
-                foregroundColor: const Color(0xFFF59E0B),
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  side: BorderSide(color: const Color(0xFFF59E0B).withValues(alpha: 0.3)),
-                ),
-              ),
-              icon: const Icon(Icons.blur_on, size: 16),
-              label: const Text('P1 Blur', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-            ),
-          ),
-          const SizedBox(width: 6),
-          SizedBox(
-            height: 36,
-            child: TextButton.icon(
-              onPressed: () => NotificationListenerService().injectP2ForDebug(),
-              style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFF3B82F6).withValues(alpha: 0.15),
-                foregroundColor: const Color(0xFF3B82F6),
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  side: BorderSide(color: const Color(0xFF3B82F6).withValues(alpha: 0.3)),
-                ),
-              ),
-              icon: const Icon(Icons.notifications_outlined, size: 16),
-              label: const Text('P-2', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-            ),
-          ),
-          const SizedBox(width: 6),
-          SizedBox(
-            height: 36,
-            child: TextButton.icon(
-              onPressed: () => NotificationListenerService().injectDefaultForDebug(),
-              style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFF6B7280).withValues(alpha: 0.15),
-                foregroundColor: const Color(0xFF6B7280),
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  side: BorderSide(color: const Color(0xFF6B7280).withValues(alpha: 0.3)),
-                ),
-              ),
-              icon: const Icon(Icons.inbox_outlined, size: 16),
-              label: const Text('P3 Inbox', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-            ),
-          ),
-          const SizedBox(width: 6),
-          SizedBox(
-            height: 36,
-            child: TextButton.icon(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => const WorkspaceScreen(
-                      sessionId: 'DEBUG_WS',
-                      courseName: 'Engineering Physics',
-                      facultyName: 'Dr. Sharma',
-                      roomName: 'Lab-101',
-                      sectionId: 'sec-b',
-                      presentCount: 38,
-                      totalCapacity: 42,
-                    ),
-                  ),
-                );
-              },
-              style: TextButton.styleFrom(
-                backgroundColor: AppColors.primaryTeal.withValues(alpha: 0.15),
-                foregroundColor: AppColors.primaryTeal,
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  side: BorderSide(color: AppColors.primaryTeal.withValues(alpha: 0.3)),
-                ),
-              ),
-              icon: const Icon(Icons.dashboard_rounded, size: 16),
-              label: const Text('Workspace', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-            ),
-          ),
-          const SizedBox(width: 6),
-          SizedBox(
-            height: 36,
-            child: TextButton.icon(
-              onPressed: () {
-                final wsService = WebsocketService(AppConfig.baseUrl);
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => AttendanceScreen(
-                      sessionId: 'DEBUG_ATTENDANCE',
-                      websocketService: wsService,
-                      capacity: 42,
-                      courseName: 'Engineering Physics',
-                      facultyName: 'Dr. Sharma',
-                      sectionId: 'sec-b',
-                      roomName: 'Lab-101',
-                      slotId: null,
-                      boardId: '',
-                    ),
-                  ),
-                );
-              },
-              style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFF8B5CF6).withValues(alpha: 0.15),
-                foregroundColor: const Color(0xFF8B5CF6),
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  side: BorderSide(color: const Color(0xFF8B5CF6).withValues(alpha: 0.3)),
-                ),
-              ),
-              icon: const Icon(Icons.people_rounded, size: 16),
-              label: const Text('Attendance', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-            ),
-          ),
-          const SizedBox(width: 6),
-        ],
         IconButton(
             onPressed: () {
               final now = TimeSyncService.timeNow;

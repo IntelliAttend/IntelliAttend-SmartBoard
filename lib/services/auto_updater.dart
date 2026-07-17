@@ -345,7 +345,16 @@ class AutoUpdater {
         rethrow;
       }
     } else {
-      Log.w('[AutoUpdater] No SHA-256 in manifest — skipping verification');
+      // SHA-256 is mandatory — reject updates without a hash.
+      Log.e('[AutoUpdater] No SHA-256 in manifest — refusing to install unverified update');
+      progress.value = UpdateProgress(
+        state: UpdateState.failed,
+        targetVersion: targetVersion,
+        error: 'Update rejected: missing integrity hash. Contact IT.',
+        force: manifest.force,
+      );
+      await msiFile.delete();
+      throw Exception('Update rejected: manifest has no SHA-256 hash');
     }
 
     // ── 3. Install ───────────────────────────────────────────────────────────

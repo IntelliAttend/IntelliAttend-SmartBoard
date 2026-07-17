@@ -12,38 +12,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   final PageController _pageController = PageController();
   int _currentPage = 0;
 
-  final List<Map<String, dynamic>> _periods = [
-    {
-      'title': "TODAY'S PERFORMANCE",
-      'stats': [
-        {'label': 'Total Sessions', 'value': '8', 'icon': Icons.event_available, 'color': AppColors.primaryTeal},
-        {'label': 'Avg. Attendance', 'value': '92%', 'icon': Icons.trending_up, 'color': AppColors.successLime},
-        {'label': 'Students', 'value': '450', 'icon': Icons.people_outline, 'color': Colors.blue},
-      ],
-      'chartData': [0.8, 0.95, 0.7, 0.9, 0.85, 0.92, 0.88],
-      'chartLabels': ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7'],
-    },
-    {
-      'title': "THIS WEEK'S PERFORMANCE",
-      'stats': [
-        {'label': 'Total Sessions', 'value': '42', 'icon': Icons.event_available, 'color': AppColors.primaryTeal},
-        {'label': 'Avg. Attendance', 'value': '85%', 'icon': Icons.trending_up, 'color': AppColors.successLime},
-        {'label': 'Students', 'value': '2,100', 'icon': Icons.people_outline, 'color': Colors.blue},
-      ],
-      'chartData': [0.75, 0.82, 0.9, 0.88, 0.84, 0.7, 0.65],
-      'chartLabels': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-    },
-    {
-      'title': "THIS MONTH'S PERFORMANCE",
-      'stats': [
-        {'label': 'Total Sessions', 'value': '168', 'icon': Icons.event_available, 'color': AppColors.primaryTeal},
-        {'label': 'Avg. Attendance', 'value': '88%', 'icon': Icons.trending_up, 'color': AppColors.successLime},
-        {'label': 'Students', 'value': '8,400', 'icon': Icons.people_outline, 'color': Colors.blue},
-      ],
-      'chartData': [0.6, 0.75, 0.8, 0.85, 0.9, 0.88, 0.92, 0.85, 0.8, 0.78],
-      'chartLabels': ['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9', 'W10'],
-    },
-  ];
+  final List<Map<String, dynamic>> _periods = [];
 
   @override
   void dispose() {
@@ -54,8 +23,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final currentData = _periods[_currentPage];
-    
+
     return Scaffold(
       backgroundColor: isDark ? AppColors.bgDark : AppColors.bgLight,
       appBar: AppBar(
@@ -64,31 +32,49 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
         elevation: 0,
         foregroundColor: isDark ? Colors.white : AppColors.textPrimaryLight,
       ),
-      body: Padding(
+      body: _periods.isEmpty
+          ? Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.analytics_outlined, size: 64,
+                      color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.15)),
+                  const SizedBox(height: 16),
+                  Text('No analytics data yet',
+                      style: TextStyle(fontSize: 16,
+                          color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.4))),
+                  const SizedBox(height: 8),
+                  Text('Analytics will appear once attendance sessions are completed.',
+                      style: TextStyle(fontSize: 13,
+                          color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.25))),
+                ],
+              ),
+            )
+          : Padding(
         padding: const EdgeInsets.all(40),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Top Stats Row
             Row(
-              children: (currentData['stats'] as List).map<Widget>((stat) {
+              children: (_periods[_currentPage]['stats'] as List).map<Widget>((stat) {
                 return _buildStatCard(
-                  stat['label'], 
-                  stat['value'], 
-                  stat['icon'], 
-                  stat['color'], 
-                  isDark
+                  stat['label'],
+                  stat['value'],
+                  stat['icon'],
+                  stat['color'],
+                  isDark,
                 );
               }).toList().expand((widget) => [widget, const SizedBox(width: 24)]).toList()..removeLast(),
             ),
             const SizedBox(height: 48),
-            
+
             // Dynamic Heading
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  currentData['title'],
+                  _periods[_currentPage]['title'],
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
@@ -97,14 +83,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                   ),
                 ),
                 Row(
-                  children: List.generate(3, (index) => Container(
+                  children: List.generate(_periods.length, (index) => Container(
                     width: 8,
                     height: 8,
                     margin: const EdgeInsets.only(left: 8),
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: _currentPage == index 
-                        ? AppColors.primaryTeal 
+                      color: _currentPage == index
+                        ? AppColors.primaryTeal
                         : (isDark ? Colors.white10 : Colors.black12),
                     ),
                   )),
@@ -112,7 +98,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               ],
             ),
             const SizedBox(height: 24),
-            
+
             // Swipeable Chart Card
             Expanded(
               child: PageView.builder(

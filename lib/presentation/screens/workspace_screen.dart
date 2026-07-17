@@ -27,15 +27,11 @@ class _TimelineEvent {
   final String time;
   final String title;
   final String description;
-  final bool isActive;
-  final IconData? icon;
 
   const _TimelineEvent({
     required this.time,
     required this.title,
     required this.description,
-    this.isActive = false,
-    this.icon,
   });
 }
 
@@ -62,7 +58,7 @@ class _WSColors {
   final Color textSecondary;
   final Color textMuted;
 
-  const _WSColors({
+  _WSColors({
     required this.bg,
     required this.surface,
     required this.elevated,
@@ -79,11 +75,11 @@ class _WSColors {
       bg: isDark ? AppColors.bgDark : AppColors.bgLight,
       surface: isDark ? Colors.white.withValues(alpha: 0.03) : Colors.white,
       elevated: isDark ? Colors.white.withValues(alpha: 0.07) : const Color(0xFFF1F5F9),
-      border: isDark ? const Color(0x1AFFFFFF) : const Color(0x1A000000),
-      borderStrong: isDark ? const Color(0x33FFFFFF) : const Color(0x33000000),
+      border: isDark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.1),
+      borderStrong: isDark ? Colors.white.withValues(alpha: 0.2) : Colors.black.withValues(alpha: 0.2),
       textPrimary: isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
       textSecondary: isDark ? AppColors.textSecondaryDark : AppColors.textSecondaryLight,
-      textMuted: Colors.grey,
+      textMuted: isDark ? Colors.white38 : Colors.grey,
     );
   }
 }
@@ -142,120 +138,19 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
 
   // Brand / accent colors (theme-independent)
   static const Color _teal = AppColors.primaryTeal;
-  static const Color _tealAlpha = Color(0x3314B8A6);
-  static const Color _tealLight = Color(0x2214B8A6);
-  static const Color _green = Color(0xFF4ADE80);
-  static const Color _greenLight = Color(0x224ADE80);
-  static const Color _red = Color(0xFFEF4444);
-  static const Color _amber = Color(0xFFF59E0B);
-  static const Color _amberLight = Color(0x22F59E0B);
-  static const Color _purple = Color(0xFFA78BFA);
+  static Color get _tealAlpha => _teal.withValues(alpha: 0.2);
+  static Color get _tealLight => _teal.withValues(alpha: 0.12);
+  static Color get _green => AppColors.successLime;
+  static Color get _greenLight => AppColors.successLime.withValues(alpha: 0.12);
+  static Color get _red => AppColors.error;
+  static Color get _amber => AppColors.warningAmber;
+  static Color get _amberLight => AppColors.warningAmber.withValues(alpha: 0.12);
+  static Color get _purple => const Color(0xFFA78BFA);
 
 
-  List<_TimelineEvent> get _todayTimeline => [
-        _TimelineEvent(
-          time: '09:10 AM',
-          title: 'Session Started',
-          description: 'Initialized ${widget.courseName} lecture.',
-          isActive: true,
-          icon: Icons.play_circle_outline_rounded,
-        ),
-        _TimelineEvent(
-          time: '09:35 AM',
-          title: 'Roster Synced',
-          description: '${widget.presentCount} students marked present.',
-          isActive: true,
-          icon: Icons.people_alt_outlined,
-        ),
-        _TimelineEvent(
-          time: '09:50 AM',
-          title: 'First Resource Shared',
-          description: 'Lecture notes uploaded to board.',
-          isActive: true,
-          icon: Icons.upload_file_rounded,
-        ),
-      ];
+  List<_TimelineEvent> get _todayTimeline => [];
 
-  static const List<_FlashbackDay> _flashbackDays = [
-    _FlashbackDay(
-      label: 'Yesterday',
-      date: 'Apr 10, 2026',
-      events: [
-        _TimelineEvent(
-          time: '09:10 AM',
-          title: 'Initialized First Law Review',
-          description: 'Recapped conservation of energy fundamentals.',
-          icon: Icons.science_outlined,
-        ),
-        _TimelineEvent(
-          time: '09:35 AM',
-          title: 'Isobaric Expansion Blueprints',
-          description: 'Whiteboard Board 4 Exported.',
-          icon: Icons.draw_outlined,
-        ),
-        _TimelineEvent(
-          time: '09:50 AM',
-          title: 'Carnot Cycle Derivation',
-          description: 'Session finalized successfully.',
-          icon: Icons.check_circle_outline_rounded,
-        ),
-        _TimelineEvent(
-          time: '10:15 AM',
-          title: 'Attendance Report Generated',
-          description: 'Exported PDF — 35/38 students.',
-          icon: Icons.summarize_outlined,
-        ),
-      ],
-    ),
-    _FlashbackDay(
-      label: '2 days ago',
-      date: 'Apr 9, 2026',
-      events: [
-        _TimelineEvent(
-          time: '08:45 AM',
-          title: 'Thermodynamics Deep Dive',
-          description: 'Covered entropy and the second law.',
-          icon: Icons.thermostat_outlined,
-        ),
-        _TimelineEvent(
-          time: '09:30 AM',
-          title: 'Problem Set Distributed',
-          description: '10 practice problems on heat engines.',
-          icon: Icons.assignment_outlined,
-        ),
-        _TimelineEvent(
-          time: '10:00 AM',
-          title: 'Group Discussion',
-          description: 'Students solved problems in breakout groups.',
-          icon: Icons.groups_outlined,
-        ),
-      ],
-    ),
-    _FlashbackDay(
-      label: '3 days ago',
-      date: 'Apr 8, 2026',
-      events: [
-        _TimelineEvent(
-          time: '09:00 AM',
-          title: 'Quiz Review Session',
-          description: 'Reviewed midterm topics — stress & strain.',
-          icon: Icons.quiz_outlined,
-        ),
-        _TimelineEvent(
-          time: '09:45 AM',
-          title: 'Lab Experiment Walkthrough',
-          description: 'Demonstrated tensile strength testing.',
-          icon: Icons.biotech_outlined,
-        ),
-        _TimelineEvent(
-          time: '10:30 AM',
-          title: 'Assignment Submission',
-          description: 'Collected problem set #4.',
-          icon: Icons.inbox_rounded,
-        ),
-      ],
-    ),
-  ];
+  static const List<_FlashbackDay> _flashbackDays = [];
 
   @override
   void initState() {
@@ -365,12 +260,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
         builder: (ctx) => Dialog(
           backgroundColor: Colors.transparent,
           child: Center(
-            child: Container(
+              child: Container(
               width: 420,
               padding: const EdgeInsets.all(32),
               decoration: BoxDecoration(
-                color: const Color(0xFFF8FAFC),
+                color: _palette.surface,
                 borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: _palette.border),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withValues(alpha: 0.15),
@@ -392,20 +288,20 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                         color: AppColors.warningAmber, size: 28),
                   ),
                   const SizedBox(height: 20),
-                  const Text(
+                  Text(
                     'ATTENDANCE NOT SUBMITTED',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w900,
                       letterSpacing: 1.5,
-                      color: Color(0xFF0F172A),
+                      color: _palette.textPrimary,
                     ),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
+                  Text(
                     'Attendance has been saved locally but not yet submitted to the server.\n\nPlease go back and submit before ending the session.',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 13, color: Color(0xFF475569)),
+                    style: TextStyle(fontSize: 13, color: _palette.textSecondary),
                   ),
                   const SizedBox(height: 28),
                   Row(
@@ -416,12 +312,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                           style: TextButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10)),
+                                borderRadius: BorderRadius.circular(12)),
                           ),
-                          child: const Text('CANCEL',
+                          child: Text('CANCEL',
                               style: TextStyle(
                                   fontWeight: FontWeight.bold,
-                                  color: Color(0xFF94A3B8))),
+                                  color: _palette.textMuted)),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -434,7 +330,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10)),
+                                borderRadius: BorderRadius.circular(12)),
                             elevation: 0,
                           ),
                           child: const Text('GO BACK & SUBMIT',
@@ -471,8 +367,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
               width: 420,
               padding: const EdgeInsets.all(32),
               decoration: BoxDecoration(
-                color: const Color(0xFFF8FAFC),
+                color: _palette.surface,
                 borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: _palette.border),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withValues(alpha: 0.15),
@@ -494,22 +391,22 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                         color: AppColors.successLime, size: 28),
                   ),
                   const SizedBox(height: 20),
-                  const Text(
+                  Text(
                     'ATTENDANCE SUBMITTED ✓',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w900,
                       letterSpacing: 1.5,
-                      color: Color(0xFF0F172A),
+                      color: _palette.textPrimary,
                     ),
                   ),
                   const SizedBox(height: 8),
                   Text(
                     widget.courseName.toUpperCase(),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: Color(0xFF475569),
+                      color: _palette.textSecondary,
                     ),
                   ),
                   const SizedBox(height: 24),
@@ -518,7 +415,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                     children: [
                       _buildCardStat('Present', '${widget.presentCount}', AppColors.successLime),
                       const SizedBox(width: 32),
-                      _buildCardStat('Total', '${widget.totalCapacity}', const Color(0xFF475569)),
+                      _buildCardStat('Total', '${widget.totalCapacity}', _palette.textSecondary),
                       const SizedBox(width: 32),
                       _buildCardStat('Rate', '$rate%', AppColors.primaryTeal),
                     ],
@@ -532,12 +429,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                           style: TextButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10)),
+                                borderRadius: BorderRadius.circular(12)),
                           ),
-                          child: const Text('CANCEL',
+                          child: Text('CANCEL',
                               style: TextStyle(
                                   fontWeight: FontWeight.bold,
-                                  color: Color(0xFF94A3B8))),
+                                  color: _palette.textMuted)),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -550,7 +447,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10)),
+                                borderRadius: BorderRadius.circular(12)),
                             elevation: 0,
                           ),
                           child: const Text('END SESSION',
@@ -1348,7 +1245,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
   }
 
   Widget _buildLectureHistory() {
-    final days = _allLectureDays;
+    final days = _allLectureDays.where((d) => d.events.isNotEmpty).toList();
+    final hasData = days.isNotEmpty;
     return Container(
       color: _palette.bg,
       child: Column(
@@ -1384,7 +1282,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                       ),
                     ),
                     Text(
-                      'Scroll up for older sessions',
+                      hasData ? 'Scroll up for older sessions' : 'No session history yet',
                       style: TextStyle(fontSize: 11, color: _palette.textMuted),
                     ),
                   ],
@@ -1395,63 +1293,76 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
 
           // Timeline — up to 60% of available height
           Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) => ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: constraints.maxHeight * 0.6),
-                child: ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
-                  itemCount: days.length,
-                  itemBuilder: (context, dayIndex) {
-                final day = days[dayIndex];
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Day section header
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4, bottom: 12),
-                      child: Row(
+            child: hasData
+                ? LayoutBuilder(
+                    builder: (context, constraints) => ConstrainedBox(
+                      constraints: BoxConstraints(maxHeight: constraints.maxHeight * 0.6),
+                      child: ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+                        itemCount: days.length,
+                        itemBuilder: (context, dayIndex) {
+                      final day = days[dayIndex];
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: day.label == 'Today' ? _tealLight : _palette.elevated,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              day.label,
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: day.label == 'Today' ? _teal : _palette.textMuted,
-                              ),
+                          // Day section header
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4, bottom: 12),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: day.label == 'Today' ? _tealLight : _palette.elevated,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    day.label,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: day.label == 'Today' ? _teal : _palette.textMuted,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  day.date,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: _palette.textMuted,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Text(
-                            day.date,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: _palette.textMuted,
+                          // Events for this day
+                          ...day.events.map((event) => _buildTimelineItem(event)),
+                          // Divider between days
+                          if (dayIndex < days.length - 1)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: Container(height: 1, color: _palette.border),
                             ),
-                          ),
                         ],
-                      ),
+                      );
+                    },
+                  ),
+                ),
+              )
+                : Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.history_toggle_off_rounded,
+                            size: 48, color: _palette.textMuted.withValues(alpha: 0.4)),
+                        const SizedBox(height: 12),
+                        Text('Session timeline will appear here',
+                            style: TextStyle(fontSize: 13, color: _palette.textMuted)),
+                      ],
                     ),
-                    // Events for this day
-                    ...day.events.map((event) => _buildTimelineItem(event)),
-                    // Divider between days
-                    if (dayIndex < days.length - 1)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
-                        child: Container(height: 1, color: _palette.border),
-                      ),
-                  ],
-                );
-              },
-            ),
+                  ),
           ),
-        ),
-      ),
 
           // Open SmartBoard button
           Container(
@@ -1522,26 +1433,23 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
             height: 24,
             margin: const EdgeInsets.only(top: 4),
             decoration: BoxDecoration(
-              color: event.isActive ? _tealLight : _palette.surface,
+              color: _palette.surface,
               shape: BoxShape.circle,
               border: Border.all(
-                color: event.isActive ? _teal : _palette.borderStrong,
-                width: event.isActive ? 2.5 : 2,
+                color: _palette.borderStrong,
+                width: 2,
               ),
             ),
-            child: event.isActive
-                ? Center(child: Container(width: 8, height: 8, decoration: BoxDecoration(color: _teal, shape: BoxShape.circle)))
-                : null,
           ),
           const SizedBox(width: 16),
           Expanded(
             child: Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: event.isActive ? _teal.withValues(alpha: 0.04) : _palette.surface,
+                color: _palette.surface,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: event.isActive ? _teal.withValues(alpha: 0.15) : _palette.border,
+                  color: _palette.border,
                   width: 1,
                 ),
               ),
@@ -1550,36 +1458,17 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.schedule_rounded, size: 12, color: event.isActive ? _teal : _palette.textMuted),
+                      Icon(Icons.schedule_rounded, size: 12, color: _palette.textMuted),
                       const SizedBox(width: 4),
                       Text(
                         event.time,
                         style: GoogleFonts.jetBrainsMono(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
-                          color: event.isActive ? _teal : _palette.textMuted,
+                          color: _palette.textMuted,
                           letterSpacing: 0.3,
                         ),
                       ),
-                      if (event.isActive) ...[
-                        const SizedBox(width: 10),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: _greenLight,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            'LIVE',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.8,
-                              color: _green,
-                            ),
-                          ),
-                        ),
-                      ],
                     ],
                   ),
                   const SizedBox(height: 6),
@@ -1855,7 +1744,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                                   style: TextStyle(
                                       fontSize: 17, fontWeight: FontWeight.w800, color: _palette.textPrimary)),
                               const SizedBox(height: 3),
-                              Text('Version 5.4.0+1',
+                              Text('Version 5.5.0',
                                   style: TextStyle(
                                       fontSize: 12, color: _palette.textMuted)),
                             ],
@@ -1865,7 +1754,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                       const SizedBox(height: 22),
                       Container(height: 1, color: _palette.border),
                       const SizedBox(height: 16),
-                      _infoRow(Icons.construction_rounded, 'Build', 'Windows Debug'),
+                      _infoRow(Icons.construction_rounded, 'Platform', 'Windows'),
                       _infoRow(Icons.tag_rounded, 'Session', widget.sessionId),
                       _infoRow(Icons.meeting_room_outlined, 'Room', widget.roomName),
                       _infoRow(Icons.person_outline_rounded, 'Faculty', widget.facultyName),
