@@ -39,26 +39,71 @@ class SlidingWindowRateLimiter:
         self._buckets[key].append(now)
 
 
+# ─── Rate Limit Tiers ───────────────────────────────────────────────────────
+#
+# Each endpoint category gets a tailored limit based on its threat model
+# and expected legitimate traffic volume.
+#
+# | Category      | Limit      | Rationale
+# |---------------|------------|------------------------------------------
+# | health        | 120/min    | Load balancers probe every 5-10s; 120/min
+# |               |            | allows ~12 LBs without triggering.
+# | auth          | 5/min      | Login/registration should be rare per IP.
+# |               |            | Brute-force protection is primary goal.
+# | ticket        | 10/min     | WebSocket ticket requests are per-session.
+# |               |            | Slightly more generous than auth.
+# | general       | 60/min     | Heartbeats, telemetry, config — normal
+# |               |            | kiosk traffic. 1 req/min per board is
+# |               |            | typical; 60/min accommodates bursts.
+# | admin         | exempt     | Admin dashboard is behind Firebase auth
+# |               |            | + RBAC. Rate limiting adds no value here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
+    _HEALTH_LIMIT = 120       # Load balancer probes (every 5-10s)
+    _AUTH_LIMIT = 5           # Login / registration brute-force protection
+    _TICKET_LIMIT = 10        # WebSocket ticket requests
+    _GENERAL_LIMIT = 60       # Heartbeats, telemetry, config (default)
+    _WINDOW = 60              # All tiers use a 60-second sliding window
+
     def __init__(self, app, max_requests: int = 60, window_seconds: int = 60):
         super().__init__(app)
-        self.limiter = SlidingWindowRateLimiter(max_requests, window_seconds)
+        self._health_limiter = SlidingWindowRateLimiter(self._HEALTH_LIMIT, self._WINDOW)
+        self._auth_limiter = SlidingWindowRateLimiter(self._AUTH_LIMIT, self._WINDOW)
+        self._ticket_limiter = SlidingWindowRateLimiter(self._TICKET_LIMIT, self._WINDOW)
+        self._general_limiter = SlidingWindowRateLimiter(max_requests, window_seconds)
+
+    def _select_limiter(self, path: str) -> Tuple[SlidingWindowRateLimiter, int]:
+        """Return (limiter, display_limit) for the given path."""
+        if path == "/health":
+            return self._health_limiter, self._HEALTH_LIMIT
+        if path.startswith("/api/v1/device/register"):
+            return self._auth_limiter, self._AUTH_LIMIT
+        if path.startswith("/api/v1/websocket/ticket"):
+            return self._ticket_limiter, self._TICKET_LIMIT
+        return self._general_limiter, self._GENERAL_LIMIT
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        if request.url.path.startswith("/api/v1/admin"):
+        path = request.url.path
+
+        # Admin routes are exempt — protected by Firebase auth + RBAC.
+        if path.startswith("/api/v1/admin"):
             return await call_next(request)
 
-        allowed, remaining = self.limiter.check(request)
+        limiter, limit = self._select_limiter(path)
+
+        allowed, remaining = limiter.check(request)
         if not allowed:
-            logger.warning(f"Rate limit exceeded for {request.client.host} on {request.url.path}")
+            logger.warning(f"Rate limit exceeded for {request.client.host} on {path}")
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too many requests. Please slow down.",
                 headers={"Retry-After": "60", "X-RateLimit-Remaining": "0"},
             )
 
-        self.limiter.record(request)
+        limiter.record(request)
         response = await call_next(request)
-        response.headers["X-RateLimit-Limit"] = str(self.limiter.max_requests)
+        response.headers["X-RateLimit-Limit"] = str(limit)
         response.headers["X-RateLimit-Remaining"] = str(remaining - 1 if remaining > 0 else 0)
         return response

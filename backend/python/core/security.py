@@ -28,7 +28,7 @@ async def verify_firebase_token(authorization: Optional[str]) -> dict:
     try:
         decoded_token = firebase_auth.verify_id_token(id_token)
     except Exception as e:
-        logger.error(f"[Auth] Firebase token verification failed: {e}")
+        logger.warning("[Auth] Firebase token verification failed")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="AUTH_FAILED: Invalid Firebase ID token",

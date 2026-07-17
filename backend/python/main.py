@@ -224,6 +224,35 @@ async def correlation_id_middleware(request: Request, call_next):
     logger.info(f"{request.method} {request.url.path} | ID: {request_id} | Status: {response.status_code}")
     return response
 
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Add security headers to all responses.
+
+    Headers included and rationale:
+      - X-Content-Type-Options: nosniff  — prevents MIME-type sniffing
+      - X-Frame-Options: DENY            — prevents clickjacking on API responses
+      - Referrer-Policy: strict-origin-when-cross-origin — limits referrer leakage
+      - Content-Security-Policy: default-src 'none' — API responses are JSON, not HTML
+      - Permissions-Policy: camera=(), microphone=(), geolocation=() — deny unused APIs
+      - Cross-Origin-Opener-Policy: same-origin — isolates browsing context
+      - Cross-Origin-Resource-Policy: same-origin — prevents cross-origin reads
+
+    Intentionally omitted:
+      - Strict-Transport-Security: only set at TLS termination (reverse proxy / CDN).
+        Setting it here would be premature if the app runs behind nginx/Cloudflare
+        which should set it with correct max-age and includeSubDomains.
+      - X-XSS-Protection: obsolete. Modern browsers ignore it; CSP replaces it.
+    """
+    response: Response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = "default-src 'none'"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    return response
+
 # ─── v2.0 Heartbeat Model ──────────────────────────────────────────────────
 
 class HeartbeatV2Request(BaseModel):

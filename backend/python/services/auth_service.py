@@ -38,7 +38,7 @@ class AuthService:
             decoded_token = firebase_auth.verify_id_token(id_token)
             return decoded_token
         except Exception as e:
-            logger.error(f"Firebase token verification failed: {e}")
+            logger.warning("[Auth] Firebase token verification failed")
             return None
 
     @staticmethod
@@ -164,8 +164,7 @@ class AuthService:
 
         await session.flush()
 
-        logger.info(f"[Register] OTP initiated for board {smart_board_id} (email: {email})")
-        logger.debug(f"[Register] OTP {otp} for board {smart_board_id} (debug)")
+        logger.info(f"[Register] OTP initiated for board {smart_board_id}")
 
         admin_email = email
         return {
@@ -264,7 +263,7 @@ class AuthService:
         try:
             custom_token = firebase_auth.create_custom_token(user.firebase_uid or smart_board_id)
         except Exception as e:
-            logger.error(f"Failed to create custom token: {e}")
+            logger.error("[Auth] Failed to create custom token")
             custom_token = None
 
         logger.info(f"[Register] Completed registration for board {smart_board_id}")
