@@ -35,6 +35,7 @@ import 'notifications_screen.dart';
 import 'workspace_screen.dart';
 import '../../services/time_sync_service.dart';
 import '../../services/timetable_cache.dart';
+import '../../services/network_info_service.dart';
 import 'package:video_player/video_player.dart';
 import '../../services/pre_flight_service.dart';
 import '../../services/websocket_service.dart';
@@ -86,6 +87,9 @@ class _IdleScreenState extends State<IdleScreen>
   final Set<String> _failedSlotIds =
       {}; // Subset of completed slots where the session failed
   bool _isKeypadExpanded = false; // Controls OTP keypad expansion state
+
+  NetworkInfo _networkInfo = NetworkInfo(isConnected: false, lastChecked: DateTime.now());
+  StreamSubscription<NetworkInfo>? _networkSub;
 
   // Session ID received from the preflight API response (_triggerWarmUp).
   // Stored here in RAM so OTP submission (_handleVerifyOtp) can use it
@@ -196,6 +200,7 @@ class _IdleScreenState extends State<IdleScreen>
     // _findCurrentSlot is removed in favour of TimetableCache().currentSlot.
     _loadInitialData(); // Isar read — local only, safe.
     _loadPreferences(); // SecureStorage read — local only, safe.
+    _startNetworkMonitoring();
 
     // Subscribe to the global timetable cache. Every update from the
     // Firestore listener flows through TimetableCache → this callback,
@@ -291,7 +296,6 @@ class _IdleScreenState extends State<IdleScreen>
       _allClearSub = notifService.onAllClear.listen((n) {
         if (!mounted) return;
         setState(() => _showAllClearToast = true);
-        _allClearToastTimer?.cancel();
         _allClearToastTimer = Timer(const Duration(seconds: 3), () {
           if (mounted) setState(() => _showAllClearToast = false);
         });
@@ -372,6 +376,15 @@ class _IdleScreenState extends State<IdleScreen>
         _idleTheme = theme ?? 'auto';
       });
     }
+  }
+
+  void _startNetworkMonitoring() {
+    final service = NetworkInfoService();
+    service.startMonitoring(interval: const Duration(seconds: 10));
+    _networkSub = service.onChanged.listen((info) {
+      if (mounted) setState(() => _networkInfo = info);
+    });
+    _networkInfo = service.current;
   }
 
   void _initVideoBackground() {
@@ -518,6 +531,8 @@ class _IdleScreenState extends State<IdleScreen>
     _popdownSub?.cancel();
     _allClearSub?.cancel();
     _allClearToastTimer?.cancel();
+    _networkSub?.cancel();
+    NetworkInfoService().stopMonitoring();
     // Notifications arriving while on non-idle screens will be queued.
     NotificationListenerService().markIdle(false);
     _cinematicController.dispose();
@@ -1593,6 +1608,13 @@ class _IdleScreenState extends State<IdleScreen>
             );
           }
 
+          // 8. Network indicator (bottom-right)
+          stackChildren.add(Positioned(
+            right: 40,
+            bottom: 115,
+            child: _buildNetworkIndicator(),
+          ));
+
           return Stack(children: stackChildren);
         },
       ),
@@ -2124,6 +2146,73 @@ class _IdleScreenState extends State<IdleScreen>
       isLive: live,
       isCompleted: isCompleted,
       isFailed: isFailed,
+    );
+  }
+
+  Widget _buildNetworkIndicator() {
+    final info = _networkInfo;
+    final isConnected = info.isConnected;
+    final hasInternet = info.hasInternet;
+    final color = !isConnected
+        ? AppColors.error
+        : !hasInternet
+            ? const Color(0xFFF59E0B)
+            : AppColors.primaryTeal;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: color.withValues(alpha: 0.4), width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.15),
+            blurRadius: 12,
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            !isConnected
+                ? Icons.wifi_off_rounded
+                : Icons.wifi_rounded,
+            color: color,
+            size: 18,
+          ),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                !isConnected
+                    ? 'NO INTERNET'
+                    : hasInternet
+                        ? info.speedLabel.toUpperCase()
+                        : 'OFFLINE',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: color,
+                  letterSpacing: 1,
+                ),
+              ),
+              if (isConnected && info.latencyMs > 0)
+                Text(
+                  '${info.latencyMs}ms',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w600,
+                    color: color.withValues(alpha: 0.8),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
