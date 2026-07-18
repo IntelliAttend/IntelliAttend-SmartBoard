@@ -17,6 +17,11 @@
         Description="IntelliAttend SmartBoard Attendance Kiosk"
         Manufacturer="IntelliAttend" />
 
+    <!-- Handle upgrades: uninstall old version, install new version -->
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of IntelliAttend SmartBoard is already installed." />
+
     <Media Id="1" Cabinet="product.cab" EmbedCab="yes" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
