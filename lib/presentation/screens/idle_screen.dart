@@ -1608,12 +1608,7 @@ class _IdleScreenState extends State<IdleScreen>
             );
           }
 
-          // 8. Network indicator (bottom-right)
-          stackChildren.add(Positioned(
-            right: 40,
-            bottom: 115,
-            child: _buildNetworkIndicator(),
-          ));
+          // 8. WiFi status in footer — handled by _buildClockAndInfo
 
           return Stack(children: stackChildren);
         },
@@ -2149,73 +2144,6 @@ class _IdleScreenState extends State<IdleScreen>
     );
   }
 
-  Widget _buildNetworkIndicator() {
-    final info = _networkInfo;
-    final isConnected = info.isConnected;
-    final hasInternet = info.hasInternet;
-    final color = !isConnected
-        ? AppColors.error
-        : !hasInternet
-            ? const Color(0xFFF59E0B)
-            : AppColors.primaryTeal;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.6),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: color.withValues(alpha: 0.4), width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: color.withValues(alpha: 0.15),
-            blurRadius: 12,
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            !isConnected
-                ? Icons.wifi_off_rounded
-                : Icons.wifi_rounded,
-            color: color,
-            size: 18,
-          ),
-          const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                !isConnected
-                    ? 'NO INTERNET'
-                    : hasInternet
-                        ? info.speedLabel.toUpperCase()
-                        : 'OFFLINE',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  color: color,
-                  letterSpacing: 1,
-                ),
-              ),
-              if (isConnected && info.latencyMs > 0)
-                Text(
-                  '${info.latencyMs}ms',
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w600,
-                    color: color.withValues(alpha: 0.8),
-                  ),
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildFooter(Color bgColor, Color primaryColor, Color secondaryColor,
       bool isVideoActive) {
     return Container(
@@ -2276,6 +2204,13 @@ class _IdleScreenState extends State<IdleScreen>
             "${now.hour > 12 ? now.hour - 12 : (now.hour == 0 ? 12 : now.hour)}:${now.minute.toString().padLeft(2, '0')}";
         final period = now.hour >= 12 ? 'PM' : 'AM';
 
+        final info = _networkInfo;
+        final netColor = !info.isConnected
+            ? AppColors.error
+            : !info.hasInternet
+                ? const Color(0xFFF59E0B)
+                : AppColors.primaryTeal;
+
         return Row(
           children: [
             Column(
@@ -2298,6 +2233,58 @@ class _IdleScreenState extends State<IdleScreen>
                     letterSpacing: 1,
                     color: secondaryColor.withValues(alpha: 0.5),
                   ),
+                ),
+              ],
+            ),
+            const SizedBox(width: 24),
+            Container(
+              width: 1,
+              height: 32,
+              color: secondaryColor.withValues(alpha: 0.15),
+            ),
+            const SizedBox(width: 20),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  !info.isConnected
+                      ? Icons.wifi_off_rounded
+                      : info.connectionType == 'Ethernet'
+                          ? Icons.lan_rounded
+                          : Icons.wifi_rounded,
+                  size: 16,
+                  color: netColor,
+                ),
+                const SizedBox(width: 6),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      !info.isConnected ? 'OFFLINE' : info.hasInternet ? 'ONLINE' : 'NO INTERNET',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1,
+                        color: netColor,
+                      ),
+                    ),
+                    if (info.mbpsLabel.isNotEmpty)
+                      Text(
+                        info.mbpsLabel,
+                        style: TextStyle(
+                          fontSize: 8,
+                          fontWeight: FontWeight.w600,
+                          color: netColor.withValues(alpha: 0.8),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(width: 10),
+                Icon(
+                  Icons.favorite_rounded,
+                  size: 10,
+                  color: const Color(0xFF84CC16),
                 ),
               ],
             ),

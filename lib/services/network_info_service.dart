@@ -11,6 +11,7 @@ class NetworkInfo {
   final String connectionType;
   final int latencyMs;
   final bool hasInternet;
+  final double downloadMbps;
   final DateTime lastChecked;
 
   NetworkInfo({
@@ -19,6 +20,7 @@ class NetworkInfo {
     this.connectionType = 'None',
     this.latencyMs = 0,
     this.hasInternet = false,
+    this.downloadMbps = 0,
     required this.lastChecked,
   });
 
@@ -38,6 +40,12 @@ class NetworkInfo {
   }
 
   String get latencyLabel => '${latencyMs}ms';
+
+  String get mbpsLabel {
+    if (!isConnected || downloadMbps <= 0) return '';
+    if (downloadMbps >= 1) return '${downloadMbps.toStringAsFixed(1)} Mbps';
+    return '${(downloadMbps * 1000).toStringAsFixed(0)} Kbps';
+  }
 }
 
 class NetworkInfoService {
@@ -76,6 +84,7 @@ class NetworkInfoService {
       final connectionType = _resolveType(connectivityResults);
       final ssid = await _getSsid();
       final latency = await _ping();
+      final mbps = latency > 0 ? await _measureDownloadSpeed() : 0.0;
 
       _update(NetworkInfo(
         isConnected: true,
@@ -83,6 +92,7 @@ class NetworkInfoService {
         connectionType: connectionType,
         latencyMs: latency,
         hasInternet: latency > 0,
+        downloadMbps: mbps,
         lastChecked: DateTime.now(),
       ));
     } catch (e) {
@@ -134,6 +144,29 @@ class NetworkInfoService {
       await socket.close();
       stopwatch.stop();
       return stopwatch.elapsedMilliseconds;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  Future<double> _measureDownloadSpeed() async {
+    try {
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 5);
+      final stopwatch = Stopwatch()..start();
+      final request = await client.getUrl(Uri.parse('http://speedtest.tele2.net/1MB.zip'));
+      final response = await request.close().timeout(const Duration(seconds: 8));
+      int bytes = 0;
+      await for (final chunk in response) {
+        bytes += chunk.length;
+        if (stopwatch.elapsedMilliseconds > 5000) break;
+      }
+      await response.drain();
+      client.close();
+      stopwatch.stop();
+      if (stopwatch.elapsedMilliseconds == 0) return 0;
+      final seconds = stopwatch.elapsedMilliseconds / 1000.0;
+      return (bytes * 8) / (seconds * 1000000);
     } catch (_) {
       return 0;
     }

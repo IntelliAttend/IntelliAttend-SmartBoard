@@ -26,7 +26,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   NetworkInfo _networkInfo = NetworkInfo(isConnected: false, lastChecked: DateTime.now());
   StreamSubscription<NetworkInfo>? _networkSub;
-  String _sectionName = '';
   Timer? _speedTimer;
   int _speedTestMs = 0;
 
@@ -56,7 +55,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadData() async {
     await _loadIdleTheme();
     await _loadDeviceInfo();
-    _resolveSectionName();
   }
 
   Future<void> _loadIdleTheme() async {
@@ -83,35 +81,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  void _resolveSectionName() {
-    try {
-      final cache = TimetableCache();
-      final current = cache.currentSlot;
-      if (current != null && current.sectionName.isNotEmpty) {
-        _sectionName = current.sectionName;
-      } else {
-        final isar = Isar.getInstance();
-        if (isar != null) {
-          final all = isar.timetableEntrys.where().findAllSync();
-          if (all.isNotEmpty) {
-            _sectionName = all.first.sectionName;
-          }
-        }
-      }
-      if (mounted) setState(() {});
-    } catch (e) {
-      Log.d('[Settings] Could not resolve section: $e');
-    }
-  }
+  bool _hotspotEnabled = false;
+  bool _hotspotToggling = false;
+  bool _passwordVisible = false;
 
   String get _hotspotName {
-    final section = _sectionName.isNotEmpty ? _sectionName : 'BOARD';
-    return '$section Wi-Fi';
+    final room = _profile?.roomNumber ?? _registration?.roomName ?? '0000';
+    return 'IntelliAttend-$room';
   }
 
   String get _hotspotPassword {
     final room = _profile?.roomNumber ?? _registration?.roomName ?? '0000';
-    return 'IntelliAttend@$room';
+    return 'Choice@$room';
   }
 
   Future<void> _runSpeedTest() async {
@@ -146,8 +127,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             .thenByStartTime()
             .findAll();
         TimetableCache().updateAll(allEntries);
-
-        _resolveSectionName();
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -320,7 +299,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   borderRadius: BorderRadius.circular(14),
                 ),
                 child: Icon(
-                  _wifiIcon(info),
+                  _connectionIcon(info),
                   color: statusColor,
                   size: 26,
                 ),
@@ -340,7 +319,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '${info.connectionType} • ${info.speedLabel}',
+                      '${info.connectionType} • ${info.hasInternet ? info.speedLabel : info.speedLabel}${info.mbpsLabel.isNotEmpty ? ' • ${info.mbpsLabel}' : ''}',
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
@@ -361,11 +340,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _buildMetricItem(Icons.speed_rounded, 'Latency', info.isConnected ? info.latencyLabel : '—'),
               const SizedBox(width: 24),
               _buildMetricItem(
-                Icons.signal_cellular_alt_rounded,
-                'Status',
-                info.isConnected
-                    ? (hasInternet ? 'Online' : 'Offline')
-                    : 'Disconnected',
+                Icons.downloading_rounded,
+                'Speed',
+                info.mbpsLabel.isNotEmpty ? info.mbpsLabel : (info.isConnected ? '—' : '—'),
               ),
               const Spacer(),
               _buildSpeedTestButton(),
@@ -462,89 +439,136 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               ),
+              if (_hotspotToggling)
+                const SizedBox(
+                  width: 20, height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primaryTeal),
+                )
+              else
+                Switch(
+                  value: _hotspotEnabled,
+                  activeThumbColor: AppColors.primaryTeal,
+                  onChanged: _toggleHotspot,
+                ),
             ],
           ),
           const SizedBox(height: 20),
           Divider(color: Colors.black.withValues(alpha: 0.05), height: 1),
           const SizedBox(height: 16),
-          _buildHotspotInfoRow('Network Name', _hotspotName, Icons.wifi_rounded),
-          const SizedBox(height: 12),
-          _buildHotspotInfoRow('Password', _hotspotPassword, Icons.lock_outline_rounded),
-          const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: AppColors.primaryTeal.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.info_outline_rounded, size: 16, color: AppColors.primaryTeal),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Enable Windows Mobile Hotspot with these credentials so students can connect and access the internet.',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textSecondaryLight,
-                      height: 1.4,
+          Row(
+            children: [
+              Icon(Icons.wifi_rounded, size: 18, color: AppColors.primaryTeal),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Network Name', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.textSecondaryLight)),
+                    const SizedBox(height: 2),
+                    Text(
+                      _hotspotName,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimaryLight,
+                        letterSpacing: 0.5,
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Icon(Icons.lock_outline_rounded, size: 18, color: AppColors.primaryTeal),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Password', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.textSecondaryLight)),
+                    const SizedBox(height: 2),
+                    Text(
+                      _passwordVisible ? _hotspotPassword : '••••••••',
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimaryLight,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: Icon(
+                  _passwordVisible ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                  size: 18,
+                ),
+                color: AppColors.textSecondaryLight,
+                onPressed: () => setState(() => _passwordVisible = !_passwordVisible),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _buildHotspotInfoRow(String label, String value, IconData icon) {
-    return Row(
-      children: [
-        Icon(icon, size: 18, color: AppColors.primaryTeal),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.textSecondaryLight)),
-              const SizedBox(height: 2),
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimaryLight,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ],
+  Future<void> _toggleHotspot(bool enabled) async {
+    setState(() => _hotspotToggling = true);
+    try {
+      if (!Platform.isWindows) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Hotspot control is only available on Windows')),
+          );
+        }
+        return;
+      }
+
+      if (enabled) {
+        final nameResult = await Process.run('netsh', [
+          'wlan', 'set', 'hostednetwork', 'mode=allow',
+          'ssid=$_hotspotName', 'key=$_hotspotPassword',
+        ]);
+        Log.i('[Settings] Hosted network config: ${nameResult.stdout}');
+
+        final startResult = await Process.run('netsh', ['wlan', 'start', 'hostednetwork']);
+        Log.i('[Settings] Hosted network start: ${startResult.stdout}');
+      } else {
+        final stopResult = await Process.run('netsh', ['wlan', 'stop', 'hostednetwork']);
+        Log.i('[Settings] Hosted network stop: ${stopResult.stdout}');
+      }
+
+      if (mounted) {
+        setState(() => _hotspotEnabled = enabled);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(enabled ? 'Hotspot enabled: $_hotspotName' : 'Hotspot disabled'),
+            backgroundColor: AppColors.primaryTeal,
           ),
-        ),
-        IconButton(
-          icon: const Icon(Icons.copy_rounded, size: 18),
-          color: AppColors.textSecondaryLight,
-          onPressed: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('$label copied'),
-                duration: const Duration(seconds: 1),
-                backgroundColor: AppColors.primaryTeal,
-              ),
-            );
-          },
-        ),
-      ],
-    );
+        );
+      }
+    } catch (e) {
+      Log.e('[Settings] Hotspot toggle failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to toggle hotspot: $e'), backgroundColor: AppColors.error),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _hotspotToggling = false);
+    }
   }
 
-  IconData _wifiIcon(NetworkInfo info) {
+  IconData _connectionIcon(NetworkInfo info) {
     if (!info.isConnected) return Icons.wifi_off_rounded;
-    if (!info.hasInternet) return Icons.wifi_rounded;
-    if (info.latencyMs < 50) return Icons.signal_cellular_alt_rounded;
-    if (info.latencyMs < 150) return Icons.signal_cellular_alt_2_bar_rounded;
-    return Icons.signal_cellular_alt_1_bar_rounded;
+    if (info.connectionType == 'Ethernet') return Icons.lan_rounded;
+    if (info.connectionType == 'WiFi') return Icons.wifi_rounded;
+    return Icons.wifi_rounded;
   }
 
   Widget _buildStatusChip(String label, Color color) {
