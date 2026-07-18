@@ -139,7 +139,13 @@
     <UI>
       <UIRef Id="WixUI_Minimal" />
       <Property Id="WIXUI_INSTALLDIR" Value="APPLICATIONFOLDER" />
+      
+      <!-- Auto-launch after install -->
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication" Order="9999">1</Publish>
     </UI>
+
+    <!-- Custom action to launch app after install -->
+    <CustomAction Id="LaunchApplication" FileKey="F_exe" ExeCommand="" Return="asyncNoWait" />
 
     <Condition Message="This application requires a 64-bit Windows system.">
       VersionNT64
