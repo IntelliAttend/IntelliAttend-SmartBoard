@@ -52,8 +52,9 @@
               <Component Id="C_FlutterAssets" Guid="D3E4F5A6-B7C8-4901-DEF2-3456789ABCDE">
                 <File Id="FA_AssetManifest" Name="AssetManifest.bin" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\AssetManifest.bin" />
                 <File Id="FA_FontManifest" Name="FontManifest.json" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\FontManifest.json" />
-                <File Id="FA_NativeAssets" Name="NativeAssetsManifest.json" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\NativeAssetsManifest.json" />
+                <File Id="FA_NativeAssetsManifest" Name="NativeAssetsManifest.json" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\NativeAssetsManifest.json" />
                 <File Id="FA_NOTICES" Name="NOTICES.Z" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\NOTICES.Z" />
+                <File Id="FA_env" Name=".env" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\.env" />
                 <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\FlutterAssets" Name="installed" Type="integer" Value="1" KeyPath="yes" />
               </Component>
 
