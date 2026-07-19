@@ -569,6 +569,23 @@ class ApiService {
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
+  /// Fetch session history for this board's room.
+  ///
+  /// Returns today's sessions, past sessions grouped by day, and calendar
+  /// event markers for the last [daysBack] days.
+  static Future<Map<String, dynamic>> getBoardSessionHistory({
+    int daysBack = 7,
+  }) async {
+    final response = await _request(
+      'GET',
+      'api/v1/board/session-history?days_back=$daysBack',
+      headers: await _authHeaders(),
+      maxRetries: 2,
+    );
+    if (response.statusCode != 200) throw _apiError('SessionHistory', response);
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
   static Future<void> sendHardwareTelemetry(Map<String, dynamic> data) async {
     final response = await _request(
       'POST',

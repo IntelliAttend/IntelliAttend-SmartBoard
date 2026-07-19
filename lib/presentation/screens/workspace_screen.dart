@@ -148,9 +148,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
   static Color get _purple => const Color(0xFFA78BFA);
 
 
-  List<_TimelineEvent> get _todayTimeline => [];
-
-  static const List<_FlashbackDay> _flashbackDays = [];
+  List<_TimelineEvent> _todayTimeline = [];
+  List<_FlashbackDay> _flashbackDays = [];
+  Map<String, Map<String, dynamic>> _calendarEvents = {};
+  bool _historyLoaded = false;
 
   @override
   void initState() {
@@ -165,6 +166,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
       if (!_resourceTabController.indexIsChanging) setState(() {});
     });
     _loadResources();
+    _loadSessionHistory();
     _resourcesSub = NotificationListenerService().notificationsStream.listen((notifications) {
       if (!mounted) return;
       setState(() {
@@ -179,6 +181,68 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
         }
       });
     });
+  }
+
+  Future<void> _loadSessionHistory() async {
+    try {
+      final data = await ApiService.getBoardSessionHistory(daysBack: 7);
+      if (!mounted) return;
+
+      final todayRaw = data['today_sessions'] as List<dynamic>? ?? [];
+      final pastRaw = data['past_sessions'] as List<dynamic>? ?? [];
+      final calRaw = data['calendar_events'] as List<dynamic>? ?? [];
+
+      final todayEvents = todayRaw.map((s) => _TimelineEvent(
+        time: (s['start_time'] as String? ?? '').isNotEmpty
+            ? '${s['start_time']} – ${s['end_time'] ?? ''}'
+            : '',
+        title: s['course_name'] as String? ?? '',
+        description: _buildSessionDescription(s),
+      )).toList();
+
+      final flashback = <_FlashbackDay>[];
+      for (final day in pastRaw) {
+        final sessions = (day['sessions'] as List<dynamic>? ?? []);
+        flashback.add(_FlashbackDay(
+          label: day['day_label'] as String? ?? '',
+          date: day['date'] as String? ?? '',
+          events: sessions.map((s) => _TimelineEvent(
+            time: (s['start_time'] as String? ?? '').isNotEmpty
+                ? '${s['start_time']} – ${s['end_time'] ?? ''}'
+                : '',
+            title: s['course_name'] as String? ?? '',
+            description: _buildSessionDescription(s),
+          )).toList(),
+        ));
+      }
+
+      final calMap = <String, Map<String, dynamic>>{};
+      for (final ev in calRaw) {
+        calMap[ev['date'] as String] = Map<String, dynamic>.from(ev);
+      }
+
+      setState(() {
+        _todayTimeline = todayEvents;
+        _flashbackDays = flashback;
+        _calendarEvents = calMap;
+        _historyLoaded = true;
+      });
+    } catch (e) {
+      Log.w('[Workspace] Session history load failed: $e');
+      if (mounted) setState(() => _historyLoaded = true);
+    }
+  }
+
+  String _buildSessionDescription(Map<String, dynamic> session) {
+    final parts = <String>[];
+    final faculty = session['faculty_name'] as String? ?? '';
+    if (faculty.isNotEmpty) parts.add(faculty);
+    final section = session['section_id'] as String? ?? '';
+    if (section.isNotEmpty) parts.add('Section $section');
+    final present = session['attendance_count'] as int? ?? 0;
+    final total = session['total_students'] as int? ?? 0;
+    if (total > 0) parts.add('Attendance: $present/$total');
+    return parts.join(' · ');
   }
 
   Future<void> _loadResources() async {
@@ -1282,7 +1346,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                       ),
                     ),
                     Text(
-                      hasData ? 'Scroll up for older sessions' : 'No session history yet',
+                      !_historyLoaded
+                          ? 'Loading session history…'
+                          : hasData
+                              ? 'Scroll up for older sessions'
+                              : 'No session history yet',
                       style: TextStyle(fontSize: 11, color: _palette.textMuted),
                     ),
                   ],
@@ -1607,20 +1675,50 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                 final day = index - (firstWeekday - 2);
                 if (day < 1 || day > daysInMonth) return const SizedBox.shrink();
                 final isToday = day == now.day;
-                return Container(
-                  margin: const EdgeInsets.all(2),
-                  decoration: BoxDecoration(
-                    color: isToday ? _teal : Colors.transparent,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Center(
-                    child: Text(
-                      '$day',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: isToday ? FontWeight.w800 : FontWeight.w500,
-                        color: isToday ? Colors.white : _palette.textSecondary,
-                      ),
+                final dateKey = '${now.year}-${now.month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}';
+                final calEvent = _calendarEvents[dateKey];
+                final hasSessions = calEvent != null && (calEvent['session_count'] as int? ?? 0) > 0;
+                return GestureDetector(
+                  onTap: hasSessions ? () => _showCalendarDaySessions(dateKey, calEvent) : null,
+                  child: Container(
+                    margin: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: isToday ? _teal : Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
+                      border: hasSessions && !isToday
+                          ? Border.all(color: _teal.withValues(alpha: 0.4), width: 1)
+                          : null,
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          '$day',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: isToday ? FontWeight.w800 : FontWeight.w500,
+                            color: isToday ? Colors.white : _palette.textSecondary,
+                          ),
+                        ),
+                        if (hasSessions) ...[
+                          const SizedBox(height: 3),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: List.generate(
+                              (calEvent['session_count'] as int? ?? 0).clamp(0, 4),
+                              (_) => Container(
+                                width: 4,
+                                height: 4,
+                                margin: const EdgeInsets.symmetric(horizontal: 1),
+                                decoration: BoxDecoration(
+                                  color: isToday ? Colors.white70 : _teal,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                 );
@@ -1628,6 +1726,87 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showCalendarDaySessions(String dateKey, Map<String, dynamic> calEvent) {
+    final now = TimeSyncService.timeNow;
+    final dateParts = dateKey.split('-');
+    final month = int.tryParse(dateParts[1]) ?? now.month;
+    final day = int.tryParse(dateParts[2]) ?? now.day;
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    final dateLabel = '${months[month - 1]} $day';
+    final sessionCount = calEvent['session_count'] as int? ?? 0;
+    final hasCompleted = calEvent['has_completed'] as bool? ?? false;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(ctx).size.height * 0.45,
+        ),
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        decoration: BoxDecoration(
+          color: _palette.surface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _palette.border),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 14),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: _palette.border)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.calendar_today_rounded, size: 16, color: _teal),
+                  const SizedBox(width: 10),
+                  Text(
+                    dateLabel,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: _palette.textPrimary,
+                    ),
+                  ),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: hasCompleted ? _greenLight : _palette.elevated,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '$sessionCount session${sessionCount != 1 ? 's' : ''}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: hasCompleted ? _green : _palette.textMuted,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Flexible(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  'Session details will appear here',
+                  style: TextStyle(fontSize: 13, color: _palette.textMuted),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
