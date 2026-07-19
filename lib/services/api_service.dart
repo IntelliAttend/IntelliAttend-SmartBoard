@@ -146,10 +146,19 @@ class ApiService {
               '[API] Correlation ID mismatch: client=$reqId, server=$serverReqId');
         }
 
-        // 401: token expired or invalid — propagate immediately
+        // 401: token expired or invalid — try re-auth once, then propagate
+        if (response.statusCode == 401 && attempt == 0) {
+          Log.w('[API] $method $path got 401 — attempting re-auth');
+          final reAuthed = await _handleAuthFailure();
+          if (reAuthed) {
+            // Retry with fresh token
+            continue;
+          }
+          throw UnauthorizedException('Session expired. Please login again.');
+        }
+
         if (response.statusCode == 401) {
-          Log.w('[API] $method $path got 401 — session expired.');
-          throw UnauthorizedException('Session expired.');
+          throw UnauthorizedException('Session expired. Please login again.');
         }
 
         // 5xx server errors are retryable
@@ -211,18 +220,26 @@ class ApiService {
       headers['X-Device-ID'] = deviceId;
     }
 
-    // Board endpoints validate Firebase ID tokens directly via
-    // firebase_admin.auth.verify_id_token() — no backend JWT needed.
-    try {
-      final token = await TokenManager().getValidToken();
-      headers['Authorization'] = 'Bearer $token';
-    } catch (e) {
-      Log.w('[ApiService] Cannot attach auth header: $e');
-      // Request proceeds without a token — the server will return 401,
-      // which is an honest and debuggable response.
-    }
+    // Get auth token — throws if auth is broken (never silently fails).
+    final token = await TokenManager().getValidToken();
+    headers['Authorization'] = 'Bearer $token';
 
     return headers;
+  }
+
+  /// Attempt to re-authenticate after a 401 response.
+  /// Returns true if re-auth succeeded and caller should retry.
+  static Future<bool> _handleAuthFailure() async {
+    Log.w('[ApiService] 401 received — attempting re-auth');
+    TokenManager().invalidateCache();
+    try {
+      await TokenManager().getValidToken(forceRefresh: true);
+      return true;
+    } catch (e) {
+      Log.e('[ApiService] Re-auth failed: $e');
+      // Auth is broken — TokenManager already set state to unauthenticated
+      return false;
+    }
   }
 
   // ─── Time & Context ───────────────────────────────────────────────────────

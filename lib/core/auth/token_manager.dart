@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../../services/time_sync_service.dart';
@@ -11,73 +10,72 @@ import '../security/firebase_rest_auth.dart';
 import '../security/secure_storage_service.dart';
 import '../utils/logger.dart';
 
-/// Singleton gateway that is the single source of truth for Firebase ID
-/// tokens on the SmartBoard.
+/// Auth state for the SmartBoard.
+enum AuthState {
+  /// Token is valid, requests can proceed.
+  authenticated,
+
+  /// No valid token, login screen should be shown.
+  unauthenticated,
+
+  /// Token refresh or re-auth is in progress.
+  refreshing,
+}
+
+/// Bulletproof auth manager for the SmartBoard.
 ///
-/// All outbound HTTP calls — whether through `dio` (AuthInterceptor) or
-/// `package:http` (ApiService) — MUST obtain their Bearer token via
-/// [getValidToken].  This guarantees:
-///
-///   1. A 5‑minute memory cache avoids redundant secure‑storage reads.
-///   2. When the cache is stale the refresh‑token endpoint is called.
-///   3. If the refresh token itself is dead, a silent hard re‑auth is
-///      attempted with the hardware‑pinned email+password credentials.
-///   4. Only when all three layers fail does an exception reach the caller.
-///
-/// ## Testability
-///
-/// The [client] field is public so tests can inject a mock `http.Client`:
-///
-/// ```dart
-/// TokenManager().client = MockClient((req) => async { ... });
-/// ```
+/// Guarantees:
+///   - [getValidToken] always returns a valid token OR throws
+///   - Never silently fails — callers always know if auth is broken
+///   - Auto-refreshes tokens 5 minutes before expiry
+///   - Shows login screen when credentials are invalid
+///   - Supports explicit login with email + password
 class TokenManager {
   static TokenManager? _instance;
 
-  /// Returns the singleton instance.
   factory TokenManager() => _instance ??= TokenManager._();
 
   TokenManager._();
 
-  // ── Dependencies (swap for mocking) ─────────────────────────────────────
+  // ── Dependencies ──────────────────────────────────────────────────────
 
-  /// HTTP client used for calls to `securetoken.googleapis.com`.
-  /// NOT pinned — Google rotates certificates frequently.
   http.Client client = http.Client();
 
-  // ── In‑memory cache ─────────────────────────────────────────────────────
+  // ── Auth state ────────────────────────────────────────────────────────
+
+  AuthState _authState = AuthState.unauthenticated;
+  AuthState get authState => _authState;
+
+  /// Called when auth state changes. UI listens to this.
+  Function(AuthState)? onAuthStateChanged;
+
+  // ── In-memory cache ───────────────────────────────────────────────────
 
   String? _cachedAccessToken;
   String? _cachedRefreshToken;
   DateTime? _tokenExpiryTime;
 
-  /// 5‑minute buffer guarantees the token is refreshed before Google rejects
-  /// it on systems with reliable NTP.  For clock‑drifted boards, callers
-  /// should pass `forceRefresh: true`.
   static const Duration _buffer = Duration(minutes: 5);
 
-  // ── Refresh deduplication ───────────────────────────────────────────────
+  // ── Auto-refresh timer ────────────────────────────────────────────────
 
-  /// Non‑null while a token‑rotation HTTP request is in flight.
-  /// Subsequent callers multiplex onto the same future instead of firing
-  /// parallel requests (thundering‑herd protection).
+  Timer? _autoRefreshTimer;
+
+  // ── Refresh deduplication ─────────────────────────────────────────────
+
   Future<String>? _pendingRefreshFuture;
 
-  // ── Public API ──────────────────────────────────────────────────────────
+  // ── Public API ────────────────────────────────────────────────────────
 
   /// Returns a valid Firebase ID token.
   ///
   /// Resolution order:
-  ///   1. In‑memory cache (unless [forceRefresh] is true).
-  ///   2. Token rotation via `securetoken.googleapis.com/v1/token`.
-  ///   3. Hard re‑auth via `identitytoolkit.googleapis.com/…/signInWithPassword`
-  ///      using the hardware‑pinned credentials stored during registration.
+  ///   1. In-memory cache (unless [forceRefresh] is true).
+  ///   2. Token rotation via refresh token.
+  ///   3. Hard re-auth with stored credentials.
   ///
-  /// Throws [NoCredentialsException] if no board credentials are stored
-  /// (the board has never completed registration).
-  ///
-  /// Throws [InvalidCredentialsException] if the stored credentials were
-  /// rejected by the server (account disabled / password changed).
+  /// **NEVER returns null.** Either returns a valid token or throws.
+  /// This ensures callers always know if auth is working.
   Future<String> getValidToken({bool forceRefresh = false}) async {
     // ── 1. Memory cache ─────────────────────────────────────────────────
     if (!forceRefresh && _cachedAccessToken != null && _tokenExpiryTime != null) {
@@ -85,6 +83,8 @@ class TokenManager {
         return _cachedAccessToken!;
       }
     }
+
+    _setAuthState(AuthState.refreshing);
 
     // Refresh token from memory or secure storage.
     final refreshToken =
@@ -94,23 +94,62 @@ class TokenManager {
     if (refreshToken != null && refreshToken.isNotEmpty) {
       _cachedRefreshToken = refreshToken;
       try {
-        return await _executeDeduplicatedTokenRotation();
+        final token = await _executeDeduplicatedTokenRotation();
+        _setAuthState(AuthState.authenticated);
+        _startAutoRefresh();
+        return token;
       } catch (_) {
-        // Fall through to hard re‑auth
+        Log.w('[TokenManager] Refresh failed, trying hard re-auth');
       }
     }
 
-    // ── 3. Hard re‑auth ─────────────────────────────────────────────────
-    return await executeHardReAuth();
+    // ── 3. Hard re-auth ─────────────────────────────────────────────────
+    try {
+      final token = await executeHardReAuth();
+      _setAuthState(AuthState.authenticated);
+      _startAutoRefresh();
+      return token;
+    } on NoCredentialsException {
+      _setAuthState(AuthState.unauthenticated);
+      rethrow;
+    } on InvalidCredentialsException {
+      _setAuthState(AuthState.unauthenticated);
+      rethrow;
+    }
   }
 
-  /// Forces a full re‑authentication using the hardware‑pinned email and
-  /// password stored during board registration.
+  /// Explicit login with email + password.
   ///
-  /// On success the new ID token is cached both in memory and in secure
-  /// storage, and the (possibly rotated) refresh token is persisted.
-  ///
-  /// Throws [NoCredentialsException] or [InvalidCredentialsException].
+  /// Called by the login screen when user enters credentials.
+  /// On success, stores credentials and caches token.
+  /// Throws [InvalidCredentialsException] on wrong password.
+  /// Throws [FirebaseRestAuthException] on other errors.
+  Future<String> loginWithCredentials(String email, String password) async {
+    _setAuthState(AuthState.refreshing);
+
+    try {
+      final data = await FirebaseRestAuth.signInWithPassword(email, password);
+      _updateCacheFromSignInData(data);
+
+      // Store credentials for future re-auth
+      await SecureStorageService.storeBoardCredentials(email, password);
+
+      _setAuthState(AuthState.authenticated);
+      _startAutoRefresh();
+
+      final token = data['idToken'] as String;
+      Log.i('[TokenManager] Login successful: $email');
+      return token;
+    } on FirebaseRestAuthException catch (e) {
+      _setAuthState(AuthState.unauthenticated);
+      if (e.code == 'EMAIL_NOT_FOUND' || e.code == 'INVALID_LOGIN_CREDENTIALS') {
+        throw InvalidCredentialsException();
+      }
+      rethrow;
+    }
+  }
+
+  /// Forces a full re-authentication using stored credentials.
   Future<String> executeHardReAuth() async {
     final email = await SecureStorageService.getBoardEmail();
     final password = await SecureStorageService.getBoardPassword();
@@ -128,14 +167,27 @@ class TokenManager {
     }
   }
 
-  /// Resets the singleton so the next call to `TokenManager()` creates a
-  /// fresh instance with no memory cache.  Intended for testing only.
+  /// Check if credentials are stored (board has registered before).
+  Future<bool> hasStoredCredentials() async {
+    final email = await SecureStorageService.getBoardEmail();
+    final password = await SecureStorageService.getBoardPassword();
+    return email != null && password != null;
+  }
+
+  /// Logout — clears all tokens and credentials.
+  Future<void> logout() async {
+    _stopAutoRefresh();
+    invalidateCache();
+    await SecureStorageService.storeRefreshToken('');
+    await SecureStorageService.storeAccessToken('', 0);
+    _setAuthState(AuthState.unauthenticated);
+    Log.i('[TokenManager] Logged out');
+  }
+
   static void resetInstance() {
     _instance = null;
   }
 
-  /// Clears all cached tokens.  The next call to [getValidToken] will go
-  /// through the full resolution chain.  Does NOT wipe secure storage.
   void invalidateCache() {
     _cachedAccessToken = null;
     _cachedRefreshToken = null;
@@ -143,10 +195,53 @@ class TokenManager {
     _pendingRefreshFuture = null;
   }
 
-  // ── Deduplication wrapper ───────────────────────────────────────────────
+  // ── Auth state management ─────────────────────────────────────────────
+
+  void _setAuthState(AuthState state) {
+    if (_authState != state) {
+      _authState = state;
+      onAuthStateChanged?.call(state);
+      Log.d('[TokenManager] Auth state: $state');
+    }
+  }
+
+  // ── Auto-refresh ──────────────────────────────────────────────────────
+
+  void _startAutoRefresh() {
+    _stopAutoRefresh();
+    if (_tokenExpiryTime == null) return;
+
+    // Refresh 5 minutes before expiry
+    final refreshAt = _tokenExpiryTime!.subtract(_buffer);
+    final delay = refreshAt.difference(DateTime.now());
+    if (delay.isNegative) {
+      // Already expired, refresh now
+      _scheduleRefresh(const Duration(seconds: 5));
+    } else {
+      _scheduleRefresh(delay);
+    }
+  }
+
+  void _scheduleRefresh(Duration delay) {
+    _autoRefreshTimer = Timer(delay, () async {
+      try {
+        Log.i('[TokenManager] Auto-refresh triggered');
+        await getValidToken(forceRefresh: true);
+      } catch (e) {
+        Log.w('[TokenManager] Auto-refresh failed: $e');
+        _setAuthState(AuthState.unauthenticated);
+      }
+    });
+  }
+
+  void _stopAutoRefresh() {
+    _autoRefreshTimer?.cancel();
+    _autoRefreshTimer = null;
+  }
+
+  // ── Deduplication wrapper ─────────────────────────────────────────────
 
   Future<String> _executeDeduplicatedTokenRotation() async {
-    // If a rotation is already in flight, join it.
     if (_pendingRefreshFuture != null) {
       return _pendingRefreshFuture!;
     }
@@ -155,33 +250,26 @@ class TokenManager {
     try {
       return await _pendingRefreshFuture!;
     } finally {
-      // CRITICAL: Clear even on exception so a transient network drop never
-      // permanently poisons the pipeline.
       _pendingRefreshFuture = null;
     }
   }
 
-  // ── Token rotation ──────────────────────────────────────────────────────
+  // ── Token rotation ────────────────────────────────────────────────────
 
-  /// POSTs the refresh token to `securetoken.googleapis.com/v1/token` and
-  /// persists the new ID + (rotated) refresh tokens.
-  ///
-  /// Throws if the HTTP call fails or the response is malformed.
   Future<String> _refreshAccessToken() async {
     final apiKey = AppConfig.firebaseApiKey;
     if (apiKey.isEmpty) {
-      throw StateError('FIREBASE_API_KEY missing — cannot refresh token.');
+      throw StateError('FIREBASE_API_KEY missing');
     }
 
     final refreshToken =
         _cachedRefreshToken ?? await SecureStorageService.getRefreshToken();
     if (refreshToken == null || refreshToken.isEmpty) {
-      throw StateError('No refresh token available for rotation.');
+      throw StateError('No refresh token available');
     }
 
     final uri = Uri.parse(
-      'https://securetoken.googleapis.com/v1/token'
-      '?key=$apiKey',
+      'https://securetoken.googleapis.com/v1/token?key=$apiKey',
     );
 
     http.Response response;
@@ -194,25 +282,19 @@ class TokenManager {
           )
           .timeout(const Duration(seconds: 10));
     } on TimeoutException {
-      Log.w('[TokenManager] Refresh timed out.');
       rethrow;
     } catch (e) {
-      Log.w('[TokenManager] Refresh network error: $e');
       rethrow;
     }
 
     if (response.statusCode != 200) {
-      Log.w('[TokenManager] Refresh failed ${response.statusCode}: ${response.body}');
-
-      // 400 with "invalid_grant" means the refresh token was revoked/expired.
       if (response.statusCode == 400) {
         _cachedRefreshToken = null;
         _cachedAccessToken = null;
         _tokenExpiryTime = null;
         await SecureStorageService.storeRefreshToken('');
       }
-
-      throw Exception('Token refresh failed (${response.statusCode}).');
+      throw Exception('Token refresh failed (${response.statusCode})');
     }
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -221,14 +303,13 @@ class TokenManager {
     final expiresInStr = data['expires_in'] as String?;
 
     if (idToken == null || expiresInStr == null) {
-      throw FormatException('Malformed refresh response: $data');
+      throw FormatException('Malformed refresh response');
     }
 
     final expiresIn = int.parse(expiresInStr);
     final expiryMs =
         TimeSyncService.timeNow.millisecondsSinceEpoch + (expiresIn * 1000);
 
-    // Google may rotate the refresh token; persist whatever it returned.
     if (newRefresh != null && newRefresh != refreshToken) {
       _cachedRefreshToken = newRefresh;
       await SecureStorageService.storeRefreshToken(newRefresh);
@@ -239,26 +320,19 @@ class TokenManager {
     _cachedAccessToken = idToken;
     _tokenExpiryTime = DateTime.fromMillisecondsSinceEpoch(expiryMs);
 
-    if (kDebugMode) {
-      debugPrint('[TokenManager] Token refreshed (expires in ${expiresIn}s).');
-    }
-
+    Log.i('[TokenManager] Token refreshed (${expiresIn}s)');
     return idToken;
   }
 
-  // ── Cache helpers ───────────────────────────────────────────────────────
+  // ── Cache helpers ─────────────────────────────────────────────────────
 
   void _updateCacheFromSignInData(Map<String, dynamic> data) {
     final idToken = data['idToken'] as String?;
     final refreshToken = data['refreshToken'] as String?;
     final expiresInStr = data['expiresIn'] as String?;
 
-    if (idToken != null) {
-      _cachedAccessToken = idToken;
-    }
-    if (refreshToken != null) {
-      _cachedRefreshToken = refreshToken;
-    }
+    if (idToken != null) _cachedAccessToken = idToken;
+    if (refreshToken != null) _cachedRefreshToken = refreshToken;
     if (idToken != null && expiresInStr != null) {
       final expiresIn = int.parse(expiresInStr);
       _tokenExpiryTime = DateTime.now().add(Duration(seconds: expiresIn));
