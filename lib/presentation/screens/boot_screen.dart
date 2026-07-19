@@ -2,10 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/auth/token_manager.dart';
-import '../../core/errors/auth_exceptions.dart';
 import 'registration_screen.dart';
-import 'login_screen.dart';
 import 'session_orchestrator_screen.dart';
 import '../../data/repositories/device_repository.dart';
 import '../../services/api_service.dart';
@@ -60,43 +57,12 @@ class _BootScreenState extends State<BootScreen> {
         return;
       }
 
-      // Step 2: Verify auth — if credentials are invalid, show login screen
-      Log.i('[Boot] Verifying authentication...');
-      try {
-        await TokenManager().getValidToken();
-        Log.i('[Boot] Auth verified.');
-      } on NoCredentialsException {
-        Log.i('[Boot] No credentials stored. Showing login screen.');
-        if (mounted) {
-          Navigator.of(context).pushReplacement(
-            PageRouteBuilder(
-              pageBuilder: (_, __, ___) => const LoginScreen(),
-              transitionsBuilder: (_, a, __, child) => FadeTransition(opacity: a, child: child),
-              transitionDuration: const Duration(milliseconds: 400),
-            ),
-          );
-        }
-        return;
-      } on InvalidCredentialsException {
-        Log.i('[Boot] Invalid credentials. Showing login screen.');
-        if (mounted) {
-          Navigator.of(context).pushReplacement(
-            PageRouteBuilder(
-              pageBuilder: (_, __, ___) => const LoginScreen(),
-              transitionsBuilder: (_, a, __, child) => FadeTransition(opacity: a, child: child),
-              transitionDuration: const Duration(milliseconds: 400),
-            ),
-          );
-        }
-        return;
-      }
-
-      // Step 3: Minimum splash display + wait just long enough for the logo
+      // Step 2: Minimum splash display + wait just long enough for the logo
       // to render and the user to register it.
       Log.i('[Boot] Local identity confirmed for ${registration.smartBoardId}. Splash display.');
       await Future<void>.delayed(const Duration(milliseconds: 600));
 
-      // Step 4: Smooth fade transition to the orchestrator
+      // Step 3: Smooth fade transition to the orchestrator
       Log.i('[Boot] Splash complete. Entering Orchestrator.');
       if (mounted) {
         Navigator.of(context).pushReplacement(
@@ -108,7 +74,7 @@ class _BootScreenState extends State<BootScreen> {
         );
       }
 
-      // Step 5: Background Resynchronization (runs in background, not blocking)
+      // Step 4: Background Resynchronization (runs in background, not blocking)
       _backgroundSync(deviceRepository);
 
     } catch (e) {
