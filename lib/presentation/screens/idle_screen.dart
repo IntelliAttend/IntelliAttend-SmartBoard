@@ -1315,7 +1315,7 @@ class _IdleScreenState extends State<IdleScreen>
       final facultyName = data['faculty_name']?.toString() ?? 'Professor';
       final courseName = data['course_name']?.toString() ?? 'Active Class';
       final sectionId =
-          data['section_id']?.toString() ?? widget.registration.smartBoardId;
+          data['section_id']?.toString() ?? data['context_ids']?['section_id']?.toString() ?? widget.registration.smartBoardId;
       if (sessionId == null || sessionSecret == null) {
         setState(() => _errorMessage =
             'Invalid server response: missing session data. Please try again with a new PIN.');
