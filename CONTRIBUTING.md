@@ -1,66 +1,47 @@
-# IntelliAttend SmartBoard
-
-Windows desktop kiosk application for classroom attendance. Built with Flutter, runs on physical SmartBoard hardware.
+# Contributing to IntelliAttend SmartBoard
 
 ## Branch Model
 
 ```
-school-main  ← production (auto-deploys to server + builds MSI)
-school-dev   ← staging (CI runs, no deploy)
+school-main  ← production (auto-deploys to server, SmartBoard devices auto-update)
+school-dev   ← staging (CI runs tests, no production deploy)
 main         ← legacy (unused)
 ```
 
-### Workflow
+## How to Contribute
 
-1. Create a feature branch from `school-dev`:
+1. **Create a feature branch** from `school-dev`:
    ```bash
    git checkout school-dev
-   git checkout -b feat/my-feature
+   git pull
+   git checkout -b feat/your-feature-name
    ```
-2. Push your branch — CI will run tests
-3. When ready, create a Pull Request → `school-dev`
-4. After review and merge to `school-dev`, the owner promotes to `school-main`
-5. Push to `school-main` triggers **production deploy** (builds MSI → uploads to server → SmartBoard devices auto-update)
 
-### What happens on push to `school-main`
+2. **Push your branch** — CI runs automatically:
+   ```bash
+   git push -u origin feat/your-feature-name
+   ```
 
-```
-Push to school-main
-  → CI builds Windows MSI (Flutter + WiX)
-  → Creates GitHub Release (v5.5.0+NN)
-  → Uploads MSI to production server (ci-upload endpoint)
-  → Server creates update manifest in database
-  → Admin Panel download page shows new version
-  → Existing SmartBoard devices auto-update on next heartbeat
-```
+3. **Create a Pull Request** targeting `school-dev`
 
-### Secrets Required
+4. **After review and merge** to `school-dev`, the project owner promotes to `school-main`
 
-| Secret | Purpose |
-|--------|---------|
-| `FIREBASE_API_KEY` | Firebase Web API key |
-| `FIREBASE_APP_ID` | Firebase App ID |
-| `FIREBASE_MESSAGING_SENDER_ID` | FCM sender ID |
-| `SSL_PIN_FINGERPRINT` | TLS certificate pin |
-| `DEPLOY_KEY` | Server auth for CI upload |
+## Push to `school-main` = Production Deploy
 
-### Variables Required
+When code is pushed to `school-main`, the following happens **automatically**:
 
-| Variable | Purpose |
-|----------|---------|
-| `API_BASE_URL` | Production backend URL |
-| `SERVER_URL` | Backend URL for CI upload |
-| `FIREBASE_PROJECT_ID` | Firebase project ID |
+1. CI builds the Windows MSI installer
+2. Creates a GitHub Release with version tag
+3. Uploads MSI to the production server
+4. Admin Panel download page shows the new version
+5. Existing SmartBoard devices auto-update on next heartbeat
 
-## Contributing
+**Only the project owner should push to `school-main`.**
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md)
+## Rules
 
-## Local Development
-
-```bash
-flutter pub get
-flutter run -d windows
-```
-
-Use `.env` file at project root for local configuration.
+- Never push directly to `school-main` without review
+- All changes go through `school-dev` first
+- Feature branches must branch from `school-dev`
+- Keep commit messages clear and concise
+- Test locally before pushing
