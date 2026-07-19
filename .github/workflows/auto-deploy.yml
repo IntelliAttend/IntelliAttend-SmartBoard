@@ -249,6 +249,7 @@ jobs:
             -H "X-Deploy-Key: ${{ secrets.DEPLOY_KEY }}" \
             -F "version=${FLUTTER_VERSION}" \
             -F "release_notes=Auto-deploy from commit ${{ github.sha }}" \
+            -F "commit_hash=${{ github.sha }}" \
             -F "force=true" \
             -F "rollout_percentage=100" \
             -F "file=@${MSI_PATH}"
