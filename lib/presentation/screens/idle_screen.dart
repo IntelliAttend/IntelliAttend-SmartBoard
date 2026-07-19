@@ -2187,10 +2187,53 @@ class _IdleScreenState extends State<IdleScreen>
                   ),
           ),
           const SizedBox(width: 40),
-          // Clock & Students
+          // WiFi status icon — color indicates state
+          _buildWifiStatusIcon(),
+          const SizedBox(width: 40),
+          // Clock — right-aligned
           _buildClockAndInfo(primaryColor, secondaryColor),
         ],
       ),
+    );
+  }
+
+  Widget _buildWifiStatusIcon() {
+    final info = _networkInfo;
+    final netColor = !info.isConnected
+        ? AppColors.error
+        : !info.hasInternet
+            ? const Color(0xFFF59E0B)
+            : AppColors.primaryTeal;
+
+    final speedMbps = info.downloadMbps;
+    final speedLabel = speedMbps > 0
+        ? '${speedMbps >= 10 ? speedMbps.toStringAsFixed(0) : speedMbps.toStringAsFixed(1)} Mbps'
+        : '';
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          !info.isConnected
+              ? Icons.wifi_off_rounded
+              : info.connectionType == 'Ethernet'
+                  ? Icons.lan_rounded
+                  : Icons.wifi_rounded,
+          size: 22,
+          color: netColor,
+        ),
+        if (speedLabel.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Text(
+            speedLabel,
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w600,
+              color: netColor.withValues(alpha: 0.8),
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -2204,89 +2247,26 @@ class _IdleScreenState extends State<IdleScreen>
             "${now.hour > 12 ? now.hour - 12 : (now.hour == 0 ? 12 : now.hour)}:${now.minute.toString().padLeft(2, '0')}";
         final period = now.hour >= 12 ? 'PM' : 'AM';
 
-        final info = _networkInfo;
-        final netColor = !info.isConnected
-            ? AppColors.error
-            : !info.hasInternet
-                ? const Color(0xFFF59E0B)
-                : AppColors.primaryTeal;
-
-        return Row(
+        return Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  "$timeStr $period",
-                  style: GoogleFonts.jetBrainsMono(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: primaryColor,
-                  ),
-                ),
-                Text(
-                  _getFormattedDate(now).toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1,
-                    color: secondaryColor.withValues(alpha: 0.5),
-                  ),
-                ),
-              ],
+            Text(
+              "$timeStr $period",
+              style: GoogleFonts.jetBrainsMono(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: primaryColor,
+              ),
             ),
-            const SizedBox(width: 24),
-            Container(
-              width: 1,
-              height: 32,
-              color: secondaryColor.withValues(alpha: 0.15),
-            ),
-            const SizedBox(width: 20),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  !info.isConnected
-                      ? Icons.wifi_off_rounded
-                      : info.connectionType == 'Ethernet'
-                          ? Icons.lan_rounded
-                          : Icons.wifi_rounded,
-                  size: 16,
-                  color: netColor,
-                ),
-                const SizedBox(width: 6),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      !info.isConnected ? 'OFFLINE' : info.hasInternet ? 'ONLINE' : 'NO INTERNET',
-                      style: TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1,
-                        color: netColor,
-                      ),
-                    ),
-                    if (info.mbpsLabel.isNotEmpty)
-                      Text(
-                        info.mbpsLabel,
-                        style: TextStyle(
-                          fontSize: 8,
-                          fontWeight: FontWeight.w600,
-                          color: netColor.withValues(alpha: 0.8),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(width: 10),
-                Icon(
-                  Icons.favorite_rounded,
-                  size: 10,
-                  color: const Color(0xFF84CC16),
-                ),
-              ],
+            Text(
+              _getFormattedDate(now).toUpperCase(),
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1,
+                color: secondaryColor.withValues(alpha: 0.5),
+              ),
             ),
           ],
         );
