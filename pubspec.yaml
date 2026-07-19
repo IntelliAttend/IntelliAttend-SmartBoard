@@ -68,6 +68,7 @@ dependencies:
   package_info_plus: ^9.0.1
   web_socket_channel: ^3.0.3
   lottie: ^3.3.3
+  number_flow: ^1.0.4
   # firebase_auth deliberately NOT included — the Windows C++ plugin calls
   # abort() when AuthStateListener / IdTokenListener callbacks fire on a
   # worker thread. Replaced by lib/core/security/firebase_rest_auth.dart

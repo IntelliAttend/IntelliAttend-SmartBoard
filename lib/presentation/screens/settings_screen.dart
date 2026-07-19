@@ -10,6 +10,8 @@ import '../../models/isar_schemas.dart';
 import '../../services/hydration_service.dart';
 import '../../services/timetable_cache.dart';
 import '../../services/network_info_service.dart';
+import '../../services/hotspot_service.dart';
+import 'package:number_flow/number_flow.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -34,6 +36,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _loadData();
     _startNetworkMonitoring();
+    _checkHotspotState();
   }
 
   @override
@@ -339,11 +342,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               _buildMetricItem(Icons.speed_rounded, 'Latency', info.isConnected ? info.latencyLabel : '—'),
               const SizedBox(width: 24),
-              _buildMetricItem(
-                Icons.downloading_rounded,
-                'Speed',
-                info.mbpsLabel.isNotEmpty ? info.mbpsLabel : (info.isConnected ? '—' : '—'),
-              ),
+              _buildRealTimeSpeedItem(info),
               const Spacer(),
               _buildSpeedTestButton(),
             ],
@@ -363,6 +362,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: AppColors.textSecondaryLight)),
             Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textPrimaryLight)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRealTimeSpeedItem(NetworkInfo info) {
+    return Row(
+      children: [
+        const Icon(Icons.downloading_rounded, size: 16, color: AppColors.textSecondaryLight),
+        const SizedBox(width: 6),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Speed', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: AppColors.textSecondaryLight)),
+            NumberFlow(
+              value: info.realTimeMbps,
+              decimalPlaces: info.realTimeMbps >= 10 ? 0 : 1,
+              suffix: ' Mbps',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textPrimaryLight),
+              spinDuration: const Duration(milliseconds: 500),
+              spinCurve: Curves.easeOut,
+              transformDuration: const Duration(milliseconds: 350),
+              transformCurve: Curves.easeOut,
+              opacityDuration: const Duration(milliseconds: 250),
+              opacityCurve: Curves.easeOut,
+            ),
           ],
         ),
       ],
@@ -517,6 +543,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Future<void> _checkHotspotState() async {
+    if (!Platform.isWindows) return;
+    try {
+      final enabled = await HotspotService().isEnabled();
+      if (mounted) setState(() => _hotspotEnabled = enabled);
+    } catch (e) {
+      Log.w('[Settings] Failed to check hotspot state: $e');
+    }
+  }
+
   Future<void> _toggleHotspot(bool enabled) async {
     setState(() => _hotspotToggling = true);
     try {
@@ -529,28 +565,59 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return;
       }
 
+      final service = HotspotService();
       if (enabled) {
-        final nameResult = await Process.run('netsh', [
-          'wlan', 'set', 'hostednetwork', 'mode=allow',
-          'ssid=$_hotspotName', 'key=$_hotspotPassword',
-        ]);
-        Log.i('[Settings] Hosted network config: ${nameResult.stdout}');
-
-        final startResult = await Process.run('netsh', ['wlan', 'start', 'hostednetwork']);
-        Log.i('[Settings] Hosted network start: ${startResult.stdout}');
+        await service.start(ssid: _hotspotName, password: _hotspotPassword);
       } else {
-        final stopResult = await Process.run('netsh', ['wlan', 'stop', 'hostednetwork']);
-        Log.i('[Settings] Hosted network stop: ${stopResult.stdout}');
+        await service.stop();
       }
 
+      await _checkHotspotState();
+
       if (mounted) {
-        setState(() => _hotspotEnabled = enabled);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(enabled ? 'Hotspot enabled: $_hotspotName' : 'Hotspot disabled'),
+            content: Text(_hotspotEnabled ? 'Hotspot enabled: $_hotspotName' : 'Hotspot disabled'),
             backgroundColor: AppColors.primaryTeal,
           ),
         );
+      }
+    } on HotspotException catch (e) {
+      Log.e('[Settings] Hotspot toggle failed: $e');
+      if (mounted) {
+        if (e.isAdminRequired) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Administrator Required'),
+              content: const Text(
+                'Hotspot control requires the app to run as Administrator.\n\n'
+                'Right-click the app and select "Run as administrator", or '
+                'configure auto-elevate in the app shortcut properties.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    Process.run('powershell', [
+                      '-NoProfile', '-Command',
+                      'Start-Process "ms-settings:network-mobilehotspot"',
+                    ]);
+                  },
+                  child: const Text('Open Settings'),
+                ),
+              ],
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to toggle hotspot: $e'), backgroundColor: AppColors.error),
+          );
+        }
       }
     } catch (e) {
       Log.e('[Settings] Hotspot toggle failed: $e');

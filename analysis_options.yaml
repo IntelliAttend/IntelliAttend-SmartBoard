@@ -27,6 +27,9 @@ linter:
 analyzer:
   errors:
     experimental_member_use: ignore
+  exclude:
+    - "IntelliAttend-SmartBoard-master/**"
+    - "local_plugins/**"
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options

@@ -36,6 +36,7 @@ import 'workspace_screen.dart';
 import '../../services/time_sync_service.dart';
 import '../../services/timetable_cache.dart';
 import '../../services/network_info_service.dart';
+import 'package:number_flow/number_flow.dart';
 import 'package:video_player/video_player.dart';
 import '../../services/pre_flight_service.dart';
 import '../../services/websocket_service.dart';
@@ -2205,31 +2206,42 @@ class _IdleScreenState extends State<IdleScreen>
             ? const Color(0xFFF59E0B)
             : AppColors.primaryTeal;
 
-    final speedMbps = info.downloadMbps;
-    final speedLabel = speedMbps > 0
-        ? '${speedMbps >= 10 ? speedMbps.toStringAsFixed(0) : speedMbps.toStringAsFixed(1)} Mbps'
-        : '';
-
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(
-          !info.isConnected
-              ? Icons.wifi_off_rounded
-              : info.connectionType == 'Ethernet'
-                  ? Icons.lan_rounded
-                  : Icons.wifi_rounded,
-          size: 22,
-          color: netColor,
+        SizedBox(
+          width: 70,
+          child: Icon(
+            !info.isConnected
+                ? Icons.wifi_off_rounded
+                : info.connectionType == 'Ethernet'
+                    ? Icons.lan_rounded
+                    : Icons.wifi_rounded,
+            size: 22,
+            color: netColor,
+          ),
         ),
-        if (speedLabel.isNotEmpty) ...[
+        if (info.isConnected) ...[
           const SizedBox(height: 2),
-          Text(
-            speedLabel,
-            style: TextStyle(
-              fontSize: 9,
-              fontWeight: FontWeight.w600,
-              color: netColor.withValues(alpha: 0.8),
+          SizedBox(
+            width: 70,
+            child: Center(
+              child: NumberFlow(
+                value: info.realTimeMbps,
+                decimalPlaces: info.realTimeMbps >= 10 ? 0 : 1,
+                suffix: ' Mbps',
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600,
+                  color: netColor.withValues(alpha: 0.8),
+                ),
+                spinDuration: const Duration(milliseconds: 500),
+                spinCurve: Curves.easeOut,
+                transformDuration: const Duration(milliseconds: 350),
+                transformCurve: Curves.easeOut,
+                opacityDuration: const Duration(milliseconds: 250),
+                opacityCurve: Curves.easeOut,
+              ),
             ),
           ),
         ],
