@@ -97,6 +97,7 @@ class WorkspaceScreen extends StatefulWidget {
   final List<int>? presentIndices;
   final List<int>? absentIndices;
   final bool isAttendanceSubmitted;
+  final WebsocketService? websocketService;
 
   const WorkspaceScreen({
     super.key,
@@ -112,6 +113,7 @@ class WorkspaceScreen extends StatefulWidget {
     this.presentIndices,
     this.absentIndices,
     this.isAttendanceSubmitted = false,
+    this.websocketService,
   });
 
   @override
@@ -833,7 +835,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                     MaterialPageRoute(
                       builder: (context) => AttendanceScreen(
                         sessionId: widget.sessionId,
-                        websocketService: WebsocketService(AppConfig.baseUrl),
+                        websocketService: widget.websocketService ?? WebsocketService(AppConfig.baseUrl),
                         capacity: widget.totalCapacity,
                         courseName: widget.courseName,
                         facultyName: widget.facultyName,

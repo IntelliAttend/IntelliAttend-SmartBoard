@@ -370,6 +370,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
           builder: (context) => WorkspaceScreen(
+            websocketService: widget.websocketService,
             sessionId: widget.sessionId,
             courseName: widget.courseName,
             facultyName: widget.facultyName,
