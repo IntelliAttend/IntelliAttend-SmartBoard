@@ -1544,12 +1544,7 @@ class _IdleScreenState extends State<IdleScreen>
             stackChildren.add(_buildActiveSessionOverlay(primaryTextColor, secondaryTextColor));
           }
 
-          // 6. Banner
-          if (_showStartingSoon && _upcomingSlot != null) {
-            stackChildren.add(_buildStartingSoonBanner());
-          }
-
-          // 6. Notification popdown (top-sliding banner)
+          // 5b. Notification popdown (top-sliding banner)
           if (_activePopdown != null) {
             stackChildren.add(
               Positioned(
@@ -2477,42 +2472,6 @@ class _IdleScreenState extends State<IdleScreen>
               const SizedBox(height: 2),
               Text(subtitle,
                 style: TextStyle(fontSize: 11, color: const Color(0xFF94A3B8)),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStartingSoonBanner() {
-    return Positioned(
-      top: 20,
-      left: 0,
-      right: 0,
-      child: Center(
-        child: GlassContainer(
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-          borderRadius: 30,
-          color: AppColors.primaryTeal.withValues(alpha: 0.9),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.timer_outlined, color: Colors.white, size: 18),
-              const SizedBox(width: 12),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 600),
-                child: Text(
-                  'CLASS STARTING SOON: ${_upcomingSlot!.courseName.toUpperCase()}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1.5,
-                    fontSize: 14,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
               ),
             ],
           ),
