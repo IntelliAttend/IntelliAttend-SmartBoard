@@ -168,8 +168,8 @@
       <Property Id="WIXUI_INSTALLDIR" Value="APPLICATIONFOLDER" />
 
       <!-- Replace the standard Welcome dialog flow with our license step -->
-      <Publish Dialog="WelcomeDialog" Control="Next" Event="NewDialog" Value="IntelliAttendLicenseDlg" Order="9999">1</Publish>
-      <Publish Dialog="IntelliAttendLicenseDlg" Control="Back" Event="NewDialog" Value="WelcomeDialog" Order="9999">1</Publish>
+      <Publish Dialog="WelcomeEULADlg" Control="Next" Event="NewDialog" Value="IntelliAttendLicenseDlg" Order="9999">1</Publish>
+      <Publish Dialog="IntelliAttendLicenseDlg" Control="Back" Event="NewDialog" Value="WelcomeEULADlg" Order="9999">1</Publish>
       <Publish Dialog="IntelliAttendLicenseDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="9999">LICENSEACCEPTED = "yes"</Publish>
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication" Order="9999">1</Publish>
 
@@ -191,7 +191,7 @@
         </Control>
 
         <Control Id="Back" Type="Button" X="180" Y="243" Width="56" Height="17" Text="Back">
-          <Publish Event="NewDialog" Value="WelcomeDialog" />
+          <Publish Event="NewDialog" Value="WelcomeEULADlg" />
         </Control>
         <Control Id="Next" Type="Button" X="236" Y="243" Width="56" Height="17" Default="yes" Text="I &amp;Agree">
           <Publish Event="NewDialog" Value="VerifyReadyDlg" />
