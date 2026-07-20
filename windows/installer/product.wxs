@@ -161,7 +161,7 @@
 
     <!-- Embedded license RTF for the EULA dialog -->
     <Binary Id="WixUILicenseRtf" SourceFile="License.rtf" />
-    <Property Id="LicenseAccepted" Value="no" Secure="yes" />
+    <Property Id="LICENSEACCEPTED" Value="no" Secure="yes" />
 
     <UI>
       <UIRef Id="WixUI_Minimal" />
@@ -170,7 +170,7 @@
       <!-- Replace the standard Welcome dialog flow with our license step -->
       <Publish Dialog="WelcomeDialog" Control="Next" Event="NewDialog" Value="IntelliAttendLicenseDlg" Order="9999">1</Publish>
       <Publish Dialog="IntelliAttendLicenseDlg" Control="Back" Event="NewDialog" Value="WelcomeDialog" Order="9999">1</Publish>
-      <Publish Dialog="IntelliAttendLicenseDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="9999">LicenseAccepted = "yes"</Publish>
+      <Publish Dialog="IntelliAttendLicenseDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="9999">LICENSEACCEPTED = "yes"</Publish>
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication" Order="9999">1</Publish>
 
       <!-- Custom License Agreement dialog -->
@@ -184,8 +184,8 @@
           <Text SourceFile="License.rtf" />
         </Control>
 
-        <Control Id="AcceptRadio" Type="RadioButtonGroup" X="20" Y="225" Width="330" Height="40" Property="LicenseAccepted">
-          <RadioButtonGroup Property="LicenseAccepted">
+        <Control Id="AcceptRadio" Type="RadioButtonGroup" X="20" Y="225" Width="330" Height="40" Property="LICENSEACCEPTED">
+          <RadioButtonGroup Property="LICENSEACCEPTED">
             <RadioButton Value="yes" Text="I accept the terms in the License Agreement" X="0" Y="0" Width="330" Height="16" />
           </RadioButtonGroup>
         </Control>
