@@ -19,11 +19,6 @@
         InstallPrivileges="limited"
         Comments="IntelliAttend SmartBoard - Classroom attendance tracking kiosk for educational institutions." />
 
-    <SummaryInformation
-        Description="IntelliAttend SmartBoard Attendance Kiosk"
-        Manufacturer="IntelliAttend"
-        InstallerVersion="200" />
-
     <!-- Handle upgrades: uninstall old version, install new version -->
     <MajorUpgrade
         AllowSameVersionUpgrades="yes"
@@ -189,7 +184,9 @@
         </Control>
 
         <Control Id="AcceptRadio" Type="RadioButtonGroup" X="20" Y="225" Width="330" Height="40" Property="LicenseAccepted">
-          <RadioButton Value="yes" Text="I accept the terms in the License Agreement" X="0" Y="0" Width="330" Height="16" />
+          <RadioButtonGroup Property="LicenseAccepted">
+            <RadioButton Value="yes" Text="I accept the terms in the License Agreement" X="0" Y="0" Width="330" Height="16" />
+          </RadioButtonGroup>
         </Control>
 
         <Control Id="Back" Type="Button" X="180" Y="243" Width="56" Height="17" Text="Back">
