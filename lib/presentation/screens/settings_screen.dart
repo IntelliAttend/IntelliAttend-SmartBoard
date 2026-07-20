@@ -43,6 +43,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _networkSub?.cancel();
     _speedTimer?.cancel();
+    _holdTimer?.cancel();
     super.dispose();
   }
 
@@ -87,6 +88,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _hotspotEnabled = false;
   bool _hotspotToggling = false;
   bool _passwordVisible = false;
+
+  Timer? _holdTimer;
+  double _holdProgress = 0.0;
+  bool _isHolding = false;
+  String? _holdAction;
 
   String get _hotspotName {
     final room = _profile?.roomNumber ?? _registration?.roomName ?? '0000';
@@ -243,6 +249,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onTap: _isSyncing ? null : _handleSyncTimetable,
                       isLoading: _isSyncing,
                       height: 80,
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildHoldActionButton(
+                            icon: Icons.power_settings_new_rounded,
+                            label: 'POWER OFF',
+                            action: 'shutdown',
+                            color: AppColors.error,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: _buildHoldActionButton(
+                            icon: Icons.restart_alt_rounded,
+                            label: 'RESTART',
+                            action: 'restart',
+                            color: const Color(0xFFF59E0B),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -842,6 +870,134 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
                 color: color ?? AppColors.textPrimaryLight,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _startHold(String action) {
+    _holdTimer?.cancel();
+    _holdProgress = 0.0;
+    _isHolding = true;
+    _holdAction = action;
+    _holdTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) {
+      if (!mounted) { timer.cancel(); return; }
+      setState(() {
+        _holdProgress += 0.04;
+        if (_holdProgress >= 1.0) {
+          _holdProgress = 1.0;
+          _isHolding = false;
+          _holdAction = null;
+          timer.cancel();
+          _executePowerAction(action);
+        }
+      });
+    });
+    setState(() {});
+  }
+
+  void _cancelHold() {
+    _holdTimer?.cancel();
+    if (_isHolding) {
+      setState(() {
+        _isHolding = false;
+        _holdProgress = 0.0;
+        _holdAction = null;
+      });
+    }
+  }
+
+  Future<void> _executePowerAction(String action) async {
+    try {
+      if (action == 'shutdown') {
+        await Process.run('shutdown', ['/s', '/t', '0']);
+      } else if (action == 'restart') {
+        await Process.run('shutdown', ['/r', '/t', '0']);
+      }
+    } catch (e) {
+      Log.e('[Settings] Power action failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Power action failed: $e'), backgroundColor: AppColors.error),
+        );
+      }
+    }
+  }
+
+  Widget _buildHoldActionButton({
+    required IconData icon,
+    required String label,
+    required String action,
+    required Color color,
+  }) {
+    final isActive = _isHolding && _holdAction == action;
+    final progress = isActive ? _holdProgress : 0.0;
+
+    return GestureDetector(
+      onTapDown: (_) => _startHold(action),
+      onTapUp: (_) => _cancelHold(),
+      onTapCancel: _cancelHold,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 100),
+        height: 80,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        decoration: BoxDecoration(
+          color: isActive ? color.withValues(alpha: 0.05) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isActive ? color.withValues(alpha: 0.3) : color.withValues(alpha: 0.1),
+            width: isActive ? 2 : 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: color.withValues(alpha: isActive ? 0.1 : 0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 36,
+              height: 36,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  if (isActive)
+                    SizedBox(
+                      width: 36,
+                      height: 36,
+                      child: CircularProgressIndicator(
+                        value: progress,
+                        strokeWidth: 3,
+                        valueColor: AlwaysStoppedAnimation<Color>(color),
+                        backgroundColor: color.withValues(alpha: 0.15),
+                      ),
+                    ),
+                  Icon(
+                    isActive && progress >= 1.0
+                        ? icon
+                        : Icons.lock_outline_rounded,
+                    size: 20,
+                    color: color,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: color,
                 letterSpacing: 0.5,
               ),
             ),
