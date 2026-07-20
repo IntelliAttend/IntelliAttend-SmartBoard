@@ -15,7 +15,14 @@
         InstallScope="perUser"
         Platform="x64"
         Description="IntelliAttend SmartBoard Attendance Kiosk"
-        Manufacturer="IntelliAttend" />
+        Manufacturer="IntelliAttend"
+        InstallPrivileges="limited"
+        Comments="IntelliAttend SmartBoard - Classroom attendance tracking kiosk for educational institutions." />
+
+    <SummaryInformation
+        Description="IntelliAttend SmartBoard Attendance Kiosk"
+        Manufacturer="IntelliAttend"
+        InstallerVersion="200" />
 
     <!-- Handle upgrades: uninstall old version, install new version -->
     <MajorUpgrade
@@ -24,7 +31,14 @@
 
     <Media Id="1" Cabinet="product.cab" EmbedCab="yes" />
 
+    <Icon Id="AppIcon" SourceFile="$(var.SourceDir)\$(var.AppName).exe" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="ARPHELPLINK" Value="https://intelliattend.app/support" />
+    <Property Id="ARPURLINFOABOUT" Value="https://intelliattend.app" />
+
     <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="TempFolder" Name="Temp" />
+
       <Directory Id="LocalAppDataFolder">
         <Directory Id="APPLICATIONFOLDER" Name="$(var.AppName)">
 
@@ -91,6 +105,12 @@
           </Directory>
 
           <Component Id="C_RemoveFolder" Guid="B1C2D3E4-F5A6-7890-BCDE-123456789012">
+            <RemoveFile Id="RemoveStartupTrace" Name="startup_trace.log" On="uninstall" />
+            <RemoveFile
+                Id="RemoveNativeEngineCrashFlag"
+                Directory="TempFolder"
+                Name="intelliattend_smartboard_native_engine_crash.flag"
+                On="uninstall" />
             <RemoveFolder Id="RemoveAppFolder" On="uninstall" />
             <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\Remove" Name="installed" Type="integer" Value="1" KeyPath="yes" />
           </Component>
@@ -103,9 +123,10 @@
             <Shortcut
                 Id="StartMenuShortcut"
                 Name="$(var.AppName)"
-                Description="IntelliAttend SmartBoard"
+                Description="IntelliAttend SmartBoard Attendance Kiosk"
                 Target="[APPLICATIONFOLDER]$(var.AppName).exe"
-                WorkingDirectory="APPLICATIONFOLDER" />
+                WorkingDirectory="APPLICATIONFOLDER"
+                Icon="AppIcon" />
             <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
             <RegistryValue
                 Root="HKCU"
@@ -126,7 +147,8 @@
             Key="Software\Microsoft\Windows\CurrentVersion\Run"
             Name="$(var.AppName)"
             Value="&quot;[APPLICATIONFOLDER]$(var.AppName).exe&quot; --intelliattend-autostart"
-            Type="string" />
+            Type="string"
+            KeyPath="yes" />
       </Component>
     </DirectoryRef>
 
@@ -142,13 +164,49 @@
       <ComponentRef Id="C_AutoStart" />
     </Feature>
 
-    <UI>
+    <!-- Embedded license RTF for the EULA dialog -->
+    <Binary Id="WixUILicenseRtf" SourceFile="License.rtf" />
+
+    <UI Id="IntelliAttendUI">
       <UIRef Id="WixUI_Minimal" />
       <Property Id="WIXUI_INSTALLDIR" Value="APPLICATIONFOLDER" />
-      
-      <!-- Auto-launch after install -->
+
+      <!-- Replace the standard Welcome dialog flow with our license step -->
+      <Publish Dialog="WelcomeDialog" Control="Next" Event="NewDialog" Value="LicenseAgreementDlg" Order="9999">1</Publish>
+      <Publish Dialog="LicenseAgreementDlg" Control="Back" Event="NewDialog" Value="WelcomeDialog" Order="9999">1</Publish>
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="9999">LicenseAccepted = "yes"</Publish>
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication" Order="9999">1</Publish>
     </UI>
+
+    <!-- Custom License Agreement dialog -->
+    <Dialog Id="LicenseAgreementDlg" Width="370" Height="270" Title="[ProductName] Setup">
+      <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+      <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}License Agreement" />
+      <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="Please read the following license agreement carefully." />
+      <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+      <Control Id="LicenseText" Type="ScrollableText" X="20" Y="60" Width="330" Height="150" Sunken="yes" ScrollBars="vertical">
+        <Text SourceFile="License.rtf" />
+      </Control>
+
+      <Control Id="AcceptRadio" Type="RadioButtonGroup" X="20" Y="225" Width="330" Height="40" Property="LicenseAccepted">
+        <RadioButtonGroup Value="yes">
+          <RadioButton Value="yes" Text="I accept the terms in the License Agreement" />
+        </RadioButtonGroup>
+      </Control>
+
+      <Control Id="Back" Type="Button" X="180" Y="243" Width="56" Height="17" Text="Back">
+        <Publish Event="NewDialog" Value="WelcomeDialog" />
+      </Control>
+      <Control Id="Next" Type="Button" X="236" Y="243" Width="56" Height="17" Default="yes" Text="I &amp;Agree">
+        <Publish Event="NewDialog" Value="VerifyReadyDlg" />
+      </Control>
+      <Control Id="Cancel" Type="Button" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
+        <Publish Event="SpawnDialog" Value="CancelDlg" />
+      </Control>
+
+      <Control Id="BottomLine" Type="Line" X="0" Y="239" Width="370" Height="0" />
+    </Dialog>
 
     <!-- Custom action to launch app after install -->
     <CustomAction Id="LaunchApplication" FileKey="F_exe" ExeCommand="" Return="asyncNoWait" />
