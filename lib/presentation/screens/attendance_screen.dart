@@ -27,6 +27,7 @@ class AttendanceScreen extends StatefulWidget {
 
   final WebsocketService websocketService;
   final int initialPresentCount;
+  final VoidCallback? onNavigateBack;
 
   const AttendanceScreen({
     super.key,
@@ -40,6 +41,7 @@ class AttendanceScreen extends StatefulWidget {
     this.sectionId,
     this.slotId,
     this.boardId,
+    this.onNavigateBack,
   });
 
   @override
@@ -902,6 +904,13 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       ),
       child: Row(
         children: [
+          if (widget.onNavigateBack != null)
+            IconButton(
+              onPressed: widget.onNavigateBack,
+              icon: Icon(Icons.arrow_back_rounded,
+                  color: isDark ? Colors.white70 : Colors.black54),
+              tooltip: 'Back to Idle',
+            ),
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
@@ -1126,7 +1135,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     final isPresent = _presentSeatIndices.contains(index);
     final isAbsent = _absentSeatIndices.contains(index);
     final student = index < _students.length ? _students[index] : null;
-    final roll = student?.rollNumber ?? RollNumberUtils.generateSeatCode(index);
+    final roll = RollNumberUtils.formatDisplay(student?.rollNumber ?? RollNumberUtils.generateSeatCode(index));
 
     Color bgColor;
     Color borderColor;
@@ -1301,8 +1310,9 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                     final student = index < _students.length
                         ? _students[index]
                         : null;
-                    final roll = student?.rollNumber ??
-                        RollNumberUtils.generateSeatCode(index);
+                    final roll = RollNumberUtils.formatDisplay(
+                        student?.rollNumber ??
+                        RollNumberUtils.generateSeatCode(index));
                     final name =
                         (student != null && student.name.isNotEmpty)
                             ? student.name
@@ -1322,7 +1332,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
-                              width: 28, height: 28,
+                              width: 36, height: 28,
                               decoration: BoxDecoration(
                                 color: accent.withValues(alpha: 0.15),
                                 borderRadius: BorderRadius.circular(8),

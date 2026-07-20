@@ -92,4 +92,29 @@ class RollNumberUtils {
     final normalized = normalize(rollNumber);
     return candidates.any((c) => normalize(c) == normalized);
   }
+
+  /// Detect if a roll number belongs to a lateral entry student.
+  /// Lateral entries have "66" at positions 6-7 in a standard 10-char roll number.
+  /// e.g. "24N41A6601" → lateral entry.
+  static bool isLateralEntry(String rollNumber) {
+    if (rollNumber.length >= 8) {
+      return rollNumber.substring(6, 8) == '66';
+    }
+    return false;
+  }
+
+  /// Format roll number for compact display on attendance tiles.
+  /// - Lateral entry: "LE XX" (e.g. "24N41A6601" → "LE 01")
+  /// - Regular: last 2 digits (e.g. "24N41A0401" → "01")
+  /// - Short roll numbers (< 3 chars): shown as-is.
+  static String formatDisplay(String rollNumber) {
+    if (rollNumber.isEmpty) return rollNumber;
+    final last2 = rollNumber.length >= 2
+        ? rollNumber.substring(rollNumber.length - 2)
+        : rollNumber;
+    if (isLateralEntry(rollNumber)) {
+      return 'LE $last2';
+    }
+    return last2;
+  }
 }
