@@ -17,12 +17,12 @@
         Description="IntelliAttend SmartBoard Attendance Kiosk"
         Manufacturer="IntelliAttend"
         InstallPrivileges="limited"
-        Comments="IntelliAttend SmartBoard - Classroom attendance tracking kiosk for educational institutions." />
-
-    <SummaryInformation
-        Description="IntelliAttend SmartBoard Attendance Kiosk"
-        Manufacturer="IntelliAttend"
-        InstallerVersion="200" />
+        Comments="IntelliAttend SmartBoard - Classroom attendance tracking kiosk for educational institutions.">
+      <SummaryInformation
+          Description="IntelliAttend SmartBoard Attendance Kiosk"
+          Manufacturer="IntelliAttend"
+          InstallerVersion="200" />
+    </Package>
 
     <!-- Handle upgrades: uninstall old version, install new version -->
     <MajorUpgrade
@@ -176,37 +176,37 @@
       <Publish Dialog="LicenseAgreementDlg" Control="Back" Event="NewDialog" Value="WelcomeDialog" Order="9999">1</Publish>
       <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="9999">LicenseAccepted = "yes"</Publish>
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication" Order="9999">1</Publish>
+
+      <!-- Custom License Agreement dialog -->
+      <Dialog Id="LicenseAgreementDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}License Agreement" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="Please read the following license agreement carefully." />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+        <Control Id="LicenseText" Type="ScrollableText" X="20" Y="60" Width="330" Height="150" Sunken="yes" ScrollBars="vertical">
+          <Text SourceFile="License.rtf" />
+        </Control>
+
+        <Control Id="AcceptRadio" Type="RadioButtonGroup" X="20" Y="225" Width="330" Height="40" Property="LicenseAccepted">
+          <RadioButtonGroup Value="yes">
+            <RadioButton Value="yes" Text="I accept the terms in the License Agreement" />
+          </RadioButtonGroup>
+        </Control>
+
+        <Control Id="Back" Type="Button" X="180" Y="243" Width="56" Height="17" Text="Back">
+          <Publish Event="NewDialog" Value="WelcomeDialog" />
+        </Control>
+        <Control Id="Next" Type="Button" X="236" Y="243" Width="56" Height="17" Default="yes" Text="I &amp;Agree">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg" />
+        </Control>
+        <Control Id="Cancel" Type="Button" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+
+        <Control Id="BottomLine" Type="Line" X="0" Y="239" Width="370" Height="0" />
+      </Dialog>
     </UI>
-
-    <!-- Custom License Agreement dialog -->
-    <Dialog Id="LicenseAgreementDlg" Width="370" Height="270" Title="[ProductName] Setup">
-      <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
-      <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}License Agreement" />
-      <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="Please read the following license agreement carefully." />
-      <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
-
-      <Control Id="LicenseText" Type="ScrollableText" X="20" Y="60" Width="330" Height="150" Sunken="yes" ScrollBars="vertical">
-        <Text SourceFile="License.rtf" />
-      </Control>
-
-      <Control Id="AcceptRadio" Type="RadioButtonGroup" X="20" Y="225" Width="330" Height="40" Property="LicenseAccepted">
-        <RadioButtonGroup Value="yes">
-          <RadioButton Value="yes" Text="I accept the terms in the License Agreement" />
-        </RadioButtonGroup>
-      </Control>
-
-      <Control Id="Back" Type="Button" X="180" Y="243" Width="56" Height="17" Text="Back">
-        <Publish Event="NewDialog" Value="WelcomeDialog" />
-      </Control>
-      <Control Id="Next" Type="Button" X="236" Y="243" Width="56" Height="17" Default="yes" Text="I &amp;Agree">
-        <Publish Event="NewDialog" Value="VerifyReadyDlg" />
-      </Control>
-      <Control Id="Cancel" Type="Button" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
-        <Publish Event="SpawnDialog" Value="CancelDlg" />
-      </Control>
-
-      <Control Id="BottomLine" Type="Line" X="0" Y="239" Width="370" Height="0" />
-    </Dialog>
 
     <!-- Custom action to launch app after install -->
     <CustomAction Id="LaunchApplication" FileKey="F_exe" ExeCommand="" Return="asyncNoWait" />
