@@ -1,0 +1,63 @@
+PRIVACY POLICY
+IntelliAttend SmartBoard
+
+Last Updated: July 2026
+
+This Privacy Policy describes how IntelliAttend ("we", "us", or "our") collects, uses, and protects information when you use the IntelliAttend SmartBoard application ("Software").
+
+1. INFORMATION WE COLLECT
+   The Software collects the following types of information:
+
+   a. Attendance Data: Student identification, check-in/check-out timestamps, classroom session details, and section/room assignments.
+
+   b. Device Information: Device identifier, operating system version, network configuration, hardware specifications (for compatibility and crash recovery), and application version.
+
+   c. Authentication Data: SmartBoard ID and credentials used to authenticate with our servers. Credentials are stored securely on-device using Windows DPAPI encryption.
+
+   d. Usage Logs: Application startup logs, error reports, and performance metrics to help us improve the Software.
+
+2. HOW WE USE YOUR INFORMATION
+   We use the collected information for the following purposes:
+   a. Providing and maintaining the attendance tracking service.
+   b. Processing and recording attendance data.
+   c. Sending real-time updates and notifications to authorized users.
+   d. Detecting and resolving technical issues.
+   e. Improving the Software and user experience.
+   f. Ensuring security and preventing unauthorized access.
+
+3. DATA STORAGE AND SECURITY
+   a. All data is transmitted over encrypted connections (HTTPS/TLS).
+   b. Sensitive data on the device is encrypted using Windows DPAPI (Data Protection API).
+   c. Server-side data is stored in encrypted databases with restricted access controls.
+   d. We implement SSL certificate pinning to prevent man-in-the-middle attacks.
+
+4. DATA SHARING
+   We do not sell or rent your personal information to third parties. We may share information only:
+   a. With your educational institution's authorized administrators.
+   b. As required by law or legal process.
+   c. To protect the rights, property, or safety of IntelliAttend, our users, or the public.
+
+5. DATA RETENTION
+   a. Attendance records are retained as configured by your institution's administrators.
+   b. Device and usage logs are retained for a maximum of 90 days.
+   c. You may request data deletion by contacting your institution administrator or support@intelliattend.app.
+
+6. YOUR RIGHTS
+   You have the right to:
+   a. Access the data collected about your institution's usage.
+   b. Request correction of inaccurate data.
+   c. Request deletion of your data, subject to institutional policies.
+   d. Opt out of non-essential data collection (crash reports, usage analytics).
+
+7. CHILDREN'S PRIVACY
+   The Software is designed for use in educational institutions. We do not knowingly collect information from children under 13 without appropriate institutional consent and authorization.
+
+8. CHANGES TO THIS POLICY
+   We may update this Privacy Policy from time to time. Significant changes will be communicated through application notifications or to your institution's administrators.
+
+9. CONTACT US
+   For questions about this Privacy Policy or to exercise your data rights, contact:
+   Email: support@intelliattend.app
+
+10. COMPLIANCE
+    We comply with applicable data protection regulations including GDPR (where applicable) and FERPA (Family Educational Rights and Privacy Act) for educational institutions in the United States.

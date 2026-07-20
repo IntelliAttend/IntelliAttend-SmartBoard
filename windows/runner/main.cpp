@@ -2,8 +2,66 @@
 #include <flutter/flutter_view_controller.h>
 #include <windows.h>
 
+#include <algorithm>
+#include <cstdio>
+#include <string>
+#include <vector>
+#include <wchar.h>
+
 #include "flutter_window.h"
 #include "utils.h"
+
+namespace {
+
+constexpr wchar_t kCrashFlagFile[] =
+    L"intelliattend_smartboard_native_engine_crash.flag";
+
+std::wstring CrashFlagPath() {
+  wchar_t temp_path[MAX_PATH];
+  const DWORD length = ::GetTempPathW(MAX_PATH, temp_path);
+  if (length == 0 || length >= MAX_PATH) {
+    return kCrashFlagFile;
+  }
+  return std::wstring(temp_path) + kCrashFlagFile;
+}
+
+void WriteNativeCrashFlag(DWORD code) {
+  const std::wstring path = CrashFlagPath();
+  HANDLE file = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    return;
+  }
+
+  char buffer[64];
+  const int length =
+      std::snprintf(buffer, sizeof(buffer), "exception=0x%08lx\r\n", code);
+  DWORD written = 0;
+  ::WriteFile(file, buffer, static_cast<DWORD>(length), &written, nullptr);
+  ::CloseHandle(file);
+}
+
+bool NativeCrashFlagExists() {
+  return ::GetFileAttributesW(CrashFlagPath().c_str()) !=
+         INVALID_FILE_ATTRIBUTES;
+}
+
+void ClearNativeCrashFlag() {
+  ::DeleteFileW(CrashFlagPath().c_str());
+}
+
+bool HasArgument(const std::vector<std::string>& args,
+                 const std::string& name) {
+  return std::find(args.begin(), args.end(), name) != args.end();
+}
+
+bool EnvEquals(const wchar_t* name, const wchar_t* value) {
+  wchar_t buffer[64];
+  const DWORD length = ::GetEnvironmentVariableW(name, buffer, 64);
+  return length > 0 && _wcsicmp(buffer, value) == 0;
+}
+
+}  // namespace
 
 // Unhandled exception filter: called when any unhandled C++ or structured
 // exception escapes the Flutter message loop. Shows a friendly error so the
@@ -15,7 +73,15 @@ TopLevelExceptionFilter(EXCEPTION_POINTERS *ep) noexcept {
   const DWORD code = ep->ExceptionRecord->ExceptionCode;
   const wchar_t *desc;
 
+  WriteNativeCrashFlag(code);
+
   switch (code) {
+    case 0xc000041d:
+      desc = L"The Flutter rendering engine failed while starting. "
+             L"IntelliAttend will try GPU compatibility mode on the next "
+             L"launch. If this repeats, update the app build and Intel GPU "
+             L"driver, or contact IntelliAttend support.";
+      break;
     case 0xE06D7363:  // MSVC C++ exception (e.g. from cloud_firestore SDK)
       desc = L"A native plugin component encountered an error and needs to "
              L"close. Please restart the application.";
@@ -29,7 +95,7 @@ TopLevelExceptionFilter(EXCEPTION_POINTERS *ep) noexcept {
   }
 
   ::MessageBoxW(nullptr, desc,
-                L"IntelliAttend SmartBoard — Unexpected Error",
+                L"IntelliAttend SmartBoard - Startup Error",
                 MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
 
   return EXCEPTION_EXECUTE_HANDLER;
@@ -59,6 +125,19 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
 
+  const bool native_crash_recovery = NativeCrashFlagExists();
+  const bool force_low_power_gpu =
+      native_crash_recovery ||
+      HasArgument(command_line_arguments, "--intelliattend-low-power-gpu") ||
+      EnvEquals(L"INTELLIATTEND_GPU_MODE", L"low_power");
+
+  if (force_low_power_gpu) {
+    project.set_gpu_preference(flutter::GpuPreference::LowPowerPreference);
+    if (!HasArgument(command_line_arguments, "--native-crash-recovery")) {
+      command_line_arguments.push_back("--native-crash-recovery");
+    }
+  }
+
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
   FlutterWindow window(project);
@@ -76,6 +155,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     ::DispatchMessage(&msg);
   }
 
+  ClearNativeCrashFlag();
   ::CoUninitialize();
   return EXIT_SUCCESS;
 }

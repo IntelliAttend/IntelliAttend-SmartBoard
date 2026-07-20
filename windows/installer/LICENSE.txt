@@ -1,0 +1,48 @@
+END USER LICENSE AGREEMENT (EULA)
+IntelliAttend SmartBoard
+
+Last Updated: July 2026
+
+IMPORTANT - READ CAREFULLY: This End User License Agreement ("Agreement") is a legal agreement between you ("User" or "Institution") and IntelliAttend ("Company", "we", "us", or "our") for the use of IntelliAttend SmartBoard software ("Software").
+
+By installing, copying, or using this Software, you agree to be bound by the terms of this Agreement. If you do not agree, do not install or use the Software.
+
+1. GRANT OF LICENSE
+   IntelliAttend grants you a non-exclusive, non-transferable, limited license to install and use the Software on a single device owned or controlled by your educational institution, solely for internal educational attendance tracking purposes.
+
+2. DESCRIPTION OF RIGHTS AND LIMITATIONS
+   a. The Software is licensed, not sold, to you.
+   b. You may not reverse engineer, decompile, or disassemble the Software.
+   c. You may not rent, lease, or lend the Software to third parties.
+   d. You may not use the Software for any unlawful purpose.
+   e. You may not modify, adapt, or create derivative works based on the Software.
+
+3. DATA COLLECTION AND PRIVACY
+   a. The Software collects attendance data including student identifiers, timestamps, and device information.
+   b. All data is transmitted to and stored on IntelliAttend servers in accordance with our Privacy Policy.
+   c. By using this Software, you consent to the collection and processing of data as described in the Privacy Policy.
+   d. Institution administrators are responsible for obtaining necessary consents from students and staff.
+
+4. INTELLECTUAL PROPERTY
+   The Software and all copies thereof are proprietary to IntelliAttend and its licensors. All title and intellectual property rights in and to the Software (including but not limited to images, photographs, animations, video, audio, music, and text) are owned by IntelliAttend.
+
+5. DEVICE REQUIREMENTS
+   The Software requires a 64-bit Windows operating system, an active internet connection, and compatible hardware. The Software may not function properly on unsupported configurations.
+
+6. AUTOMATIC UPDATES
+   The Software may automatically check for and install updates. Updates may be downloaded and installed without additional notice to you.
+
+7. LIMITATION OF LIABILITY
+   IN NO EVENT SHALL INTELLIATTEND BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES ARISING OUT OF OR RELATED TO THE USE OF THE SOFTWARE, EVEN IF INTELLIATTEND HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+8. DISCLAIMER OF WARRANTIES
+   THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+
+9. TERMINATION
+   This Agreement is effective until terminated. IntelliAttend may terminate this Agreement at any time if you fail to comply with any term of this Agreement. Upon termination, you must destroy all copies of the Software.
+
+10. GOVERNING LAW
+    This Agreement shall be governed by and construed in accordance with the laws of the jurisdiction in which IntelliAttend operates.
+
+11. CONTACT
+    For questions about this Agreement, contact: support@intelliattend.app
