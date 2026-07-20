@@ -17,12 +17,12 @@
         Description="IntelliAttend SmartBoard Attendance Kiosk"
         Manufacturer="IntelliAttend"
         InstallPrivileges="limited"
-        Comments="IntelliAttend SmartBoard - Classroom attendance tracking kiosk for educational institutions.">
-      <SummaryInformation
-          Description="IntelliAttend SmartBoard Attendance Kiosk"
-          Manufacturer="IntelliAttend"
-          InstallerVersion="200" />
-    </Package>
+        Comments="IntelliAttend SmartBoard - Classroom attendance tracking kiosk for educational institutions." />
+
+    <SummaryInformation
+        Description="IntelliAttend SmartBoard Attendance Kiosk"
+        Manufacturer="IntelliAttend"
+        InstallerVersion="200" />
 
     <!-- Handle upgrades: uninstall old version, install new version -->
     <MajorUpgrade
@@ -184,14 +184,12 @@
         <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="Please read the following license agreement carefully." />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
 
-        <Control Id="LicenseText" Type="ScrollableText" X="20" Y="60" Width="330" Height="150" Sunken="yes" ScrollBars="vertical">
+        <Control Id="LicenseText" Type="ScrollableText" X="20" Y="60" Width="330" Height="150" Sunken="yes">
           <Text SourceFile="License.rtf" />
         </Control>
 
         <Control Id="AcceptRadio" Type="RadioButtonGroup" X="20" Y="225" Width="330" Height="40" Property="LicenseAccepted">
-          <RadioButtonGroup Value="yes">
-            <RadioButton Value="yes" Text="I accept the terms in the License Agreement" />
-          </RadioButtonGroup>
+          <RadioButton Value="yes" Text="I accept the terms in the License Agreement" X="0" Y="0" Width="330" Height="16" />
         </Control>
 
         <Control Id="Back" Type="Button" X="180" Y="243" Width="56" Height="17" Text="Back">
