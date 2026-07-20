@@ -48,7 +48,7 @@ dependencies:
   url_launcher: ^6.3.1
 
   # Windows Registry (for Startup)
-  win32_registry: ^2.1.0
+  win32_registry: ">=2.1.0 <4.0.0"
   
   # Logging
   logger: ^2.0.2+1
@@ -64,8 +64,8 @@ dependencies:
   
   # Network & Device Telemetry
   connectivity_plus: ^7.1.1
-  device_info_plus: ^12.4.0
-  package_info_plus: ^9.0.1
+  device_info_plus: ">=12.4.0 <14.0.0"
+  package_info_plus: ">=9.0.1 <11.0.0"
   web_socket_channel: ^3.0.3
   lottie: ^3.3.3
   number_flow: ^1.0.4
