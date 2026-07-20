@@ -53,6 +53,12 @@ vs_BuildTools.exe
 __pycache__/
 *.pyc
 
+# Legacy master directory (contains real credentials)
+IntelliAttend-SmartBoard-master/
+
+# Firebase config with real keys (managed per-platform, not committed)
+macos/Runner/GoogleService-Info.plist
+
 # OpenCode
 .opencode/
 
