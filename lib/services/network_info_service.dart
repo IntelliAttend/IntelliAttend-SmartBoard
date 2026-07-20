@@ -12,6 +12,7 @@ class NetworkInfo {
   final int latencyMs;
   final bool hasInternet;
   final double downloadMbps;
+  final double realTimeMbps;
   final DateTime lastChecked;
 
   NetworkInfo({
@@ -21,6 +22,7 @@ class NetworkInfo {
     this.latencyMs = 0,
     this.hasInternet = false,
     this.downloadMbps = 0,
+    this.realTimeMbps = 0,
     required this.lastChecked,
   });
 
@@ -60,15 +62,24 @@ class NetworkInfoService {
   NetworkInfo _current = NetworkInfo(isConnected: false, lastChecked: DateTime.now());
   NetworkInfo get current => _current;
 
+  // ── Real-time throughput tracking (netstat -e delta) ──────────────────
+  Timer? _throughputTimer;
+  int _prevBytesReceived = 0;
+  int _prevBytesSent = 0;
+  DateTime? _prevThroughputTime;
+
   void startMonitoring({Duration interval = const Duration(seconds: 10)}) {
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(interval, (_) => _probe());
     _probe();
+    _startThroughputMonitoring();
   }
 
   void stopMonitoring() {
     _pollTimer?.cancel();
     _pollTimer = null;
+    _throughputTimer?.cancel();
+    _throughputTimer = null;
   }
 
   Future<void> _probe() async {
@@ -102,9 +113,19 @@ class NetworkInfoService {
   }
 
   void _update(NetworkInfo info) {
-    _current = info;
+    // Preserve real-time throughput reading when the slow probe fires.
+    _current = NetworkInfo(
+      isConnected: info.isConnected,
+      ssid: info.ssid,
+      connectionType: info.connectionType,
+      latencyMs: info.latencyMs,
+      hasInternet: info.hasInternet,
+      downloadMbps: info.downloadMbps,
+      realTimeMbps: _current.realTimeMbps,
+      lastChecked: info.lastChecked,
+    );
     if (!_controller.isClosed) {
-      _controller.add(info);
+      _controller.add(_current);
     }
   }
 
@@ -169,6 +190,117 @@ class NetworkInfoService {
       return (bytes * 8) / (seconds * 1000000);
     } catch (_) {
       return 0;
+    }
+  }
+
+  // ── Real-time throughput via NIC byte-counter delta ────────────────────
+  //
+  // Reads cumulative Bytes Received / Bytes Sent from `netstat -e`
+  // every 2 s and derives instantaneous throughput:
+  //
+  //   throughput = (Δbytes × 8) / (Δtime × 1 000 000)   →  Mbps
+  //
+  // This is the same MIB-II interface counter that Windows Task Manager
+  // and professional network monitors (Wireshark, GlassWire) read.
+  // The command itself generates zero network traffic and completes in
+  // ~10 ms.
+
+  /// Parses `netstat -e` stdout and returns `(bytesReceived, bytesSent)`.
+  ///
+  /// Returns `null` when the output cannot be parsed (e.g. non-English
+  /// locale, unexpected format, empty string).
+  static (int, int)? parseNetstatOutput(String output) {
+    for (final line in output.split('\n')) {
+      final trimmed = line.trim();
+      if (trimmed.toLowerCase().startsWith('bytes')) {
+        final numbers = RegExp(r'[\d,]+')
+            .allMatches(trimmed)
+            .map((m) => m.group(0)!)
+            .toList();
+        if (numbers.length >= 2) {
+          final received = int.tryParse(numbers[0].replaceAll(',', '')) ?? 0;
+          final sent = int.tryParse(numbers[1].replaceAll(',', '')) ?? 0;
+          return (received, sent);
+        }
+        return null;
+      }
+    }
+    return null;
+  }
+
+  /// Computes instantaneous throughput in Mbps from a byte-counter delta.
+  ///
+  /// [prevTotalBytes] and [currentTotalBytes] are cumulative (rx + tx).
+  /// [interval] is the wall-clock time between the two readings.
+  ///
+  /// Returns `0.0` when the delta is non-positive or the interval is zero
+  /// (guards against counter resets and clock quirks).  The result is
+  /// clamped to `[0, 100_000]` Mbps.
+  static double computeMbps(
+    int prevTotalBytes,
+    int currentTotalBytes,
+    Duration interval,
+  ) {
+    final timeSec = interval.inMilliseconds / 1000.0;
+    if (timeSec <= 0) return 0.0;
+    final bytesDelta = currentTotalBytes - prevTotalBytes;
+    if (bytesDelta <= 0) return 0.0;
+    final mbps = (bytesDelta * 8) / (timeSec * 1000000);
+    return mbps.clamp(0.0, 100000.0);
+  }
+
+  void _startThroughputMonitoring() {
+    _throughputTimer?.cancel();
+    _prevBytesReceived = 0;
+    _prevBytesSent = 0;
+    _prevThroughputTime = null;
+    // Take the baseline reading immediately so the first timer tick
+    // (2 s later) already has a valid delta.
+    _measureThroughput();
+    _throughputTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _measureThroughput(),
+    );
+  }
+
+  Future<void> _measureThroughput() async {
+    if (!Platform.isWindows) return;
+    try {
+      final result = await Process.run('netstat', ['-e']);
+      if (result.exitCode != 0) return;
+
+      final parsed = parseNetstatOutput(result.stdout as String);
+      if (parsed == null) return;
+      final (bytesReceived, bytesSent) = parsed;
+
+      final now = DateTime.now();
+
+      if (_prevThroughputTime != null) {
+        final timeDelta = now.difference(_prevThroughputTime!);
+        final totalNow = bytesReceived + bytesSent;
+        final totalPrev = _prevBytesReceived + _prevBytesSent;
+        final clamped = computeMbps(totalPrev, totalNow, timeDelta);
+
+        _current = NetworkInfo(
+          isConnected: _current.isConnected,
+          ssid: _current.ssid,
+          connectionType: _current.connectionType,
+          latencyMs: _current.latencyMs,
+          hasInternet: _current.hasInternet,
+          downloadMbps: _current.downloadMbps,
+          realTimeMbps: clamped,
+          lastChecked: _current.lastChecked,
+        );
+        if (!_controller.isClosed) {
+          _controller.add(_current);
+        }
+      }
+
+      _prevBytesReceived = bytesReceived;
+      _prevBytesSent = bytesSent;
+      _prevThroughputTime = now;
+    } catch (e) {
+      Log.e('[NetworkInfo] Throughput measurement failed: $e');
     }
   }
 

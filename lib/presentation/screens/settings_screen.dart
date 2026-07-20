@@ -10,6 +10,8 @@ import '../../models/isar_schemas.dart';
 import '../../services/hydration_service.dart';
 import '../../services/timetable_cache.dart';
 import '../../services/network_info_service.dart';
+import '../../services/hotspot_service.dart';
+import 'package:number_flow/number_flow.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -34,12 +36,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _loadData();
     _startNetworkMonitoring();
+    _checkHotspotState();
   }
 
   @override
   void dispose() {
     _networkSub?.cancel();
     _speedTimer?.cancel();
+    _holdTimer?.cancel();
     super.dispose();
   }
 
@@ -84,6 +88,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _hotspotEnabled = false;
   bool _hotspotToggling = false;
   bool _passwordVisible = false;
+
+  Timer? _holdTimer;
+  double _holdProgress = 0.0;
+  bool _isHolding = false;
+  String? _holdAction;
 
   String get _hotspotName {
     final room = _profile?.roomNumber ?? _registration?.roomName ?? '0000';
@@ -241,6 +250,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       isLoading: _isSyncing,
                       height: 80,
                     ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildHoldActionButton(
+                            icon: Icons.power_settings_new_rounded,
+                            label: 'POWER OFF',
+                            action: 'shutdown',
+                            color: AppColors.error,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: _buildHoldActionButton(
+                            icon: Icons.restart_alt_rounded,
+                            label: 'RESTART',
+                            action: 'restart',
+                            color: const Color(0xFFF59E0B),
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -339,11 +370,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               _buildMetricItem(Icons.speed_rounded, 'Latency', info.isConnected ? info.latencyLabel : '—'),
               const SizedBox(width: 24),
-              _buildMetricItem(
-                Icons.downloading_rounded,
-                'Speed',
-                info.mbpsLabel.isNotEmpty ? info.mbpsLabel : (info.isConnected ? '—' : '—'),
-              ),
+              _buildRealTimeSpeedItem(info),
               const Spacer(),
               _buildSpeedTestButton(),
             ],
@@ -363,6 +390,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: AppColors.textSecondaryLight)),
             Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textPrimaryLight)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRealTimeSpeedItem(NetworkInfo info) {
+    return Row(
+      children: [
+        const Icon(Icons.downloading_rounded, size: 16, color: AppColors.textSecondaryLight),
+        const SizedBox(width: 6),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Speed', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: AppColors.textSecondaryLight)),
+            NumberFlow(
+              value: info.realTimeMbps,
+              decimalPlaces: info.realTimeMbps >= 10 ? 0 : 1,
+              suffix: ' Mbps',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textPrimaryLight),
+              spinDuration: const Duration(milliseconds: 500),
+              spinCurve: Curves.easeOut,
+              transformDuration: const Duration(milliseconds: 350),
+              transformCurve: Curves.easeOut,
+              opacityDuration: const Duration(milliseconds: 250),
+              opacityCurve: Curves.easeOut,
+            ),
           ],
         ),
       ],
@@ -517,6 +571,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Future<void> _checkHotspotState() async {
+    if (!Platform.isWindows) return;
+    try {
+      final enabled = await HotspotService().isEnabled();
+      if (mounted) setState(() => _hotspotEnabled = enabled);
+    } catch (e) {
+      Log.w('[Settings] Failed to check hotspot state: $e');
+    }
+  }
+
   Future<void> _toggleHotspot(bool enabled) async {
     setState(() => _hotspotToggling = true);
     try {
@@ -529,28 +593,59 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return;
       }
 
+      final service = HotspotService();
       if (enabled) {
-        final nameResult = await Process.run('netsh', [
-          'wlan', 'set', 'hostednetwork', 'mode=allow',
-          'ssid=$_hotspotName', 'key=$_hotspotPassword',
-        ]);
-        Log.i('[Settings] Hosted network config: ${nameResult.stdout}');
-
-        final startResult = await Process.run('netsh', ['wlan', 'start', 'hostednetwork']);
-        Log.i('[Settings] Hosted network start: ${startResult.stdout}');
+        await service.start(ssid: _hotspotName, password: _hotspotPassword);
       } else {
-        final stopResult = await Process.run('netsh', ['wlan', 'stop', 'hostednetwork']);
-        Log.i('[Settings] Hosted network stop: ${stopResult.stdout}');
+        await service.stop();
       }
 
+      await _checkHotspotState();
+
       if (mounted) {
-        setState(() => _hotspotEnabled = enabled);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(enabled ? 'Hotspot enabled: $_hotspotName' : 'Hotspot disabled'),
+            content: Text(_hotspotEnabled ? 'Hotspot enabled: $_hotspotName' : 'Hotspot disabled'),
             backgroundColor: AppColors.primaryTeal,
           ),
         );
+      }
+    } on HotspotException catch (e) {
+      Log.e('[Settings] Hotspot toggle failed: $e');
+      if (mounted) {
+        if (e.isAdminRequired) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Administrator Required'),
+              content: const Text(
+                'Hotspot control requires the app to run as Administrator.\n\n'
+                'Right-click the app and select "Run as administrator", or '
+                'configure auto-elevate in the app shortcut properties.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    Process.run('powershell', [
+                      '-NoProfile', '-Command',
+                      'Start-Process "ms-settings:network-mobilehotspot"',
+                    ]);
+                  },
+                  child: const Text('Open Settings'),
+                ),
+              ],
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to toggle hotspot: $e'), backgroundColor: AppColors.error),
+          );
+        }
       }
     } catch (e) {
       Log.e('[Settings] Hotspot toggle failed: $e');
@@ -775,6 +870,134 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
                 color: color ?? AppColors.textPrimaryLight,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _startHold(String action) {
+    _holdTimer?.cancel();
+    _holdProgress = 0.0;
+    _isHolding = true;
+    _holdAction = action;
+    _holdTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) {
+      if (!mounted) { timer.cancel(); return; }
+      setState(() {
+        _holdProgress += 0.04;
+        if (_holdProgress >= 1.0) {
+          _holdProgress = 1.0;
+          _isHolding = false;
+          _holdAction = null;
+          timer.cancel();
+          _executePowerAction(action);
+        }
+      });
+    });
+    setState(() {});
+  }
+
+  void _cancelHold() {
+    _holdTimer?.cancel();
+    if (_isHolding) {
+      setState(() {
+        _isHolding = false;
+        _holdProgress = 0.0;
+        _holdAction = null;
+      });
+    }
+  }
+
+  Future<void> _executePowerAction(String action) async {
+    try {
+      if (action == 'shutdown') {
+        await Process.run('shutdown', ['/s', '/t', '0']);
+      } else if (action == 'restart') {
+        await Process.run('shutdown', ['/r', '/t', '0']);
+      }
+    } catch (e) {
+      Log.e('[Settings] Power action failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Power action failed: $e'), backgroundColor: AppColors.error),
+        );
+      }
+    }
+  }
+
+  Widget _buildHoldActionButton({
+    required IconData icon,
+    required String label,
+    required String action,
+    required Color color,
+  }) {
+    final isActive = _isHolding && _holdAction == action;
+    final progress = isActive ? _holdProgress : 0.0;
+
+    return GestureDetector(
+      onTapDown: (_) => _startHold(action),
+      onTapUp: (_) => _cancelHold(),
+      onTapCancel: _cancelHold,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 100),
+        height: 80,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        decoration: BoxDecoration(
+          color: isActive ? color.withValues(alpha: 0.05) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isActive ? color.withValues(alpha: 0.3) : color.withValues(alpha: 0.1),
+            width: isActive ? 2 : 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: color.withValues(alpha: isActive ? 0.1 : 0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 36,
+              height: 36,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  if (isActive)
+                    SizedBox(
+                      width: 36,
+                      height: 36,
+                      child: CircularProgressIndicator(
+                        value: progress,
+                        strokeWidth: 3,
+                        valueColor: AlwaysStoppedAnimation<Color>(color),
+                        backgroundColor: color.withValues(alpha: 0.15),
+                      ),
+                    ),
+                  Icon(
+                    isActive && progress >= 1.0
+                        ? icon
+                        : Icons.lock_outline_rounded,
+                    size: 20,
+                    color: color,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: color,
                 letterSpacing: 0.5,
               ),
             ),

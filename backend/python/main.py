@@ -6,7 +6,7 @@ import logging
 import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import Optional
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func, and_, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
 import uvicorn
 from fastapi import FastAPI, Depends, HTTPException, status, Request, Response, APIRouter, Header, WebSocket, WebSocketDisconnect
@@ -30,6 +30,8 @@ from models.sql_models import (
     BoardVersion,
     UpdateEvent,
     ReleaseManifest,
+    TimetableSlot,
+    Course,
 )
 from services.board_service import HeartbeatService
 from services.session_service import SessionService
@@ -1159,6 +1161,178 @@ async def sync_vault(
 
     logger.info(f"📤 [VaultSync] Synced {len(request.queued_scans)} scans for session {request.session_id}")
     return {"status": "success", "synced_count": len(request.queued_scans)}
+
+@api_router.get("/session-history")
+async def get_session_history(
+    days_back: int = 7,
+    board_data: dict = Depends(get_current_board_pg),
+    pg_session: AsyncSession = Depends(get_pg_session),
+):
+    """Return session history for the board's room.
+
+    Groups completed/active sessions into today, past days, and calendar
+    event markers. JOINs timetable_slots for course_code, start/end times.
+    """
+    room_id = board_data.get("room_id", "")
+    if not room_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Board not bound to a room",
+        )
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    lookback_start = today_start - timedelta(days=days_back)
+
+    # ── 1. Fetch all sessions for this room within the lookback window ─────
+    result = await pg_session.execute(
+        select(ActiveSession, TimetableSlot)
+        .outerjoin(
+            TimetableSlot,
+            and_(
+                ActiveSession.slot_id == TimetableSlot.id,
+                ActiveSession.room_id == TimetableSlot.room_id,
+            ),
+        )
+        .where(ActiveSession.room_id == room_id)
+        .where(ActiveSession.status.in_([SessionStatus.ACTIVE, SessionStatus.COMPLETED, SessionStatus.ENDED]))
+        .where(ActiveSession.created_at >= lookback_start)
+        .order_by(ActiveSession.created_at.desc())
+    )
+    rows = result.all()
+
+    # ── 2. Fetch attendance counts for all session IDs in bulk ─────────────
+    session_ids = [r[0].session_id for r in rows]
+    attendance_counts: dict[str, int] = {}
+    total_counts: dict[str, int] = {}
+    if session_ids:
+        count_result = await pg_session.execute(
+            select(
+                SessionAttendee.session_id,
+                func.count(SessionAttendee.id).label("total"),
+                func.sum(
+                    func.cast(
+                        SessionAttendee.status == AttendeeStatus.PRESENT,
+                        Integer,
+                    )
+                ).label("present_count"),
+            )
+            .where(SessionAttendee.session_id.in_(session_ids))
+            .group_by(SessionAttendee.session_id)
+        )
+        for sid, total, present in count_result.all():
+            total_counts[sid] = total or 0
+            attendance_counts[sid] = present or 0
+
+    # ── 3. Fetch course codes from timetable slots ─────────────────────────
+    slot_ids = list({r[1].id for r in rows if r[1] is not None})
+    course_codes: dict[str, str] = {}
+    if slot_ids:
+        course_result = await pg_session.execute(
+            select(TimetableSlot.id, Course.code)
+            .join(Course, TimetableSlot.course_id == Course.id)
+            .where(TimetableSlot.id.in_(slot_ids))
+        )
+        for sid, code in course_result.all():
+            course_codes[sid] = code or ""
+
+    # ── 4. Build session dicts ────────────────────────────────────────────
+    def _build_session_dict(session: ActiveSession, slot: TimetableSlot | None) -> dict:
+        slot_id = session.slot_id or ""
+        start_time = ""
+        end_time = ""
+        if slot:
+            start_time = (slot.start_time or "")[:5]
+            end_time = (slot.end_time or "")[:5]
+
+        submitted = session.ended_at.isoformat() if session.ended_at else None
+        if not submitted and session.activated_at:
+            submitted = session.activated_at.isoformat()
+
+        return {
+            "slot_id": slot_id,
+            "session_id": session.session_id,
+            "course_name": session.course_name or "",
+            "course_code": course_codes.get(slot_id, ""),
+            "faculty_name": session.faculty_name or "",
+            "section_id": session.section_id or "",
+            "start_time": start_time,
+            "end_time": end_time,
+            "status": session.status.value,
+            "attendance_count": attendance_counts.get(session.session_id, 0),
+            "total_students": total_counts.get(session.session_id, session.roster_count or 0),
+            "submitted_at": submitted,
+        }
+
+    # ── 5. Group by date ──────────────────────────────────────────────────
+    DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    today_sessions = []
+    past_by_date: dict[str, dict] = {}
+    calendar_map: dict[str, dict] = {}
+
+    for session, slot in rows:
+        created = session.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        date_str = created.strftime("%Y-%m-%d")
+        day_label = DAY_LABELS[created.weekday()] if created.weekday() < 7 else ""
+
+        session_dict = _build_session_dict(session, slot)
+
+        # Calendar events
+        if date_str not in calendar_map:
+            calendar_map[date_str] = {"date": date_str, "session_count": 0, "has_completed": False}
+        calendar_map[date_str]["session_count"] += 1
+        if session.status in (SessionStatus.COMPLETED, SessionStatus.ENDED):
+            calendar_map[date_str]["has_completed"] = True
+
+        # Today vs past
+        session_date = created.replace(hour=0, minute=0, second=0, microsecond=0)
+        if session_date == today_start:
+            today_sessions.append(session_dict)
+        else:
+            if date_str not in past_by_date:
+                # Compute human-friendly label
+                delta_days = (today_start - session_date).days
+                if delta_days == 1:
+                    label = "Yesterday"
+                elif delta_days < 7:
+                    label = day_label
+                else:
+                    label = created.strftime("%b %d")
+                past_by_date[date_str] = {
+                    "date": created.strftime("%b %d, %Y"),
+                    "day_label": label,
+                    "sessions": [],
+                }
+            past_by_date[date_str]["sessions"].append(session_dict)
+
+    # Sort past days chronologically (newest first)
+    past_sessions = sorted(
+        past_by_date.values(),
+        key=lambda d: d["date"],
+        reverse=True,
+    )
+
+    # Sort today's sessions by start_time
+    today_sessions.sort(key=lambda s: s.get("start_time", ""))
+
+    # Sort calendar events by date
+    calendar_events = sorted(calendar_map.values(), key=lambda c: c["date"])
+
+    logger.info(
+        f"📅 [SessionHistory] Board {board_data.get('user_id', '')}: "
+        f"{len(today_sessions)} today, {len(past_sessions)} past days, "
+        f"{len(calendar_events)} calendar days"
+    )
+
+    return {
+        "today_sessions": today_sessions,
+        "past_sessions": past_sessions,
+        "calendar_events": calendar_events,
+    }
+
 
 @api_router.get("/hydrate")
 async def board_hydrate(

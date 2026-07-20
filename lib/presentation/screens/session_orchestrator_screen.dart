@@ -193,6 +193,7 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
           sectionId: state.sectionId,
           roomName: state.roomName ?? widget.registration.roomName,
           boardId: widget.registration.smartBoardId,
+          onNavigateBack: _returnToIdle,
         );
       case BoardState.closed:
         final state = _sessionState.currentState;

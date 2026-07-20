@@ -20,6 +20,7 @@ import '../../core/security/secure_storage_service.dart';
 import '../../core/rate_limiter.dart';
 import '../../models/board_notification.dart';
 import '../../models/isar_schemas.dart';
+import 'package:isar/isar.dart';
 import '../widgets/glass_container.dart';
 import '../widgets/pin_input.dart';
 import '../widgets/timeline_slot.dart';
@@ -36,6 +37,7 @@ import 'workspace_screen.dart';
 import '../../services/time_sync_service.dart';
 import '../../services/timetable_cache.dart';
 import '../../services/network_info_service.dart';
+import 'package:number_flow/number_flow.dart';
 import 'package:video_player/video_player.dart';
 import '../../services/pre_flight_service.dart';
 import '../../services/websocket_service.dart';
@@ -74,6 +76,9 @@ class _IdleScreenState extends State<IdleScreen>
   Timer? _preClassTimer;
   TimetableEntry? _upcomingSlot;
   bool _showStartingSoon = false;
+  bool _showMinimizeButton = false;
+  bool _hasOtpBeenTriggered = false;
+  bool _showSessionMenu = false;
   Timer? _inactivityTimer;
   final TextEditingController _otpController = TextEditingController();
 
@@ -98,6 +103,7 @@ class _IdleScreenState extends State<IdleScreen>
   PreFlightStatus _preFlightStatus = PreFlightStatus.none;
   String? _preFlightError;
   bool _isReadyCheckDone = false;
+  String? _roomNumber;
 
   /// Tracks which upcoming slot's warm-up has been initiated so the 10-second
   /// [_preClassTimer] in [_checkUpcomingClass] does NOT re-trigger a warm-up
@@ -301,12 +307,14 @@ class _IdleScreenState extends State<IdleScreen>
         });
       });
 
-      // 7. If returning from a completed attendance session, show COMPLETED
-      //    status for 3 seconds then auto-minimize to the OS desktop.
+      // 7. If returning from a completed attendance session, keep the
+      //    app on idle screen but show the minimize button so faculty
+      //    can manually minimize if desired.
       if (widget.completedSession) {
-        await Future.delayed(const Duration(seconds: 3));
-        if (!mounted) return;
-        await KioskService.setMode(KioskMode.suspended);
+        setState(() {
+          _showMinimizeButton = true;
+          _hasOtpBeenTriggered = true;
+        });
       }
     });
   }
@@ -382,9 +390,25 @@ class _IdleScreenState extends State<IdleScreen>
     final service = NetworkInfoService();
     service.startMonitoring(interval: const Duration(seconds: 10));
     _networkSub = service.onChanged.listen((info) {
-      if (mounted) setState(() => _networkInfo = info);
+      if (mounted) {
+        setState(() {
+          _networkInfo = info;
+          // Emergency minimize: show button when internet is lost
+          if (!info.hasInternet) {
+            _showMinimizeButton = true;
+          }
+          // Internet restored: hide button if OTP hasn't been triggered yet
+          if (info.hasInternet && !_hasOtpBeenTriggered) {
+            _showMinimizeButton = false;
+          }
+        });
+      }
     });
     _networkInfo = service.current;
+    // Initialize minimize button state based on current connectivity
+    if (!service.current.hasInternet) {
+      _showMinimizeButton = true;
+    }
   }
 
   void _initVideoBackground() {
@@ -507,6 +531,7 @@ class _IdleScreenState extends State<IdleScreen>
         _bedrockEntry = TimetableCache().currentSlot;
       });
     }
+    await _loadRoomNumber();
     await _loadCompletedSlots();
   }
 
@@ -568,6 +593,7 @@ class _IdleScreenState extends State<IdleScreen>
         _bedrockEntry = TimetableCache().currentSlot;
       });
     }
+    await _loadRoomNumber();
   }
 
   /// Checks the local Isar vault + SecureStorage for a resumable session.
@@ -1051,6 +1077,9 @@ class _IdleScreenState extends State<IdleScreen>
     _preFlightError = null;
     _forceShowCard = false;
     _showStartingSoon = false;
+    _showMinimizeButton = false;
+    _hasOtpBeenTriggered = false;
+    _showSessionMenu = false;
     _isKeypadExpanded = false;
     _upcomingSlot = null;
     _preAllocatedSessionId = null;
@@ -1314,7 +1343,7 @@ class _IdleScreenState extends State<IdleScreen>
       final facultyName = data['faculty_name']?.toString() ?? 'Professor';
       final courseName = data['course_name']?.toString() ?? 'Active Class';
       final sectionId =
-          data['section_id']?.toString() ?? widget.registration.smartBoardId;
+          data['section_id']?.toString() ?? data['context_ids']?['section_id']?.toString() ?? widget.registration.smartBoardId;
       if (sessionId == null || sessionSecret == null) {
         setState(() => _errorMessage =
             'Invalid server response: missing session data. Please try again with a new PIN.');
@@ -1345,6 +1374,9 @@ class _IdleScreenState extends State<IdleScreen>
           attendeeCount: 0,
         );
         WindowOrchestratorService().markAttendanceTaken(slotId);
+        if (mounted) {
+          setState(() => _completedSlotIds.add(slotId));
+        }
       }
 
       MetricsCollector().recordSessionStart();
@@ -1356,26 +1388,28 @@ class _IdleScreenState extends State<IdleScreen>
         setState(() {
           _preAllocatedSessionId = null;
           _upcomingAllocatedSessionId = null;
+          _hasOtpBeenTriggered = true;
+          _showMinimizeButton = true;
+          _forceShowCard = false;
+          _isKeypadExpanded = false;
+          _showSessionMenu = false;
         });
       }
 
       if (mounted) {
-        final wsService = WebsocketService(AppConfig.baseUrl);
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => AttendanceScreen(
-              sessionId: sessionId,
-              websocketService: wsService,
-              capacity: widget.registration.capacity,
-              courseName: courseName,
-              facultyName: facultyName,
-              sectionId: sectionId,
-              roomName: widget.registration.roomName,
-              slotId: slotId,
-              boardId: widget.registration.smartBoardId,
-            ),
-          ),
-        );
+        final activeSession = ActiveSession()
+          ..sessionId = sessionId
+          ..courseName = courseName
+          ..facultyName = facultyName
+          ..sectionId = sectionId
+          ..rosterCount = rosterCount
+          ..scheduledEndTime = TimeSyncService.timeNow.add(const Duration(hours: 1))
+          ..presentIndices = []
+          ..absentIndices = []
+          ..verifiedStudentIds = [];
+        setState(() {
+          _activeSession = activeSession;
+        });
       }
     } catch (e) {
       if (mounted) {
@@ -1539,16 +1573,11 @@ class _IdleScreenState extends State<IdleScreen>
           ));
 
           // 5. Active Session Overlay
-          if (_activeSession != null) {
+          if (_showSessionMenu && _activeSession != null) {
             stackChildren.add(_buildActiveSessionOverlay(primaryTextColor, secondaryTextColor));
           }
 
-          // 6. Banner
-          if (_showStartingSoon && _upcomingSlot != null) {
-            stackChildren.add(_buildStartingSoonBanner());
-          }
-
-          // 6. Notification popdown (top-sliding banner)
+          // 5b. Notification popdown (top-sliding banner)
           if (_activePopdown != null) {
             stackChildren.add(
               Positioned(
@@ -1775,11 +1804,12 @@ class _IdleScreenState extends State<IdleScreen>
             },
             icon: Icon(Icons.help_outline, color: iconColor)),
         // ──────────────────────────────────────────────────────────────────
-        IconButton(
-          onPressed: () => KioskService.setMode(KioskMode.suspended),
-          icon: Icon(Icons.minimize_rounded, color: iconColor),
-          tooltip: 'Minimize to Desktop',
-        ),
+        if (_showMinimizeButton)
+          IconButton(
+            onPressed: () => KioskService.setMode(KioskMode.suspended),
+            icon: Icon(Icons.minimize_rounded, color: iconColor),
+            tooltip: 'Minimize to Desktop',
+          ),
         IconButton(
             onPressed: () async {
               await Navigator.of(context).push(MaterialPageRoute(
@@ -1789,6 +1819,54 @@ class _IdleScreenState extends State<IdleScreen>
             icon: Icon(Icons.settings_outlined, color: iconColor)),
       ],
     );
+  }
+
+  String _getRoomName() {
+    final room = (_roomNumber != null && _roomNumber!.isNotEmpty)
+        ? _roomNumber!
+        : widget.registration.roomName;
+    if (room.isEmpty) return 'Unknown';
+    if (room.toLowerCase().startsWith('hall')) {
+      return room;
+    }
+    return 'Hall $room';
+  }
+
+  Future<void> _loadRoomNumber() async {
+    try {
+      final isar = Isar.getInstance();
+      if (isar != null) {
+        final profile = await isar.hydrationProfiles.where().findFirst();
+        if (mounted) {
+          setState(() {
+            _roomNumber = profile?.roomNumber;
+          });
+        }
+      }
+    } catch (e) {
+      Log.e('[IdleScreen] Failed to load hydration profile room: $e');
+    }
+  }
+
+  /// Normalises the raw class_type value from the server into a human-readable
+  /// label. The server may send 'regular', 'lecture', 'lab', 'laboratory', or
+  /// null/empty. Returns 'Lecture', 'Lab', or 'Unknown' accordingly.
+  String _normalizeClassType(String? raw) {
+    switch (raw?.toLowerCase().trim()) {
+      case 'lecture':
+      case 'regular':
+        return 'Lecture';
+      case 'lab':
+      case 'laboratory':
+        return 'Lab';
+      case null:
+      case '':
+        return 'Unknown';
+      default:
+        // Title-case any other non-empty value the server may send in future
+        final t = raw!.trim();
+        return t[0].toUpperCase() + t.substring(1).toLowerCase();
+    }
   }
 
   String _getCurrentSlotInfo() {
@@ -1891,6 +1969,14 @@ class _IdleScreenState extends State<IdleScreen>
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                       color: primaryColor,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${_getRoomName()} • ${_normalizeClassType(_bedrockEntry?.classType)}',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: secondaryColor,
                     ),
                   ),
                 ],
@@ -2187,10 +2273,64 @@ class _IdleScreenState extends State<IdleScreen>
                   ),
           ),
           const SizedBox(width: 40),
-          // Clock & Students
+          // WiFi status icon — color indicates state
+          _buildWifiStatusIcon(),
+          const SizedBox(width: 40),
+          // Clock — right-aligned
           _buildClockAndInfo(primaryColor, secondaryColor),
         ],
       ),
+    );
+  }
+
+  Widget _buildWifiStatusIcon() {
+    final info = _networkInfo;
+    final netColor = !info.isConnected
+        ? AppColors.error
+        : !info.hasInternet
+            ? const Color(0xFFF59E0B)
+            : AppColors.primaryTeal;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 70,
+          child: Icon(
+            !info.isConnected
+                ? Icons.wifi_off_rounded
+                : info.connectionType == 'Ethernet'
+                    ? Icons.lan_rounded
+                    : Icons.wifi_rounded,
+            size: 22,
+            color: netColor,
+          ),
+        ),
+        if (info.isConnected) ...[
+          const SizedBox(height: 2),
+          SizedBox(
+            width: 70,
+            child: Center(
+              child: NumberFlow(
+                value: info.realTimeMbps,
+                decimalPlaces: info.realTimeMbps >= 10 ? 0 : 1,
+                suffix: ' Mbps',
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600,
+                  color: netColor.withValues(alpha: 0.8),
+                ),
+                spinDuration: const Duration(milliseconds: 500),
+                spinCurve: Curves.easeOut,
+                transformDuration: const Duration(milliseconds: 350),
+                transformCurve: Curves.easeOut,
+                opacityDuration: const Duration(milliseconds: 250),
+                opacityCurve: Curves.easeOut,
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -2204,89 +2344,26 @@ class _IdleScreenState extends State<IdleScreen>
             "${now.hour > 12 ? now.hour - 12 : (now.hour == 0 ? 12 : now.hour)}:${now.minute.toString().padLeft(2, '0')}";
         final period = now.hour >= 12 ? 'PM' : 'AM';
 
-        final info = _networkInfo;
-        final netColor = !info.isConnected
-            ? AppColors.error
-            : !info.hasInternet
-                ? const Color(0xFFF59E0B)
-                : AppColors.primaryTeal;
-
-        return Row(
+        return Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  "$timeStr $period",
-                  style: GoogleFonts.jetBrainsMono(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: primaryColor,
-                  ),
-                ),
-                Text(
-                  _getFormattedDate(now).toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1,
-                    color: secondaryColor.withValues(alpha: 0.5),
-                  ),
-                ),
-              ],
+            Text(
+              "$timeStr $period",
+              style: GoogleFonts.jetBrainsMono(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: primaryColor,
+              ),
             ),
-            const SizedBox(width: 24),
-            Container(
-              width: 1,
-              height: 32,
-              color: secondaryColor.withValues(alpha: 0.15),
-            ),
-            const SizedBox(width: 20),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  !info.isConnected
-                      ? Icons.wifi_off_rounded
-                      : info.connectionType == 'Ethernet'
-                          ? Icons.lan_rounded
-                          : Icons.wifi_rounded,
-                  size: 16,
-                  color: netColor,
-                ),
-                const SizedBox(width: 6),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      !info.isConnected ? 'OFFLINE' : info.hasInternet ? 'ONLINE' : 'NO INTERNET',
-                      style: TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1,
-                        color: netColor,
-                      ),
-                    ),
-                    if (info.mbpsLabel.isNotEmpty)
-                      Text(
-                        info.mbpsLabel,
-                        style: TextStyle(
-                          fontSize: 8,
-                          fontWeight: FontWeight.w600,
-                          color: netColor.withValues(alpha: 0.8),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(width: 10),
-                Icon(
-                  Icons.favorite_rounded,
-                  size: 10,
-                  color: const Color(0xFF84CC16),
-                ),
-              ],
+            Text(
+              _getFormattedDate(now).toUpperCase(),
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1,
+                color: secondaryColor.withValues(alpha: 0.5),
+              ),
             ),
           ],
         );
@@ -2360,7 +2437,7 @@ class _IdleScreenState extends State<IdleScreen>
                     ),
                     IconButton(
                       icon: Icon(Icons.close_rounded, color: const Color(0xFF94A3B8)),
-                      onPressed: () => setState(() => _activeSession = null),
+                      onPressed: () => setState(() => _showSessionMenu = false),
                     ),
                   ],
                 ),
@@ -2407,6 +2484,7 @@ class _IdleScreenState extends State<IdleScreen>
                             slotId: null,
                             initialPresentCount: session.presentIndices.length,
                             boardId: widget.registration.smartBoardId,
+                            onNavigateBack: () => Navigator.of(context).pop(),
                           )),
                         );
                       },
@@ -2493,42 +2571,6 @@ class _IdleScreenState extends State<IdleScreen>
     );
   }
 
-  Widget _buildStartingSoonBanner() {
-    return Positioned(
-      top: 20,
-      left: 0,
-      right: 0,
-      child: Center(
-        child: GlassContainer(
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-          borderRadius: 30,
-          color: AppColors.primaryTeal.withValues(alpha: 0.9),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.timer_outlined, color: Colors.white, size: 18),
-              const SizedBox(width: 12),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 600),
-                child: Text(
-                  'CLASS STARTING SOON: ${_upcomingSlot!.courseName.toUpperCase()}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1.5,
-                    fontSize: 14,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildHangingLock(Color color) {
     final activeSlotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
     final isSlotCompleted =
@@ -2556,7 +2598,7 @@ class _IdleScreenState extends State<IdleScreen>
       showRing = true;
     } else if (isSlotCompleted) {
       ringValue = 1.0;
-      ringColor = AppColors.warningAmber;
+      ringColor = _activeSession != null ? AppColors.primaryTeal : AppColors.warningAmber;
       showRing = true;
     } else if (isUnlocked || isWarmingUp) {
       // T-3 / Warming-up: continue ring from break timer, or full green if no
@@ -2583,7 +2625,7 @@ class _IdleScreenState extends State<IdleScreen>
       label =
           'COOLDOWN PHASE\n${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
     } else if (isSlotCompleted) {
-      label = 'COMPLETED';
+      label = _activeSession != null ? 'VIEW SESSION' : 'COMPLETED';
     } else if (isUnlocked) {
       label = 'TAP TO START';
     } else if (isWarmingUp) {
@@ -2600,7 +2642,9 @@ class _IdleScreenState extends State<IdleScreen>
 
     // ── Theme colours per state ─────────────────────────────────────────────
     Color themeColor;
-    if (isSlotCompleted) {
+    if (isSlotCompleted && _activeSession != null) {
+      themeColor = AppColors.primaryTeal;
+    } else if (isSlotCompleted) {
       themeColor = AppColors.warningAmber;
     } else if (isUnlocked || isWarmingUp) {
       themeColor = AppColors.successLime;
@@ -2621,7 +2665,9 @@ class _IdleScreenState extends State<IdleScreen>
               });
               _resetInactivityTimer();
             }
-          : null,
+          : isSlotCompleted && _activeSession != null
+              ? () => setState(() => _showSessionMenu = true)
+              : null,
       borderRadius: BorderRadius.circular(50),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -2648,29 +2694,33 @@ class _IdleScreenState extends State<IdleScreen>
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: isSlotCompleted
-                      ? AppColors.warningAmber.withValues(alpha: 0.15)
-                      : isUnlocked || isWarmingUp
-                          ? AppColors.successLime.withValues(alpha: 0.15)
-                          : isWiping
-                              ? AppColors.error.withValues(alpha: 0.15)
-                              : isBreakTimerActive
-                                  ? AppColors.primaryTeal.withValues(alpha: 0.15)
-                                  : color.withValues(alpha: 0.05),
+                  color: isSlotCompleted && _activeSession != null
+                      ? AppColors.primaryTeal.withValues(alpha: 0.15)
+                      : isSlotCompleted
+                          ? AppColors.warningAmber.withValues(alpha: 0.15)
+                          : isUnlocked || isWarmingUp
+                              ? AppColors.successLime.withValues(alpha: 0.15)
+                              : isWiping
+                                  ? AppColors.error.withValues(alpha: 0.15)
+                                  : isBreakTimerActive
+                                      ? AppColors.primaryTeal.withValues(alpha: 0.15)
+                                      : color.withValues(alpha: 0.05),
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: isSlotCompleted
-                        ? AppColors.warningAmber.withValues(alpha: 0.3)
-                        : isUnlocked || isWarmingUp
-                            ? AppColors.successLime.withValues(alpha: 0.3)
-                            : isWiping || isBreakTimerActive
-                                ? Colors.transparent
-                                : color.withValues(alpha: 0.1),
+                    color: isSlotCompleted && _activeSession != null
+                        ? AppColors.primaryTeal.withValues(alpha: 0.3)
+                        : isSlotCompleted
+                            ? AppColors.warningAmber.withValues(alpha: 0.3)
+                            : isUnlocked || isWarmingUp
+                                ? AppColors.successLime.withValues(alpha: 0.3)
+                                : isWiping || isBreakTimerActive
+                                    ? Colors.transparent
+                                    : color.withValues(alpha: 0.1),
                   ),
                 ),
                 child: Icon(
                   isSlotCompleted
-                      ? Icons.check_circle_outline
+                      ? Icons.arrow_forward_rounded
                       : isUnlocked
                           ? Icons.lock_open_outlined
                           : isWarmingUp
