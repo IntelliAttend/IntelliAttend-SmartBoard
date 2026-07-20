@@ -161,8 +161,9 @@
 
     <!-- Embedded license RTF for the EULA dialog -->
     <Binary Id="WixUILicenseRtf" SourceFile="License.rtf" />
+    <Property Id="LicenseAccepted" Value="no" Secure="yes" />
 
-    <UI Id="IntelliAttendUI">
+    <UI>
       <UIRef Id="WixUI_Minimal" />
       <Property Id="WIXUI_INSTALLDIR" Value="APPLICATIONFOLDER" />
 
