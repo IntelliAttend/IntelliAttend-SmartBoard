@@ -153,7 +153,7 @@ void main(List<String> args) {
       // and restart the app.
       try {
         final info = await PackageInfo.fromPlatform();
-        final currentVer = Version.parse('${info.version}+${info.buildNumber}');
+        final currentVer = Version.parse(info.version);
         final rollbackInitiated = await UpdateHealthMonitor.init(currentVer);
         if (rollbackInitiated) {
           // UpdateHealthMonitor._performRollback exits the process.

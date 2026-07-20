@@ -466,43 +466,96 @@ class AutoUpdater {
 
   // ── MSI installation ──────────────────────────────────────────────────────
 
-  /// Invoke `msiexec` to install the MSI at [msiPath] in silent mode.
+  /// Invoke `msiexec` to install the MSI at [msiPath].
+  ///
+  /// Before installing, kills any running SmartBoard process to avoid
+  /// "file in use" errors. Uses `/passive` mode so the user sees a
+  /// progress bar. Retries up to 3 times on failure.
   ///
   /// Flags:
-  ///   `/quiet`       — no UI, no prompts
+  ///   `/passive`     — show progress bar, no user interaction required
   ///   `/norestart`   — don't force a reboot (the board will relaunch itself)
   ///   `/log`         — write install log for diagnostics
   ///
-  /// Throws on non-zero exit code.
+  /// Throws on non-zero exit code after all retries exhausted.
   static Future<void> _installMsi(String msiPath) async {
     if (!Platform.isWindows) {
       Log.w('[AutoUpdater] MSI install skipped (not Windows)');
       return;
     }
 
-    final logPath = '${Directory.systemTemp.path}\\IASB_install_${DateTime.now().millisecondsSinceEpoch}.log';
+    // ── Step 1: Kill existing SmartBoard process ────────────────────────────
+    await _killExistingProcess();
 
-    Log.i('[AutoUpdater] Installing: msiexec /i "$msiPath" /quiet /norestart /log "$logPath"');
+    // Give the OS a moment to fully release file handles.
+    await Future.delayed(const Duration(seconds: 2));
 
-    final result = await Process.run(
-      'msiexec',
-      ['/i', msiPath, '/quiet', '/norestart', '/log', logPath],
-    ).timeout(const Duration(minutes: 5));
+    // ── Step 2: Install with retry ──────────────────────────────────────────
+    const maxRetries = 3;
+    const retryDelay = Duration(seconds: 5);
 
-    if (result.exitCode != 0) {
-      // Exit code 3010 means "reboot required" — which is acceptable.
-      if (result.exitCode == 3010) {
-        Log.i('[AutoUpdater] msiexec exit code 3010 (reboot required) — continuing');
-        return;
+    for (int attempt = 1; attempt <= maxRetries; attempt++) {
+      final logPath = '${Directory.systemTemp.path}\\IASB_install_${DateTime.now().millisecondsSinceEpoch}.log';
+
+      Log.i('[AutoUpdater] Install attempt $attempt/$maxRetries: msiexec /i "$msiPath" /passive /norestart /log "$logPath"');
+
+      try {
+        final result = await Process.run(
+          'msiexec',
+          ['/i', msiPath, '/passive', '/norestart', '/log', logPath],
+        ).timeout(const Duration(minutes: 5));
+
+        if (result.exitCode == 0 || result.exitCode == 3010) {
+          // 3010 = "reboot required" — acceptable, app will relaunch.
+          if (result.exitCode == 3010) {
+            Log.i('[AutoUpdater] msiexec exit code 3010 (reboot required) — continuing');
+          } else {
+            Log.i('[AutoUpdater] msiexec completed successfully');
+          }
+          return;
+        }
+
+        Log.w('[AutoUpdater] Install attempt $attempt failed (exit code ${result.exitCode})');
+        Log.w('[AutoUpdater] stdout: ${result.stdout}');
+        Log.w('[AutoUpdater] stderr: ${result.stderr}');
+        Log.w('[AutoUpdater] Log: $logPath');
+      } catch (e) {
+        Log.w('[AutoUpdater] Install attempt $attempt threw exception: $e');
       }
-      throw Exception(
-          'msiexec exited with code ${result.exitCode}\n'
-          'stdout: ${result.stdout}\n'
-          'stderr: ${result.stderr}\n'
-          'Log: $logPath');
+
+      if (attempt < maxRetries) {
+        Log.i('[AutoUpdater] Retrying in ${retryDelay.inSeconds}s...');
+        await Future.delayed(retryDelay);
+        // Re-kill the process in case it partially restarted.
+        await _killExistingProcess();
+        await Future.delayed(const Duration(seconds: 2));
+      }
     }
 
-    Log.i('[AutoUpdater] msiexec completed successfully');
+    throw Exception(
+        'msiexec failed after $maxRetries attempts. '
+        'Check install logs in ${Directory.systemTemp.path}');
+  }
+
+  /// Kill any running SmartBoard process before installation.
+  /// Silently ignores errors (process may not be running).
+  static Future<void> _killExistingProcess() async {
+    try {
+      Log.i('[AutoUpdater] Killing existing SmartBoard process...');
+      final result = await Process.run(
+        'taskkill',
+        ['/F', '/IM', 'intelliattend_smartboard.exe'],
+      ).timeout(const Duration(seconds: 5));
+
+      if (result.exitCode == 0) {
+        Log.i('[AutoUpdater] Process killed successfully');
+      } else {
+        // Exit code 128 = "no such process" — already not running, that's fine.
+        Log.d('[AutoUpdater] taskkill returned ${result.exitCode} (may not be running)');
+      }
+    } catch (e) {
+      Log.d('[AutoUpdater] taskkill failed (non-critical): $e');
+    }
   }
 
   // ── App exit after install ────────────────────────────────────────────────
