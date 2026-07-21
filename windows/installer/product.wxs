@@ -116,7 +116,7 @@
           <Component Id="C_StartMenuShortcut" Guid="F6A7B8C9-D0E1-2345-EFAB-678901234567">
             <Shortcut
                 Id="StartMenuShortcut"
-                Name="$(var.AppName)"
+                Name="SmartBoard"
                 Description="IntelliAttend SmartBoard Attendance Kiosk"
                 Target="[APPLICATIONFOLDER]$(var.AppName).exe"
                 WorkingDirectory="APPLICATIONFOLDER"

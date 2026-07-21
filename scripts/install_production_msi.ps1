@@ -2,22 +2,11 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$MsiPath,
 
-    [Parameter(Mandatory = $true)]
     [string]$ApiBaseUrl,
-
-    [Parameter(Mandatory = $true)]
     [string]$FirebaseApiKey,
-
-    [Parameter(Mandatory = $true)]
     [string]$FirebaseProjectId,
-
-    [Parameter(Mandatory = $true)]
     [string]$FirebaseAppId,
-
-    [Parameter(Mandatory = $true)]
     [string]$FirebaseMessagingSenderId,
-
-    [Parameter(Mandatory = $true)]
     [string]$SslPinFingerprint,
 
     [switch]$NoLaunch
@@ -55,10 +44,6 @@ if (-not (Test-Path -LiteralPath $MsiPath)) {
     throw "MSI not found: $MsiPath"
 }
 
-if ([string]::IsNullOrWhiteSpace($SslPinFingerprint)) {
-    throw "SSL pin fingerprint is required for production installs."
-}
-
 New-Item -ItemType Directory -Path $configDir -Force | Out-Null
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 
@@ -75,22 +60,32 @@ if ($useGpuCompatibility) {
 }
 
 Write-Step "Writing durable app configuration"
-$envFile = Join-Path $configDir ".env"
-@"
-API_BASE_URL=$ApiBaseUrl
-FIREBASE_API_KEY=$FirebaseApiKey
-FIREBASE_PROJECT_ID=$FirebaseProjectId
-FIREBASE_APP_ID=$FirebaseAppId
-FIREBASE_MESSAGING_SENDER_ID=$FirebaseMessagingSenderId
-SSL_PIN_FINGERPRINT=$SslPinFingerprint
-ENABLE_DOCUMENTS=true
-DEBUG=false
-"@ | Set-Content -LiteralPath $envFile -Encoding UTF8
-Write-Host "Config: $envFile"
+$hasConfig = -not [string]::IsNullOrWhiteSpace($ApiBaseUrl) -or
+    -not [string]::IsNullOrWhiteSpace($FirebaseApiKey) -or
+    -not [string]::IsNullOrWhiteSpace($FirebaseProjectId)
+if ($hasConfig) {
+    $envFile = Join-Path $configDir ".env"
+    $lines = @()
+    if (-not [string]::IsNullOrWhiteSpace($ApiBaseUrl)) { $lines += "API_BASE_URL=$ApiBaseUrl" }
+    if (-not [string]::IsNullOrWhiteSpace($FirebaseApiKey)) { $lines += "FIREBASE_API_KEY=$FirebaseApiKey" }
+    if (-not [string]::IsNullOrWhiteSpace($FirebaseProjectId)) { $lines += "FIREBASE_PROJECT_ID=$FirebaseProjectId" }
+    if (-not [string]::IsNullOrWhiteSpace($FirebaseAppId)) { $lines += "FIREBASE_APP_ID=$FirebaseAppId" }
+    if (-not [string]::IsNullOrWhiteSpace($FirebaseMessagingSenderId)) { $lines += "FIREBASE_MESSAGING_SENDER_ID=$FirebaseMessagingSenderId" }
+    if (-not [string]::IsNullOrWhiteSpace($SslPinFingerprint)) { $lines += "SSL_PIN_FINGERPRINT=$SslPinFingerprint" }
+    $lines += "ENABLE_DOCUMENTS=true"
+    $lines += "DEBUG=false"
+    $lines -join "`r`n" | Set-Content -LiteralPath $envFile -Encoding UTF8
+    Write-Host "Config: $envFile"
+} else {
+    Write-Host "No config overrides provided - app will use built-in production defaults."
+}
 
 Write-Step "Installing MSI"
+$tempMsi = Join-Path $env:TEMP "intelliattend_install.msi"
+Copy-Item -LiteralPath $MsiPath -Destination $tempMsi -Force
+Write-Host "Copied MSI to temp: $tempMsi"
 $installLog = Join-Path $logDir "install_$(Get-Date -Format yyyyMMdd_HHmmss).log"
-$installArgs = @("/i", (Resolve-Path -LiteralPath $MsiPath).Path, "/passive", "/norestart", "/log", $installLog)
+$installArgs = @("/i", $tempMsi, "/passive", "/norestart", "/log", $installLog)
 $process = Start-Process -FilePath $msiexec -ArgumentList $installArgs -Wait -PassThru
 Write-Host "MSI exit code: $($process.ExitCode)"
 Write-Host "MSI log: $installLog"
