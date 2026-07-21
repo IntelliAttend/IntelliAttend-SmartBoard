@@ -34,8 +34,17 @@ class AppConfig {
     return url;
   }
 
-  static String get sslFingerprint => _env('SSL_PIN_FINGERPRINT');
+  /// SSL certificate fingerprint for pinning.
+  /// Returns empty string if not set or if using the placeholder value.
+  static String get sslFingerprint {
+    final pin = _env('SSL_PIN_FINGERPRINT');
+    if (pin.isEmpty || pin == 'SSL_PIN_FINGERPRINTrefd') {
+      return '';
+    }
+    return pin;
+  }
 
+  /// Debug mode — NEVER enabled in release builds regardless of .env value.
   static bool get isDebug =>
       !kReleaseMode && _env('DEBUG').toLowerCase() == 'true';
 
@@ -88,7 +97,7 @@ class AppConfig {
     }
     if (sslFingerprint.isEmpty) {
       Log.w(
-          '[AppConfig] SSL_PIN_FINGERPRINT not set — certificate pinning disabled.');
+          '[AppConfig] SSL_PIN_FINGERPRINT not set or is placeholder — certificate pinning DISABLED.');
     }
   }
 }
