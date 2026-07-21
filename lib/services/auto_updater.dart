@@ -468,73 +468,46 @@ class AutoUpdater {
 
   /// Invoke `msiexec` to install the MSI at [msiPath].
   ///
-  /// Before installing, kills any running SmartBoard process to avoid
-  /// "file in use" errors. Uses `/passive` mode so the user sees a
-  /// progress bar. Retries up to 3 times on failure.
+  /// Launches `msiexec` as a **detached** process — it survives our exit so
+  /// it can finish file replacement after the current process releases its
+  /// handles. Uses `/passive` mode so the user sees a progress bar.
   ///
   /// Flags:
   ///   `/passive`     — show progress bar, no user interaction required
   ///   `/norestart`   — don't force a reboot (the board will relaunch itself)
   ///   `/log`         — write install log for diagnostics
-  ///
-  /// Throws on non-zero exit code after all retries exhausted.
   static Future<void> _installMsi(String msiPath) async {
     if (!Platform.isWindows) {
       Log.w('[AutoUpdater] MSI install skipped (not Windows)');
       return;
     }
 
-    // ── Step 1: Kill existing SmartBoard process ────────────────────────────
-    await _killExistingProcess();
+    // Windows Installer handles "file in use" via deferred file replacement
+    // (MoveFileEx / pending rename operations). We do NOT kill the current
+    // process before msiexec — killing ourselves would terminate the Dart
+    // runtime mid-pipeline, preventing _exitApp() from relaunching the new
+    // version. Instead, we launch msiexec as a detached process so it
+    // continues even if the Dart isolate crashes, then exit gracefully to
+    // release file handles. msiexec completes the swap after we're gone.
 
-    // Give the OS a moment to fully release file handles.
-    await Future.delayed(const Duration(seconds: 2));
+    final logPath = '${Directory.systemTemp.path}\\IASB_install_${DateTime.now().millisecondsSinceEpoch}.log';
 
-    // ── Step 2: Install with retry ──────────────────────────────────────────
-    const maxRetries = 3;
-    const retryDelay = Duration(seconds: 5);
+    Log.i('[AutoUpdater] Launching msiexec (detached): msiexec /i "$msiPath" /passive /norestart /log "$logPath"');
 
-    for (int attempt = 1; attempt <= maxRetries; attempt++) {
-      final logPath = '${Directory.systemTemp.path}\\IASB_install_${DateTime.now().millisecondsSinceEpoch}.log';
+    try {
+      // Start msiexec as a detached process — it must survive our exit.
+      final process = await Process.start(
+        'msiexec',
+        ['/i', msiPath, '/passive', '/norestart', '/log', logPath],
+        mode: ProcessStartMode.detached,
+      );
 
-      Log.i('[AutoUpdater] Install attempt $attempt/$maxRetries: msiexec /i "$msiPath" /passive /norestart /log "$logPath"');
-
-      try {
-        final result = await Process.run(
-          'msiexec',
-          ['/i', msiPath, '/passive', '/norestart', '/log', logPath],
-        ).timeout(const Duration(minutes: 5));
-
-        if (result.exitCode == 0 || result.exitCode == 3010) {
-          // 3010 = "reboot required" — acceptable, app will relaunch.
-          if (result.exitCode == 3010) {
-            Log.i('[AutoUpdater] msiexec exit code 3010 (reboot required) — continuing');
-          } else {
-            Log.i('[AutoUpdater] msiexec completed successfully');
-          }
-          return;
-        }
-
-        Log.w('[AutoUpdater] Install attempt $attempt failed (exit code ${result.exitCode})');
-        Log.w('[AutoUpdater] stdout: ${result.stdout}');
-        Log.w('[AutoUpdater] stderr: ${result.stderr}');
-        Log.w('[AutoUpdater] Log: $logPath');
-      } catch (e) {
-        Log.w('[AutoUpdater] Install attempt $attempt threw exception: $e');
-      }
-
-      if (attempt < maxRetries) {
-        Log.i('[AutoUpdater] Retrying in ${retryDelay.inSeconds}s...');
-        await Future.delayed(retryDelay);
-        // Re-kill the process in case it partially restarted.
-        await _killExistingProcess();
-        await Future.delayed(const Duration(seconds: 2));
-      }
+      Log.i('[AutoUpdater] msiexec started (PID: ${process.pid}). '
+          'Exiting current process to release file handles.');
+    } catch (e) {
+      Log.e('[AutoUpdater] Failed to start msiexec: $e');
+      rethrow;
     }
-
-    throw Exception(
-        'msiexec failed after $maxRetries attempts. '
-        'Check install logs in ${Directory.systemTemp.path}');
   }
 
   /// Kill any running SmartBoard process before installation.
@@ -583,8 +556,7 @@ class AutoUpdater {
       }
     }
 
-    // Wait for new process to start, then exit old one.
-    Future.delayed(const Duration(seconds: 3), () {
+    Future.delayed(const Duration(seconds: 5), () {
       Log.i('[AutoUpdater] Exiting old process.');
       exit(0);
     });

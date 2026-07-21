@@ -245,7 +245,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 24),
                     _buildActionButton(
                       icon: Icons.sync_rounded,
-                      label: 'SYNC TIMETABLE',
+                      label: 'SYNC',
                       onTap: _isSyncing ? null : _handleSyncTimetable,
                       isLoading: _isSyncing,
                       height: 80,
