@@ -549,10 +549,20 @@ class AutoUpdater {
     if (Platform.isWindows) {
       try {
         final exePath = Platform.resolvedExecutable;
-        final restartCmd =
-            'timeout /t 3 /nobreak >nul & start "" "$exePath" --intelliattend-autostart';
-        Log.i('[AutoUpdater] Restart helper: cmd /c $restartCmd');
-        Process.start('cmd', ['/c', restartCmd],
+        Log.i('[AutoUpdater] Restart target: $exePath');
+
+        // Write a temporary batch file to avoid cmd quoting issues.
+        // Process.start('cmd', ['/c', ...]) wraps the /c arg in its own
+        // quotes for CreateProcess, which mangles nested quotes and paths.
+        final tempDir = Directory.systemTemp.createTempSync('sb_restart_');
+        final batFile = File('${tempDir.path}\\restart.bat');
+        batFile.writeAsStringSync(
+          '@echo off\r\n'
+          'timeout /t 3 /nobreak >nul\r\n'
+          'start "" "$exePath" --intelliattend-autostart\r\n',
+        );
+        Log.i('[AutoUpdater] Restart batch: ${batFile.path}');
+        Process.start('cmd', ['/c', batFile.path],
             mode: ProcessStartMode.detached);
       } catch (e) {
         Log.e('[AutoUpdater] Failed to spawn restart helper: $e');
