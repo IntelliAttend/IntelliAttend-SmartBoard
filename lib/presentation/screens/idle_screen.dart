@@ -1772,37 +1772,6 @@ class _IdleScreenState extends State<IdleScreen>
           onViewAll: () => Navigator.of(context).push(MaterialPageRoute(
               builder: (context) => const NotificationsScreen())),
         ),
-        IconButton(
-            onPressed: () {
-              final now = TimeSyncService.timeNow;
-              final hour = now.hour.toString().padLeft(2, '0');
-              final minute = now.minute.toString().padLeft(2, '0');
-              final slotInfo = _getCurrentSlotInfo();
-              showDialog(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: const Text('System Info'),
-                  content: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Time: $hour:$minute'),
-                      const SizedBox(height: 8),
-                      Text('Current: $slotInfo'),
-                      const SizedBox(height: 8),
-                      Text('Date: ${now.day}/${now.month}/${now.year}'),
-                    ],
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.of(ctx).pop(),
-                      child: const Text('Close'),
-                    ),
-                  ],
-                ),
-              );
-            },
-            icon: Icon(Icons.help_outline, color: iconColor)),
         // ──────────────────────────────────────────────────────────────────
         if (_showMinimizeButton)
           IconButton(
@@ -1869,31 +1838,7 @@ class _IdleScreenState extends State<IdleScreen>
     }
   }
 
-  String _getCurrentSlotInfo() {
-    final now = TimeSyncService.timeNow;
-    final currentMinutes = now.hour * 60 + now.minute;
 
-    // Check for breaks first
-    if (_isBioBreak()) return 'Bio Break';
-    if (_isLunchBreak()) return 'Lunch Break';
-
-    // Check current slot
-    final entry = _bedrockEntry;
-    if (entry != null) {
-      final startParts = entry.startTime.split(':');
-      final endParts = entry.endTime.split(':');
-      if (startParts.length == 2 && endParts.length == 2) {
-        final startMins = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
-        final endMins = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
-        if (currentMinutes >= startMins && currentMinutes < endMins) {
-          return entry.courseName;
-        }
-      }
-    }
-
-    // Default
-    return 'No Class';
-  }
 
   Widget _buildCourseInfo(
       Color primaryColor, Color secondaryColor, bool isVideoActive) {

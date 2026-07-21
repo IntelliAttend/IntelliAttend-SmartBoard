@@ -261,7 +261,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                             ),
                           ),
                           Padding(
-                            padding: const EdgeInsets.all(24),
+                            padding: const EdgeInsets.fromLTRB(24, 24, 48, 24),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -305,6 +305,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                               style: GoogleFonts.inter(
                                                   fontWeight: FontWeight.bold,
                                                   fontSize: 16)),
+                                          const SizedBox(height: 2),
+                                          Text(_timeAgo(notification.timestamp),
+                                              style: GoogleFonts.inter(
+                                                  color: Colors.grey, fontSize: 11)),
                                           const SizedBox(height: 4),
                                           Text(notification.body,
                                               maxLines: 2,
@@ -314,9 +318,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                         ],
                                       ),
                                     ),
-                                    Text(_timeAgo(notification.timestamp),
-                                        style: GoogleFonts.inter(
-                                            color: Colors.grey, fontSize: 12)),
                                   ],
                                 ),
 
