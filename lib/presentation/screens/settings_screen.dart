@@ -29,7 +29,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   NetworkInfo _networkInfo = NetworkInfo(isConnected: false, lastChecked: DateTime.now());
   StreamSubscription<NetworkInfo>? _networkSub;
   Timer? _speedTimer;
-  int _speedTestMs = 0;
+
 
   @override
   void initState() {
@@ -104,22 +104,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return 'Choice@$room';
   }
 
-  Future<void> _runSpeedTest() async {
-    setState(() => _speedTestMs = -1);
-    final probe = await Future(() async {
-      try {
-        final sw = Stopwatch()..start();
-        final socket = await Socket.connect('1.1.1.1', 443,
-            timeout: const Duration(seconds: 3));
-        await socket.close();
-        sw.stop();
-        return sw.elapsedMilliseconds;
-      } catch (_) {
-        return 0;
-      }
-    });
-    if (mounted) setState(() => _speedTestMs = probe);
-  }
 
   Future<void> _handleSyncTimetable() async {
     setState(() => _isSyncing = true);
@@ -371,8 +355,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _buildMetricItem(Icons.speed_rounded, 'Latency', info.isConnected ? info.latencyLabel : '—'),
               const SizedBox(width: 24),
               _buildRealTimeSpeedItem(info),
-              const Spacer(),
-              _buildSpeedTestButton(),
             ],
           ),
         ],
@@ -423,31 +405,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildSpeedTestButton() {
-    final isTesting = _speedTestMs == -1;
-    return InkWell(
-      onTap: isTesting ? null : _runSpeedTest,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: AppColors.primaryTeal.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: AppColors.primaryTeal.withValues(alpha: 0.2)),
-        ),
-        child: isTesting
-            ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primaryTeal))
-            : Text(
-                _speedTestMs > 0 ? 'Speed: ${_speedTestMs}ms' : 'Test Speed',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.primaryTeal,
-                ),
-              ),
-      ),
-    );
-  }
 
   Widget _buildHotspotCard() {
     return Container(
