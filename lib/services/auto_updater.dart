@@ -510,27 +510,6 @@ class AutoUpdater {
     }
   }
 
-  /// Kill any running SmartBoard process before installation.
-  /// Silently ignores errors (process may not be running).
-  static Future<void> _killExistingProcess() async {
-    try {
-      Log.i('[AutoUpdater] Killing existing SmartBoard process...');
-      final result = await Process.run(
-        'taskkill',
-        ['/F', '/IM', 'intelliattend_smartboard.exe'],
-      ).timeout(const Duration(seconds: 5));
-
-      if (result.exitCode == 0) {
-        Log.i('[AutoUpdater] Process killed successfully');
-      } else {
-        // Exit code 128 = "no such process" — already not running, that's fine.
-        Log.d('[AutoUpdater] taskkill returned ${result.exitCode} (may not be running)');
-      }
-    } catch (e) {
-      Log.d('[AutoUpdater] taskkill failed (non-critical): $e');
-    }
-  }
-
   // ── App exit after install ────────────────────────────────────────────────
 
   /// Terminate the current process after launching the updated binary.
