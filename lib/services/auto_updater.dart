@@ -468,9 +468,12 @@ class AutoUpdater {
 
   /// Invoke `msiexec` to install the MSI at [msiPath].
   ///
-  /// Launches `msiexec` as a **detached** process — it survives our exit so
-  /// it can finish file replacement after the current process releases its
-  /// handles. Uses `/passive` mode so the user sees a progress bar.
+  /// Runs `msiexec` **synchronously** so the full-screen overlay stays visible
+  /// throughout installation. Windows Installer handles "file in use" via
+  /// deferred file replacement (MoveFileEx / pending rename operations) — the
+  /// actual file swap happens after our process exits.
+  ///
+  /// Retries up to 3 times on transient failures. Throws if all retries fail.
   ///
   /// Flags:
   ///   `/passive`     — show progress bar, no user interaction required
@@ -482,60 +485,82 @@ class AutoUpdater {
       return;
     }
 
-    // Windows Installer handles "file in use" via deferred file replacement
-    // (MoveFileEx / pending rename operations). We do NOT kill the current
-    // process before msiexec — killing ourselves would terminate the Dart
-    // runtime mid-pipeline, preventing _exitApp() from relaunching the new
-    // version. Instead, we launch msiexec as a detached process so it
-    // continues even if the Dart isolate crashes, then exit gracefully to
-    // release file handles. msiexec completes the swap after we're gone.
+    const maxRetries = 3;
+    const retryDelay = Duration(seconds: 5);
 
-    final logPath = '${Directory.systemTemp.path}\\IASB_install_${DateTime.now().millisecondsSinceEpoch}.log';
+    for (int attempt = 1; attempt <= maxRetries; attempt++) {
+      final logPath = '${Directory.systemTemp.path}\\IASB_install_${DateTime.now().millisecondsSinceEpoch}.log';
 
-    Log.i('[AutoUpdater] Launching msiexec (detached): msiexec /i "$msiPath" /passive /norestart /log "$logPath"');
+      Log.i('[AutoUpdater] Install attempt $attempt/$maxRetries: msiexec /i "$msiPath" /passive /norestart /log "$logPath"');
 
-    try {
-      // Start msiexec as a detached process — it must survive our exit.
-      final process = await Process.start(
-        'msiexec',
-        ['/i', msiPath, '/passive', '/norestart', '/log', logPath],
-        mode: ProcessStartMode.detached,
-      );
+      try {
+        final result = await Process.run(
+          'msiexec',
+          ['/i', msiPath, '/passive', '/norestart', '/log', logPath],
+        ).timeout(const Duration(minutes: 5));
 
-      Log.i('[AutoUpdater] msiexec started (PID: ${process.pid}). '
-          'Exiting current process to release file handles.');
-    } catch (e) {
-      Log.e('[AutoUpdater] Failed to start msiexec: $e');
-      rethrow;
+        if (result.exitCode == 0 || result.exitCode == 3010) {
+          // 3010 = "reboot required" — acceptable, the board will relaunch
+          // via auto-start registry key.
+          if (result.exitCode == 3010) {
+            Log.i('[AutoUpdater] msiexec exit code 3010 (reboot required) — continuing');
+          } else {
+            Log.i('[AutoUpdater] msiexec completed successfully');
+          }
+          return;
+        }
+
+        Log.w('[AutoUpdater] Install attempt $attempt failed (exit code ${result.exitCode})');
+        Log.w('[AutoUpdater] stdout: ${result.stdout}');
+        Log.w('[AutoUpdater] stderr: ${result.stderr}');
+        Log.w('[AutoUpdater] Log: $logPath');
+      } catch (e) {
+        Log.w('[AutoUpdater] Install attempt $attempt threw exception: $e');
+      }
+
+      if (attempt < maxRetries) {
+        Log.i('[AutoUpdater] Retrying in ${retryDelay.inSeconds}s...');
+        await Future.delayed(retryDelay);
+      }
     }
+
+    throw Exception(
+        'msiexec failed after $maxRetries attempts. '
+        'Check install logs in ${Directory.systemTemp.path}');
   }
 
   // ── App exit after install ────────────────────────────────────────────────
 
-  /// Terminate the current process after launching the updated binary.
+  /// Terminate the current process after a successful update.
   ///
-  /// The MSI installs the new version in-place (same path), so we can
-  /// explicitly start the new executable before exiting — this guarantees
-  /// the app relaunches immediately regardless of the Windows auto-start
-  /// registry key (which only fires on user login).
+  /// The MSI installs the new version in-place using deferred file
+  /// replacement (MoveFileEx). The actual file swap happens after our
+  /// process exits and releases file handles.
   ///
-  /// We pass `--post-update` so the new process skips the single-instance
-  /// lock guard (the old process hasn't released the lock yet). The lock
-  /// file PID will be stale within milliseconds when the old process exits.
+  /// We spawn a detached `cmd /c` helper that waits a few seconds (for
+  /// our process to exit and the OS to apply pending file renames), then
+  /// launches the new binary with `--intelliattend-autostart`. This
+  /// guarantees the app restarts immediately with the updated version —
+  /// the auto-start registry key only fires at Windows login, which is
+  /// not soon enough for a kiosk board.
   static void _exitApp() {
-    Log.i('[AutoUpdater] Launching updated binary then exiting current process.');
+    Log.i('[AutoUpdater] Spawning delayed restart helper and exiting.');
 
     if (Platform.isWindows) {
       try {
         final exePath = Platform.resolvedExecutable;
-        Log.i('[AutoUpdater] Starting: $exePath --post-update');
-        Process.start(exePath, ['--post-update']);
+        final restartCmd =
+            'timeout /t 3 /nobreak >nul & start "" "$exePath" --intelliattend-autostart';
+        Log.i('[AutoUpdater] Restart helper: cmd /c $restartCmd');
+        Process.start('cmd', ['/c', restartCmd],
+            mode: ProcessStartMode.detached);
       } catch (e) {
-        Log.e('[AutoUpdater] Failed to launch updated binary: $e');
+        Log.e('[AutoUpdater] Failed to spawn restart helper: $e');
       }
     }
 
-    Future.delayed(const Duration(seconds: 5), () {
+    // Give the detached helper a moment to start, then exit.
+    Future.delayed(const Duration(milliseconds: 500), () {
       Log.i('[AutoUpdater] Exiting old process.');
       exit(0);
     });
