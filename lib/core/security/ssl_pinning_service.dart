@@ -20,8 +20,11 @@ class SslPinningService {
     final fingerprint = AppConfig.sslFingerprint;
 
     if (fingerprint.isEmpty) {
-      Log.w(
-          '[SSL] SSL_PIN_FINGERPRINT not set. Certificate pinning disabled.');
+      if (!AppConfig.isDebug) {
+        throw StateError(
+            'SSL_PIN_FINGERPRINT is required for production builds.');
+      }
+      Log.w('[SSL] SSL_PIN_FINGERPRINT not set. Certificate pinning disabled.');
     }
 
     final inner = HttpClient()

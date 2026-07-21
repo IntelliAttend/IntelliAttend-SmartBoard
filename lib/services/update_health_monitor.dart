@@ -108,8 +108,8 @@ class UpdateHealthMonitor {
     _loadFromRegistry();
 
     // Check if this is a first launch after an update (version changed).
-    final isNewVersion = _previousVersion > Version.zero &&
-        _currentVersion != _previousVersion;
+    final isNewVersion =
+        _previousVersion > Version.zero && _currentVersion != _previousVersion;
 
     if (isNewVersion) {
       Log.i('[UpdateHealth] Detected version change: '
@@ -143,7 +143,8 @@ class UpdateHealthMonitor {
   /// rollback backup is deleted.
   static Future<void> markStartupSuccessful() async {
     _stableStartups++;
-    Log.d('[UpdateHealth] Successful startup #$_stableStartups for v$_currentVersion');
+    Log.d(
+        '[UpdateHealth] Successful startup #$_stableStartups for v$_currentVersion');
 
     if (_stableStartups >= _requiredStableStarts) {
       _status = UpdateHealthStatus.stable;
@@ -243,7 +244,8 @@ class UpdateHealthMonitor {
     try {
       final appDir = await _getAppDirectory();
       if (appDir == null || _backupPath == null) {
-        Log.e('[UpdateHealth] Cannot rollback — app dir or backup path unknown');
+        Log.e(
+            '[UpdateHealth] Cannot rollback — app dir or backup path unknown');
         _reportUpdateStatus(UpdateReportStatus.failed);
         return;
       }
@@ -257,12 +259,41 @@ class UpdateHealthMonitor {
         return;
       }
 
+      if (Platform.isWindows) {
+        _rollbackCount++;
+        _status = UpdateHealthStatus.rollingBack;
+        _saveToRegistry();
+
+        _reportUpdateStatus(UpdateReportStatus.rolledBack);
+
+        final script = await _writeRollbackScript(appDir, backupDir);
+        Log.i('[UpdateHealth] Starting rollback helper: ${script.path}');
+        await Process.start(
+          'powershell.exe',
+          [
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-File',
+            script.path,
+            '$pid',
+          ],
+          mode: ProcessStartMode.detached,
+        );
+
+        Log.i('[UpdateHealth] Rollback to v$_previousVersion scheduled '
+            '(rollback #$_rollbackCount). Exiting so files can be restored.');
+        await Future.delayed(const Duration(seconds: 1));
+        exit(0);
+      }
+
       // 1. Delete current app directory.
       Log.i('[UpdateHealth] Deleting current install: ${appDir.path}');
       await appDir.delete(recursive: true);
 
       // 2. Restore backup.
-      Log.i('[UpdateHealth] Restoring backup: ${backupDir.path} → ${appDir.path}');
+      Log.i(
+          '[UpdateHealth] Restoring backup: ${backupDir.path} → ${appDir.path}');
       await backupDir.rename(appDir.path);
 
       // 3. Record rollback in persistent health state.
@@ -308,7 +339,8 @@ class UpdateHealthMonitor {
     try {
       final file = _prefsFile;
       if (file.existsSync()) {
-        final json = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+        final json =
+            jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
         _previousVersion = _parseVersion(json['previous_version']);
         _status = UpdateHealthStatus.values.firstWhere(
           (s) => s.name == json['status'],
@@ -362,15 +394,59 @@ class UpdateHealthMonitor {
   /// Find the current app installation directory.
   static Future<Directory?> _getAppDirectory() async {
     try {
-      final appDir = await getApplicationSupportDirectory();
-      return appDir;
+      if (Platform.isWindows) {
+        return File(Platform.resolvedExecutable).parent;
+      }
+      return await getApplicationSupportDirectory();
     } catch (_) {
       return null;
     }
   }
 
+  static Future<File> _writeRollbackScript(
+      Directory appDir, Directory backupDir) async {
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final scriptPath =
+        '${Directory.systemTemp.path}\\intelliattend_rollback_$timestamp.ps1';
+    final failedDir =
+        '${appDir.parent.path}\\${appDir.uri.pathSegments.last}_failed_$timestamp';
+    final exeName =
+        Platform.resolvedExecutable.split(Platform.pathSeparator).last;
+    final restoredExe = '${appDir.path}\\$exeName';
+    final script = '''
+param([int]\$OldPid)
+\$ErrorActionPreference = 'Stop'
+\$appDir = ${_psQuote(appDir.path)}
+\$backupDir = ${_psQuote(backupDir.path)}
+\$failedDir = ${_psQuote(failedDir)}
+\$restoredExe = ${_psQuote(restoredExe)}
+try {
+  Wait-Process -Id \$OldPid -Timeout 20 -ErrorAction SilentlyContinue
+  if (Test-Path -LiteralPath \$appDir) {
+    Move-Item -LiteralPath \$appDir -Destination \$failedDir -Force
+  }
+  Move-Item -LiteralPath \$backupDir -Destination \$appDir -Force
+  if (Test-Path -LiteralPath \$restoredExe) {
+    Start-Process -FilePath \$restoredExe -ArgumentList '--rollback-recovered'
+  }
+} catch {
+  \$log = Join-Path \$env:TEMP 'intelliattend_rollback_error.log'
+  "[\$(Get-Date -Format o)] \$(\$_.Exception.Message)" | Add-Content -LiteralPath \$log
+  throw
+}
+''';
+    final file = File(scriptPath);
+    await file.writeAsString(script);
+    return file;
+  }
+
+  static String _psQuote(String value) {
+    return "'${value.replaceAll("'", "''")}'";
+  }
+
   /// Recursive directory copy.
-  static Future<void> _copyDirectory(Directory source, Directory destination) async {
+  static Future<void> _copyDirectory(
+      Directory source, Directory destination) async {
     await destination.create(recursive: true);
     await for (final entity in source.list(recursive: false)) {
       final entityName = entity.uri.pathSegments.last;
@@ -419,7 +495,8 @@ class UpdateHealthMonitor {
   static UpdateHealthStatus get status => _status;
 
   /// Whether this version is still in the "pending" (unstable) state.
-  static bool get isPendingStabilisation => _status == UpdateHealthStatus.pending;
+  static bool get isPendingStabilisation =>
+      _status == UpdateHealthStatus.pending;
 
   /// Whether a rollback has been performed (diagnostic).
   static int get rollbackCount => _rollbackCount;

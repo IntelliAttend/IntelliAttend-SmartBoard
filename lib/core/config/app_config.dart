@@ -1,4 +1,4 @@
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../utils/logger.dart';
 
@@ -12,8 +12,12 @@ class AppConfig {
 
   /// Read a value from dotenv first, then fall back to --dart-define.
   static String _env(String key, [String fallback = '']) {
-    final fromDotenv = dotenv.env[key];
-    if (fromDotenv != null && fromDotenv.isNotEmpty) return fromDotenv;
+    try {
+      final fromDotenv = dotenv.env[key];
+      if (fromDotenv != null && fromDotenv.isNotEmpty) return fromDotenv;
+    } catch (_) {
+      // dotenv may not be initialized if no .env file was found.
+    }
     try {
       return String.fromEnvironment(key);
     } catch (_) {
@@ -32,7 +36,8 @@ class AppConfig {
 
   static String get sslFingerprint => _env('SSL_PIN_FINGERPRINT');
 
-  static bool get isDebug => _env('DEBUG').toLowerCase() == 'true';
+  static bool get isDebug =>
+      !kReleaseMode && _env('DEBUG').toLowerCase() == 'true';
 
   static bool get enableVideoBreaks =>
       _env('ENABLE_VIDEO_BREAKS').toLowerCase() == 'true';
@@ -70,15 +75,13 @@ class AppConfig {
 
   static void validate() {
     if (_env('API_BASE_URL').isEmpty) {
-      Log.w(
-          '[AppConfig] API_BASE_URL not set — app will throw at startup.');
+      Log.w('[AppConfig] API_BASE_URL not set — app will throw at startup.');
     }
     if (firebaseApiKey.isEmpty) {
       Log.w('[AppConfig] FIREBASE_API_KEY not set — auth will fail.');
     }
     if (firebaseAppId.isEmpty) {
-      Log.w(
-          '[AppConfig] FIREBASE_APP_ID not set — Firebase init may fail.');
+      Log.w('[AppConfig] FIREBASE_APP_ID not set — Firebase init may fail.');
     }
     if (firebaseProjectId.isEmpty) {
       Log.w('[AppConfig] FIREBASE_PROJECT_ID not set.');
