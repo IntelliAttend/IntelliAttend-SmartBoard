@@ -233,6 +233,28 @@ jobs:
           draft: false
           prerelease: false
 
+      - name: Wait for server to be ready
+        if: ${{ vars.SERVER_URL != '' }}
+        shell: bash
+        run: |
+          SERVER_URL="${{ vars.SERVER_URL }}"
+          echo "Waiting for server to be ready at ${SERVER_URL}..."
+          
+          MAX_ATTEMPTS=60
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${SERVER_URL}/health" 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Server is ready (attempt $i)"
+              break
+            fi
+            echo "Waiting for server... (attempt $i/$MAX_ATTEMPTS, HTTP $HTTP_CODE)"
+            sleep 5
+          done
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Warning: Server may not be fully ready, proceeding with upload anyway"
+          fi
+
       - name: Upload to server
         if: ${{ vars.SERVER_URL != '' }}
         shell: bash
@@ -245,12 +267,49 @@ jobs:
           
           echo "Uploading v${FLUTTER_VERSION} (MSI: ${VERSION}) to ${SERVER_URL}..."
           
-          curl -f -X POST "${SERVER_URL}/api/v1/board/ci-upload" \
-            -H "X-Deploy-Key: ${{ secrets.DEPLOY_KEY }}" \
-            -F "version=${FLUTTER_VERSION}" \
-            -F "release_notes=Auto-deploy from commit ${{ github.sha }}" \
-            -F "commit_hash=${{ github.sha }}" \
-            -F "force=true" \
-            -F "rollout_percentage=100" \
-            -F "file=@${MSI_PATH}"
-          echo "Successfully uploaded v${FLUTTER_VERSION}"
+          MAX_RETRIES=10
+          RETRY_DELAY=30
+          
+          for i in $(seq 1 $MAX_RETRIES); do
+            HTTP_CODE=$(curl -s -o /tmp/upload_response.json -w "%{http_code}" \
+              -X POST "${SERVER_URL}/api/v1/board/ci-upload" \
+              -H "X-Deploy-Key: ${{ secrets.DEPLOY_KEY }}" \
+              -F "version=${FLUTTER_VERSION}" \
+              -F "release_notes=Auto-deploy from commit ${{ github.sha }}" \
+              -F "commit_hash=${{ github.sha }}" \
+              -F "force=true" \
+              -F "rollout_percentage=100" \
+              -F "file=@${MSI_PATH}")
+            
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Successfully uploaded v${FLUTTER_VERSION}"
+              cat /tmp/upload_response.json
+              exit 0
+            fi
+            
+            RESPONSE=$(cat /tmp/upload_response.json 2>/dev/null || echo "No response body")
+            echo "Attempt $i/$MAX_RETRIES failed (HTTP $HTTP_CODE): $RESPONSE"
+            
+            if [ "$HTTP_CODE" = "401" ]; then
+              echo "ERROR: Invalid deploy key — check DEPLOY_KEY secret matches server"
+              exit 1
+            fi
+            
+            if [ "$HTTP_CODE" = "413" ]; then
+              echo "ERROR: File too large — check server upload size limits"
+              exit 1
+            fi
+            
+            if [ "$HTTP_CODE" = "422" ]; then
+              echo "ERROR: Invalid request parameters"
+              exit 1
+            fi
+            
+            if [ $i -lt $MAX_RETRIES ]; then
+              echo "Retrying in ${RETRY_DELAY}s..."
+              sleep $RETRY_DELAY
+            fi
+          done
+          
+          echo "ERROR: Upload failed after $MAX_RETRIES attempts"
+          exit 1
