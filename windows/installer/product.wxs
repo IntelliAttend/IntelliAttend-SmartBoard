@@ -168,8 +168,8 @@
       <Property Id="WIXUI_INSTALLDIR" Value="APPLICATIONFOLDER" />
 
       <!-- Replace the standard Welcome dialog flow with our license step -->
-      <Publish Dialog="WelcomeEULADlg" Control="Next" Event="NewDialog" Value="IntelliAttendLicenseDlg" Order="9999">1</Publish>
-      <Publish Dialog="IntelliAttendLicenseDlg" Control="Back" Event="NewDialog" Value="WelcomeEULADlg" Order="9999">1</Publish>
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="IntelliAttendLicenseDlg" Order="9999">1</Publish>
+      <Publish Dialog="IntelliAttendLicenseDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="9999">1</Publish>
       <Publish Dialog="IntelliAttendLicenseDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="9999">LICENSEACCEPTED = "yes"</Publish>
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication" Order="9999">1</Publish>
 
@@ -184,14 +184,14 @@
           <Text SourceFile="License.rtf" />
         </Control>
 
-        <Control Id="AcceptRadio" Type="RadioButtonGroup" X="20" Y="225" Width="330" Height="40" Property="LICENSEACCEPTED">
+        <Control Id="AcceptRadio" Type="RadioButtonGroup" X="20" Y="225" Width="330" Height="40">
           <RadioButtonGroup Property="LICENSEACCEPTED">
             <RadioButton Value="yes" Text="I accept the terms in the License Agreement" X="0" Y="0" Width="330" Height="16" />
           </RadioButtonGroup>
         </Control>
 
         <Control Id="Back" Type="Button" X="180" Y="243" Width="56" Height="17" Text="Back">
-          <Publish Event="NewDialog" Value="WelcomeEULADlg" />
+          <Publish Event="NewDialog" Value="WelcomeDlg" />
         </Control>
         <Control Id="Next" Type="Button" X="236" Y="243" Width="56" Height="17" Default="yes" Text="I &amp;Agree">
           <Publish Event="NewDialog" Value="VerifyReadyDlg" />
