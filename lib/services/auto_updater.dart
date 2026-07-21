@@ -548,8 +548,23 @@ class AutoUpdater {
 
     if (Platform.isWindows) {
       try {
-        final exePath = Platform.resolvedExecutable;
+        // Always use the MSI install location, NOT Platform.resolvedExecutable.
+        // During development the running process is in the build\Debug directory,
+        // but the MSI installs the new version to %LOCALAPPDATA%\intelliattend_smartboard\.
+        // We must relaunch the installed copy to run the updated version.
+        final localAppData = Platform.environment['LOCALAPPDATA'] ?? '';
+        final installDir = '$localAppData\\intelliattend_smartboard';
+        final exePath = '$installDir\\intelliattend_smartboard.exe';
         Log.i('[AutoUpdater] Restart target: $exePath');
+
+        if (!File(exePath).existsSync()) {
+          Log.w('[AutoUpdater] Installed exe not found at $exePath, '
+              'falling back to Platform.resolvedExecutable');
+        }
+        final launchPath = File(exePath).existsSync()
+            ? exePath
+            : Platform.resolvedExecutable;
+        Log.i('[AutoUpdater] Launch path: $launchPath');
 
         // Write a temporary batch file to avoid cmd quoting issues.
         // Process.start('cmd', ['/c', ...]) wraps the /c arg in its own
@@ -559,7 +574,7 @@ class AutoUpdater {
         batFile.writeAsStringSync(
           '@echo off\r\n'
           'timeout /t 3 /nobreak >nul\r\n'
-          'start "" "$exePath" --intelliattend-autostart\r\n',
+          'start "" "$launchPath" --intelliattend-autostart\r\n',
         );
         Log.i('[AutoUpdater] Restart batch: ${batFile.path}');
         Process.start('cmd', ['/c', batFile.path],
