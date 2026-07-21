@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cwctype>
 #include <string>
 #include <vector>
 #include <wchar.h>
@@ -59,6 +60,57 @@ bool EnvEquals(const wchar_t* name, const wchar_t* value) {
   wchar_t buffer[64];
   const DWORD length = ::GetEnvironmentVariableW(name, buffer, 64);
   return length > 0 && _wcsicmp(buffer, value) == 0;
+}
+
+bool ContainsCaseInsensitive(const std::wstring& value,
+                             const std::wstring& needle) {
+  std::wstring haystack = value;
+  std::wstring lowered_needle = needle;
+  std::transform(haystack.begin(), haystack.end(), haystack.begin(),
+                 [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
+  std::transform(lowered_needle.begin(), lowered_needle.end(),
+                 lowered_needle.begin(),
+                 [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
+  return haystack.find(lowered_needle) != std::wstring::npos;
+}
+
+bool IsKnownVirtualAdapter(const DXGI_ADAPTER_DESC1& desc) {
+  const std::wstring name(desc.Description);
+  return ContainsCaseInsensitive(name, L"sharing monitor") ||
+         ContainsCaseInsensitive(name, L"virtual") ||
+         ContainsCaseInsensitive(name, L"remote") ||
+         ContainsCaseInsensitive(name, L"basic render") ||
+         ContainsCaseInsensitive(name, L"microsoft basic");
+}
+
+bool HasProblematicZeroVramAdapter() {
+  IDXGIFactory1* factory = nullptr;
+  if (FAILED(::CreateDXGIFactory1(__uuidof(IDXGIFactory1),
+                                  reinterpret_cast<void**>(&factory)))) {
+    return false;
+  }
+
+  bool found_problematic_adapter = false;
+  for (UINT index = 0;; ++index) {
+    IDXGIAdapter1* adapter = nullptr;
+    if (factory->EnumAdapters1(index, &adapter) == DXGI_ERROR_NOT_FOUND) {
+      break;
+    }
+
+    DXGI_ADAPTER_DESC1 desc;
+    if (SUCCEEDED(adapter->GetDesc1(&desc))) {
+      const bool software =
+          (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) == DXGI_ADAPTER_FLAG_SOFTWARE;
+      if (!software && desc.DedicatedVideoMemory == 0 &&
+          IsKnownVirtualAdapter(desc)) {
+        found_problematic_adapter = true;
+      }
+    }
+    adapter->Release();
+  }
+
+  factory->Release();
+  return found_problematic_adapter;
 }
 
 }  // namespace
@@ -126,12 +178,21 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
       GetCommandLineArguments();
 
   const bool native_crash_recovery = NativeCrashFlagExists();
-  const bool force_low_power_gpu =
+  const bool force_high_performance_gpu =
       native_crash_recovery ||
+      HasProblematicZeroVramAdapter() ||
+      HasArgument(command_line_arguments, "--intelliattend-high-performance-gpu") ||
+      EnvEquals(L"INTELLIATTEND_GPU_MODE", L"high_performance");
+  const bool force_low_power_gpu =
       HasArgument(command_line_arguments, "--intelliattend-low-power-gpu") ||
       EnvEquals(L"INTELLIATTEND_GPU_MODE", L"low_power");
 
-  if (force_low_power_gpu) {
+  if (force_high_performance_gpu) {
+    project.set_gpu_preference(flutter::GpuPreference::HighPerformancePreference);
+    if (!HasArgument(command_line_arguments, "--native-crash-recovery")) {
+      command_line_arguments.push_back("--native-crash-recovery");
+    }
+  } else if (force_low_power_gpu) {
     project.set_gpu_preference(flutter::GpuPreference::LowPowerPreference);
     if (!HasArgument(command_line_arguments, "--native-crash-recovery")) {
       command_line_arguments.push_back("--native-crash-recovery");
@@ -144,6 +205,15 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
   if (!window.Create(L"intelliattend_smartboard", origin, size)) {
+    WriteNativeCrashFlag(::GetLastError());
+    ::MessageBoxW(
+        nullptr,
+        L"IntelliAttend could not start the Windows rendering engine. "
+        L"The next launch will use GPU compatibility mode. If this repeats, "
+        L"please update the Intel graphics driver and disable virtual display "
+        L"adapters such as Sharing Monitor.",
+        L"IntelliAttend SmartBoard - Display Compatibility",
+        MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
     ::CoUninitialize();
     return EXIT_FAILURE;
   }

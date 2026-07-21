@@ -383,7 +383,8 @@ void _startStartupWatchdog() {
 // retry the acquire. This replaces the mtime-based stale-lock check, which
 // was a heuristic; PID liveness is authoritative.
 
-Future<void> _acquireSingleInstanceLock({bool retryForPostUpdate = false}) async {
+Future<void> _acquireSingleInstanceLock(
+    {bool retryForPostUpdate = false}) async {
   final lockFile =
       File('${Directory.systemTemp.path}/intelliattend_smartboard.lock');
 
@@ -749,20 +750,44 @@ Future<bool> _verifyIntegrity() async {
 // Flutter Firebase plugins. Timetable data is fetched via REST APIs.
 
 Future<void> _loadEnvironment() async {
+  bool loaded = false;
+
+  // Production machine-local config. This survives MSI upgrades.
+  if (!kIsWeb && Platform.isWindows) {
+    try {
+      final localAppData = Platform.environment['LOCALAPPDATA'] ??
+          '${Platform.environment['USERPROFILE']}\\AppData\\Local';
+      final envPath = '$localAppData\\IntelliAttendSmartBoard\\.env';
+      await dotenv.load(fileName: envPath);
+      loaded = dotenv.env.isNotEmpty;
+    } catch (_) {}
+  }
   // Try loading from Flutter assets first (legacy path — .env is no longer
   // bundled in assets since Phase 1, but this handles any edge case).
-  bool loaded = false;
-  try {
-    await dotenv.load();
+  if (!loaded) {
+    try {
+      await dotenv.load();
       loaded = dotenv.env.isNotEmpty;
-  } catch (_) {}
+    } catch (_) {}
+  }
 
   // Fall back to filesystem .env (development / local builds only).
   // Production builds use --dart-define flags instead.
   if (!loaded) {
     try {
       await dotenv.load(fileName: '.env');
-    loaded = dotenv.env.isNotEmpty;
+      loaded = dotenv.env.isNotEmpty;
+    } catch (_) {}
+  }
+
+  // Last resort: try the directory next to the running executable.  When
+  // launched from a shortcut or registry auto-start the CWD may differ
+  // from the project root, so `fileName: '.env'` misses the file.
+  if (!loaded && !kIsWeb && Platform.isWindows) {
+    try {
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      await dotenv.load(fileName: '$exeDir\\.env');
+      loaded = dotenv.env.isNotEmpty;
     } catch (_) {}
   }
 
