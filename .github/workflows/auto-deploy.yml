@@ -45,12 +45,35 @@ jobs:
       - name: Validate required variables
         shell: pwsh
         run: |
-          $apiUrl = "${{ vars.API_BASE_URL }}"
-          if ([string]::IsNullOrWhiteSpace($apiUrl)) {
-            Write-Host "ERROR: API_BASE_URL variable is not set. Cannot deploy without a production API URL." -ForegroundColor Red
+          $required = @{
+            "API_BASE_URL" = "${{ vars.API_BASE_URL }}"
+            "FIREBASE_PROJECT_ID" = "${{ vars.FIREBASE_PROJECT_ID }}"
+          }
+          $secrets = @{
+            "FIREBASE_API_KEY" = "${{ secrets.FIREBASE_API_KEY }}"
+            "FIREBASE_APP_ID" = "${{ secrets.FIREBASE_APP_ID }}"
+            "FIREBASE_MESSAGING_SENDER_ID" = "${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}"
+            "SSL_PIN_FINGERPRINT" = "${{ secrets.SSL_PIN_FINGERPRINT }}"
+          }
+          $missing = @()
+          foreach ($kv in $required.GetEnumerator()) {
+            if ([string]::IsNullOrWhiteSpace($kv.Value)) {
+              $missing += $kv.Key
+            } else {
+              Write-Host "$($kv.Key): $($kv.Value)"
+            }
+          }
+          foreach ($kv in $secrets.GetEnumerator()) {
+            if ([string]::IsNullOrWhiteSpace($kv.Value)) {
+              $missing += $kv.Key
+            } else {
+              Write-Host "$($kv.Key): [SET]"
+            }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Host "ERROR: Missing required variables/secrets: $($missing -join ', ')" -ForegroundColor Red
             exit 1
           }
-          Write-Host "API_BASE_URL: $apiUrl"
 
       - name: Checkout
         uses: actions/checkout@v4

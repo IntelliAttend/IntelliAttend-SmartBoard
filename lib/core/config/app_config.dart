@@ -5,6 +5,18 @@ import '../utils/logger.dart';
 class AppConfig {
   static const String smartBoardEmailDomain = 'smartboard.intelliattend.com';
 
+  // ── Production defaults ──────────────────────────────────────────────────
+  // Hardcoded so the app works out of the box after a fresh MSI install,
+  // even without a .env file or --dart-define flags.  These are the same
+  // values the CI injects via secrets / repository variables.
+  static const String _prodBaseUrl = 'https://api.intelliattend.app';
+  static const String _prodFirebaseApiKey =
+      'AIzaSyBooFadQf3TZFvZOUJkihMUdgexrbeoQnE';
+  static const String _prodFirebaseProjectId = 'intelliattend-a2564';
+  static const String _prodFirebaseAppId =
+      '1:738499328288:web:c345f44de9d8393062ff45';
+  static const String _prodFirebaseMessagingSenderId = '738499328288';
+
   /// Formats a SmartBoard ID into an email for Firebase Auth.
   static String boardIdToEmail(String boardId) => boardId.contains('@')
       ? boardId.toLowerCase()
@@ -25,13 +37,19 @@ class AppConfig {
     }
   }
 
+  /// API base URL — reads from .env / --dart-define first.
+  /// In release mode, falls back to the production default so the app
+  /// never crashes on a fresh install.  In debug mode, throws so missing
+  /// config is caught during development.
   static String get baseUrl {
     final url = _env('API_BASE_URL');
-    if (url.isEmpty) {
-      throw StateError(
-          'API_BASE_URL is not set. Pass it via --dart-define or .env file.');
+    if (url.isNotEmpty) return url;
+    if (kReleaseMode) {
+      Log.i('[AppConfig] Using built-in production API URL');
+      return _prodBaseUrl;
     }
-    return url;
+    throw StateError(
+        'API_BASE_URL is not set. Pass it via --dart-define or .env file.');
   }
 
   /// SSL certificate fingerprint for pinning.
@@ -76,14 +94,37 @@ class AppConfig {
   static int get documentCacheMaxMb =>
       int.tryParse(_env('DOCUMENT_CACHE_MAX_MB')) ?? 200;
 
-  static String get firebaseApiKey => _env('FIREBASE_API_KEY');
-  static String get firebaseProjectId => _env('FIREBASE_PROJECT_ID');
-  static String get firebaseAppId => _env('FIREBASE_APP_ID');
-  static String get firebaseMessagingSenderId =>
-      _env('FIREBASE_MESSAGING_SENDER_ID');
+  /// Firebase config — .env / --dart-define first, production defaults in release.
+  static String get firebaseApiKey {
+    final v = _env('FIREBASE_API_KEY');
+    if (v.isNotEmpty) return v;
+    if (kReleaseMode) return _prodFirebaseApiKey;
+    return '';
+  }
+
+  static String get firebaseProjectId {
+    final v = _env('FIREBASE_PROJECT_ID');
+    if (v.isNotEmpty) return v;
+    if (kReleaseMode) return _prodFirebaseProjectId;
+    return '';
+  }
+
+  static String get firebaseAppId {
+    final v = _env('FIREBASE_APP_ID');
+    if (v.isNotEmpty) return v;
+    if (kReleaseMode) return _prodFirebaseAppId;
+    return '';
+  }
+
+  static String get firebaseMessagingSenderId {
+    final v = _env('FIREBASE_MESSAGING_SENDER_ID');
+    if (v.isNotEmpty) return v;
+    if (kReleaseMode) return _prodFirebaseMessagingSenderId;
+    return '';
+  }
 
   static void validate() {
-    if (_env('API_BASE_URL').isEmpty) {
+    if (baseUrl.isEmpty) {
       Log.w('[AppConfig] API_BASE_URL not set — app will throw at startup.');
     }
     if (firebaseApiKey.isEmpty) {
