@@ -121,6 +121,13 @@ jobs:
           [System.IO.File]::WriteAllText("pubspec.yaml", $pubspec)
           Write-Host "Updated pubspec.yaml to version $version"
 
+      - name: Clean build artifacts
+        shell: bash
+        run: flutter clean
+
+      - name: Get dependencies (post-clean)
+        run: flutter pub get
+
       - name: Build Windows release
         shell: bash
         run: |
@@ -133,6 +140,53 @@ jobs:
             --dart-define=SSL_PIN_FINGERPRINT="${{ secrets.SSL_PIN_FINGERPRINT }}" \
             --dart-define=ENABLE_DOCUMENTS=true \
             --dart-define=DEBUG=false
+
+      - name: Validate build artifacts
+        shell: pwsh
+        run: |
+          $buildDir = "build\windows\x64\runner\Release"
+          $exe = Get-ChildItem -Path $buildDir -Filter *.exe -File | Select-Object -First 1
+          if (-not $exe) {
+            Write-Host "ERROR: No .exe found in $buildDir" -ForegroundColor Red
+            exit 1
+          }
+
+          # Check critical DLLs exist
+          $criticalDlls = @(
+            "flutter_windows.dll",
+            "flutter_secure_storage_windows_plugin.dll",
+            "isar.dll",
+            "window_manager_plugin.dll",
+            "audioplayers_windows_plugin.dll",
+            "connectivity_plus_plugin.dll"
+          )
+          foreach ($dll in $criticalDlls) {
+            $path = Join-Path $buildDir $dll
+            if (-not (Test-Path $path)) {
+              Write-Host "ERROR: Missing critical DLL: $dll" -ForegroundColor Red
+              exit 1
+            }
+          }
+
+          # Verify flutter_windows.dll timestamp matches exe (stale engine = ABI mismatch)
+          $flutterDll = Join-Path $buildDir "flutter_windows.dll"
+          $exeTime = $exe.LastWriteTime
+          $flutterTime = (Get-Item $flutterDll).LastWriteTime
+          $diffMinutes = [math]::Abs(($exeTime - $flutterTime).TotalMinutes)
+          if ($diffMinutes -gt 5) {
+            Write-Host "ERROR: flutter_windows.dll is STALE — differs from exe by $([math]::Round($diffMinutes)) minutes" -ForegroundColor Red
+            Write-Host "  Exe timestamp:   $exeTime" -ForegroundColor Yellow
+            Write-Host "  Engine timestamp: $flutterTime" -ForegroundColor Yellow
+            Write-Host "  This causes ABI mismatch and DLL load failures on production hardware." -ForegroundColor Yellow
+            exit 1
+          }
+
+          Write-Host "Build artifact validation PASSED" -ForegroundColor Green
+          Write-Host "Exe: $($exe.Name) ($([math]::Round($exe.Length / 1KB)) KB) — $exeTime"
+          Get-ChildItem -Path $buildDir -Filter *.dll | ForEach-Object {
+            $age = [math]::Abs(($exeTime - $_.LastWriteTime).TotalMinutes)
+            Write-Host "  $($_.Name): $([math]::Round($_.Length / 1KB)) KB — $($_.LastWriteTime) (age: $([math]::Round($age)) min)"
+          }
 
       - name: Detect exe name
         id: detect
@@ -206,6 +260,9 @@ jobs:
           $sha256 = "${{ steps.msi.outputs.sha256 }}"
           $msiName = "${{ steps.msi.outputs.msi_name }}"
 
+          $buildDir = "build\windows\x64\runner\Release"
+          $exeTime = (Get-ChildItem "$buildDir\*.exe" | Select-Object -First 1).LastWriteTime
+
           $manifest = @{
             latest_version = $flutterVersion
             download_url = "https://github.com/${{ github.repository }}/releases/download/$tag/$msiName"
@@ -213,6 +270,8 @@ jobs:
             force = $true
             rollout_percentage = 100
             minimum_version = $flutterVersion
+            build_timestamp = $exeTime.ToString("o")
+            flutter_sdk = "3.44.6"
           }
 
           $manifest | ConvertTo-Json | Out-File -FilePath "build\windows\x64\runner\Release\latest.json" -Encoding UTF8

@@ -752,7 +752,10 @@ Future<bool> _verifyIntegrity() async {
 Future<void> _loadEnvironment() async {
   bool loaded = false;
 
-  // Production machine-local config. This survives MSI upgrades.
+  // Production machine-local config. This survives MSI upgrades because it's
+  // stored outside the install directory at:
+  //   %LOCALAPPDATA%\IntelliAttendSmartBoard\.env
+  // The install_production_msi.ps1 script writes this file before launching.
   if (!kIsWeb && Platform.isWindows) {
     try {
       final localAppData = Platform.environment['LOCALAPPDATA'] ??
@@ -760,34 +763,45 @@ Future<void> _loadEnvironment() async {
       final envPath = '$localAppData\\IntelliAttendSmartBoard\\.env';
       await dotenv.load(fileName: envPath);
       loaded = dotenv.env.isNotEmpty;
-    } catch (_) {}
+      if (loaded) {
+        Log.i('[Startup] Environment loaded from: $envPath');
+      }
+    } catch (e) {
+      Log.d('[Startup] Local .env not found at expected path: $e');
+    }
   }
-  // Try loading from Flutter assets first (legacy path — .env is no longer
-  // bundled in assets since Phase 1, but this handles any edge case).
+  // Try loading from Flutter assets (legacy path — .env may be bundled here
+  // for development builds, but production should use the path above).
   if (!loaded) {
     try {
       await dotenv.load();
       loaded = dotenv.env.isNotEmpty;
+      if (loaded) {
+        Log.i('[Startup] Environment loaded from Flutter assets (legacy)');
+      }
     } catch (_) {}
   }
 
   // Fall back to filesystem .env (development / local builds only).
-  // Production builds use --dart-define flags instead.
   if (!loaded) {
     try {
       await dotenv.load(fileName: '.env');
       loaded = dotenv.env.isNotEmpty;
+      if (loaded) {
+        Log.i('[Startup] Environment loaded from CWD/.env');
+      }
     } catch (_) {}
   }
 
-  // Last resort: try the directory next to the running executable.  When
-  // launched from a shortcut or registry auto-start the CWD may differ
-  // from the project root, so `fileName: '.env'` misses the file.
+  // Last resort: try the directory next to the running executable.
   if (!loaded && !kIsWeb && Platform.isWindows) {
     try {
       final exeDir = File(Platform.resolvedExecutable).parent.path;
       await dotenv.load(fileName: '$exeDir\\.env');
       loaded = dotenv.env.isNotEmpty;
+      if (loaded) {
+        Log.i('[Startup] Environment loaded from exe directory');
+      }
     } catch (_) {}
   }
 
@@ -795,7 +809,7 @@ Future<void> _loadEnvironment() async {
     Log.w('[Startup] No .env file found — using --dart-define fallbacks.');
   }
   AppConfig.validate();
-  Log.i('[Startup] Environment loaded');
+  Log.i('[Startup] Environment config ready');
 }
 
 void _configureOrientation() {

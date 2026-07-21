@@ -101,8 +101,10 @@ bool HasProblematicZeroVramAdapter() {
     if (SUCCEEDED(adapter->GetDesc1(&desc))) {
       const bool software =
           (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) == DXGI_ADAPTER_FLAG_SOFTWARE;
-      if (!software && desc.DedicatedVideoMemory == 0 &&
-          IsKnownVirtualAdapter(desc)) {
+      // Flag ANY non-software adapter with 0 dedicated VRAM — these are
+      // virtual/display-only adapters (Sharing Monitor, Remote Desktop, etc.)
+      // that cannot render Flutter content.
+      if (!software && desc.DedicatedVideoMemory == 0) {
         found_problematic_adapter = true;
       }
     }
@@ -113,7 +115,72 @@ bool HasProblematicZeroVramAdapter() {
   return found_problematic_adapter;
 }
 
+bool HasIntelArcOrLunarLakeAdapter() {
+  IDXGIFactory1* factory = nullptr;
+  if (FAILED(::CreateDXGIFactory1(__uuidof(IDXGIFactory1),
+                                  reinterpret_cast<void**>(&factory)))) {
+    return false;
+  }
+
+  bool found = false;
+  for (UINT index = 0;; ++index) {
+    IDXGIAdapter1* adapter = nullptr;
+    if (factory->EnumAdapters1(index, &adapter) == DXGI_ERROR_NOT_FOUND) {
+      break;
+    }
+
+    DXGI_ADAPTER_DESC1 desc;
+    if (SUCCEEDED(adapter->GetDesc1(&desc))) {
+      const std::wstring name(desc.Description);
+      // Intel Arc discrete GPUs (e.g. "Intel(R) Arc(TM) A770M")
+      if (ContainsCaseInsensitive(name, L"intel") &&
+          ContainsCaseInsensitive(name, L"arc")) {
+        found = true;
+      }
+      // Intel Lunar Lake integrated (e.g. "Intel(R) Arc(TM) 140V")
+      if (ContainsCaseInsensitive(name, L"intel") &&
+          ContainsCaseInsensitive(name, L"140v")) {
+        found = true;
+      }
+    }
+    adapter->Release();
+  }
+
+  factory->Release();
+  return found;
+}
+
 }  // namespace
+
+// Pre-flight check: verify critical DLLs are loadable before Flutter init.
+// Provides a clear error message instead of a cryptic Windows DLL error dialog.
+bool CheckCriticalDlls() {
+  const wchar_t* criticalDlls[] = {
+    L"flutter_windows.dll",
+    L"flutter_secure_storage_windows_plugin.dll",
+    L"isar.dll",
+    L"window_manager_plugin.dll",
+    nullptr
+  };
+
+  for (int i = 0; criticalDlls[i] != nullptr; i++) {
+    HMODULE hMod = ::LoadLibraryW(criticalDlls[i]);
+    if (!hMod) {
+      wchar_t msg[512];
+      swprintf_s(msg, 512,
+        L"IntelliAttend cannot load %s.\n\n"
+        L"The installation may be corrupted. Please reinstall the application.\n"
+        L"If this persists, contact IntelliAttend support.",
+        criticalDlls[i]);
+      ::MessageBoxW(nullptr, msg,
+        L"IntelliAttend SmartBoard - DLL Error",
+        MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+      return false;
+    }
+    ::FreeLibrary(hMod);
+  }
+  return true;
+}
 
 // Unhandled exception filter: called when any unhandled C++ or structured
 // exception escapes the Flutter message loop. Shows a friendly error so the
@@ -172,6 +239,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
+  // Pre-flight: verify critical DLLs are loadable before Flutter init.
+  // This catches ABI mismatches (stale flutter_windows.dll) early with a
+  // clear error message instead of a cryptic Windows DLL load failure.
+  if (!CheckCriticalDlls()) {
+    ::CoUninitialize();
+    return EXIT_FAILURE;
+  }
+
   flutter::DartProject project(L"data");
 
   std::vector<std::string> command_line_arguments =
@@ -181,6 +256,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   const bool force_high_performance_gpu =
       native_crash_recovery ||
       HasProblematicZeroVramAdapter() ||
+      HasIntelArcOrLunarLakeAdapter() ||
       HasArgument(command_line_arguments, "--intelliattend-high-performance-gpu") ||
       EnvEquals(L"INTELLIATTEND_GPU_MODE", L"high_performance");
   const bool force_low_power_gpu =
