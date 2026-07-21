@@ -78,17 +78,45 @@ class TimetableScreen extends StatelessWidget {
       );
     }
 
-    return ListView.separated(
+    return ListView.builder(
       padding: const EdgeInsets.all(40),
       itemCount: entries.length,
-      separatorBuilder: (context, index) => const SizedBox(height: 16),
       itemBuilder: (context, index) {
         final entry = entries[index];
         final now = TimeSyncService.timeNow;
         final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
         final isLive = entry.startTime.compareTo(timeStr) <= 0 && entry.endTime.compareTo(timeStr) > 0 && entry.dayOfWeek == now.weekday;
 
-        return Container(
+        // Check if there's a break before this entry
+        final hasBreakBefore = index > 0 && entries[index - 1].endTime != entry.startTime;
+
+        return Column(
+          children: [
+            if (hasBreakBefore) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Expanded(child: Divider(color: Colors.grey, thickness: 1, height: 1)),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      'BREAK',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 1.5,
+                        color: isDark ? Colors.white30 : Colors.black26,
+                      ),
+                    ),
+                  ),
+                  const Expanded(child: Divider(color: Colors.grey, thickness: 1, height: 1)),
+                ],
+              ),
+              const SizedBox(height: 8),
+            ] else if (index > 0) ...[
+              const SizedBox(height: 16),
+            ],
+            Container(
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(
             color: isDark ? Colors.white.withValues(alpha: 0.03) : Colors.white,
@@ -148,6 +176,8 @@ class TimetableScreen extends StatelessWidget {
                 ),
             ],
           ),
+        ),
+          ],
         );
       },
     );
