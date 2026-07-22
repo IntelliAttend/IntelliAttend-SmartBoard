@@ -232,8 +232,11 @@ class AuthRepository implements IAuthRepository {
         await isar.deviceRegistrations.clear();
         await isar.hydrationProfiles.clear();
         await isar.timetableEntrys.clear();
-        await isar.attendanceSessionCaches.clear();
-        await isar.boardNotifications.clear();
+        await isar.storedNotifications.clear();
+        await isar.activeSessions.clear();
+        await isar.queuedScans.clear();
+        await isar.completedSessions.clear();
+        await isar.hydrationRosters.clear();
       });
 
       // Clear Firebase tokens + secure storage
