@@ -5,12 +5,15 @@ import 'package:isar/isar.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../core/config/app_config.dart';
+import '../../core/network/api_client.dart';
 import '../../core/utils/logger.dart';
+import '../../data/repositories/auth_repository.dart';
 import '../../models/isar_schemas.dart';
 import '../../services/hydration_service.dart';
 import '../../services/timetable_cache.dart';
 import '../../services/network_info_service.dart';
 import '../../services/hotspot_service.dart';
+import 'registration_screen.dart';
 import 'package:number_flow/number_flow.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -225,6 +228,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
 
                     const SizedBox(height: 48),
+                    _buildSectionHeader('DEVICE MANAGEMENT'),
+                    const SizedBox(height: 24),
+                    _buildResetDeviceButton(),
+                    const SizedBox(height: 48),
                     _buildSectionHeader('SYSTEM ACTIONS'),
                     const SizedBox(height: 24),
                     _buildActionButton(
@@ -276,6 +283,168 @@ class _SettingsScreenState extends State<SettingsScreen> {
         letterSpacing: 2,
       ),
     );
+  }
+
+  Widget _buildResetDeviceButton() {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.15)),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.error.withValues(alpha: 0.05),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: AppColors.error.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.restore_rounded, color: AppColors.error, size: 26),
+              ),
+              const SizedBox(width: 16),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Factory Reset',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimaryLight),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'Deregister this device and return to setup',
+                      style: TextStyle(fontSize: 13, color: AppColors.textSecondaryLight),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          Divider(color: Colors.black.withValues(alpha: 0.05), height: 1),
+          const SizedBox(height: 16),
+          const Text(
+            'This will clear all local data (timetable, attendance cache, registration) '
+            'and restart the app to the setup screen. You will need the Board ID and '
+            'password to re-register this device.',
+            style: TextStyle(fontSize: 12, color: AppColors.textSecondaryLight, height: 1.5),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _handleResetDevice,
+              icon: const Icon(Icons.restore_rounded, size: 18),
+              label: const Text(
+                'RESET DEVICE',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, letterSpacing: 0.5),
+              ),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.error,
+                side: BorderSide(color: AppColors.error.withValues(alpha: 0.3)),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handleResetDevice() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded, color: Colors.red),
+            const SizedBox(width: 10),
+            const Text('Factory Reset?'),
+          ],
+        ),
+        content: const Text(
+          'This will erase all local data on this SmartBoard and return it to the setup screen.\n\n'
+          'You will need the Board ID and new password to re-register.\n\n'
+          'This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('CANCEL'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('RESET NOW'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      final isar = Isar.getInstance();
+      if (isar == null) throw Exception('Database not initialized');
+
+      final authRepo = AuthRepository(
+        // We need a minimal ApiClient — the deregister method only clears local data
+        // and doesn't make any network calls.
+        ApiClient(),
+      );
+      await authRepo.deregister(isar);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Device reset. Restarting to setup screen...'),
+            backgroundColor: AppColors.primaryTeal,
+          ),
+        );
+
+        // Small delay to show the snackbar, then restart
+        await Future.delayed(const Duration(seconds: 1));
+
+        if (mounted) {
+          // Restart the app by replacing the entire navigation stack
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(
+              builder: (_) => const RegistrationScreen(),
+            ),
+            (route) => false,
+          );
+        }
+      }
+    } catch (e) {
+      Log.e('[Settings] Factory reset failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Reset failed: $e'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildNetworkCard() {
