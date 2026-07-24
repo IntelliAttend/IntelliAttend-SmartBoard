@@ -59,8 +59,8 @@
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
     <Property Id="ARPHELPLINK" Value="https://intelliattend.app/support" />
     <Property Id="ARPURLINFOABOUT" Value="https://intelliattend.app" />
-    <Property Id="ARPNOREPAIR" Value="yes" Secure="yes" />
-    <Property Id="ARPNOMODIFY" Value="yes" Secure="yes" />
+    <SetProperty Id="ARPNOREPAIR" Value="yes" Secure="yes" After="AppSearch" />
+    <SetProperty Id="ARPNOMODIFY" Value="yes" Secure="yes" After="AppSearch" />
     <Property Id="ARPINSTALLLOCATION" Value="[APPLICATIONFOLDER]" Secure="yes" />
 
     <!-- ═══════════════════════════════════════════════════════════════════════
