@@ -9,6 +9,11 @@ class AppConfig {
   // Hardcoded so the app works out of the box after a fresh MSI install,
   // even without a .env file or --dart-define flags.  These are the same
   // values the CI injects via secrets / repository variables.
+  //
+  // NOTE: Firebase Web API keys are NOT secrets — they are designed to be
+  // embedded in client applications. Security is enforced by Firebase
+  // Security Rules and App Check, not by hiding the API key. See:
+  // https://firebase.google.com/docs/projects/api-keys
   static const String _prodBaseUrl = 'https://api.intelliattend.app';
   static const String _prodFirebaseApiKey =
       'AIzaSyBooFadQf3TZFvZOUJkihMUdgexrbeoQnE';

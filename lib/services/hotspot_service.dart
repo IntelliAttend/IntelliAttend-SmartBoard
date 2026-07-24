@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../core/utils/logger.dart';
+import '../core/utils/powershell_escape.dart';
 
 class HotspotConfig {
   final String ssid;
@@ -265,9 +266,9 @@ $jsonArr | ConvertTo-Json -Compress
 
   /// WinRT: Configure custom SSID/password, then start
   Future<bool> _startWinRtConfigured({required String ssid, required String password}) async {
-    // Escape single quotes for PowerShell
-    final safeSsid = ssid.replaceAll("'", "''");
-    final safePass = password.replaceAll("'", "''");
+    // Use single-quote escaping (safest PowerShell context) for user values.
+    final safeSsid = PowerShellEscape.singleQuote(ssid);
+    final safePass = PowerShellEscape.singleQuote(password);
 
     final output = await _runPowerShell('''
 \$config = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringAccessPointConfiguration]::new()
@@ -326,9 +327,12 @@ Write-Output $opResult.Status
 
   /// netsh: Legacy hosted network with custom SSID/password
   Future<void> _startNetsh({required String ssid, required String password}) async {
+    // Validate SSID/password before passing to netsh.
+    final safeSsid = PowerShellEscape.forNetsh(ssid, field: 'SSID');
+    final safePassword = PowerShellEscape.forNetsh(password, field: 'Password');
     final configResult = await Process.run('netsh', [
       'wlan', 'set', 'hostednetwork', 'mode=allow',
-      'ssid=$ssid', 'key=$password',
+      'ssid=$safeSsid', 'key=$safePassword',
     ]);
     Log.i('[Hotspot] netsh config: ${configResult.stdout}');
 

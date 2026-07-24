@@ -4,6 +4,7 @@ import 'dart:io';
 import '../config/install_paths.dart';
 import '../lifecycle/app_lifecycle_manager.dart';
 import '../utils/logger.dart';
+import '../utils/powershell_escape.dart';
 import 'health_snapshot.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -166,10 +167,14 @@ class DiagnosticBundle {
       await destFile.delete();
     }
 
-    // Use Compress-Archive
+    // Use Compress-Archive with properly escaped paths
+    final safeSource = PowerShellEscape.forCommand('$sourcePath\\*');
+    final safeDest = PowerShellEscape.forCommand(destPath);
     await Process.run('powershell', [
+      '-NonInteractive',
+      '-NoProfile',
       '-Command',
-      'Compress-Archive -Path "$sourcePath\\*" -DestinationPath "$destPath" -CompressionLevel Optimal',
+      'Compress-Archive -Path $safeSource -DestinationPath $safeDest -CompressionLevel Optimal',
     ]);
   }
 }

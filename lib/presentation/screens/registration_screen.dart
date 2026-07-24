@@ -24,7 +24,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   final _formKey = GlobalKey<FormState>();
   final _passwordController = TextEditingController();
   final _smartBoardIdController = TextEditingController();
-  final _otpController = TextEditingController();
 
   // One-shot guard: prevents the Consumer builder from scheduling multiple
   // navigation callbacks when notifyListeners() fires repeatedly while
@@ -47,7 +46,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   void dispose() {
     _passwordController.dispose();
     _smartBoardIdController.dispose();
-    _otpController.dispose();
     super.dispose();
   }
 
@@ -235,9 +233,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                             ),
                             const SizedBox(height: 32),
                             Text(
-                              provider.step == RegistrationStep.otpSent
-                                  ? 'BOND HARDWARE'
-                                  : 'SYSTEM AUTHENTICATION',
+                              'SYSTEM AUTHENTICATION',
                               textAlign: TextAlign.center,
                               style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                                 fontWeight: FontWeight.w900,
@@ -247,9 +243,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                             ),
                             const SizedBox(height: 12),
                             Text(
-                              provider.step == RegistrationStep.otpSent
-                                  ? 'Verify identity to link this board.'
-                                  : 'Authenticate with your SmartBoard ID.',
+                              'Authenticate with your SmartBoard ID.',
                               textAlign: TextAlign.center,
                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                 color: AppColors.textSecondaryLight,
@@ -263,7 +257,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                               label: 'SmartBoard ID',
                               hint: 'e.g. IASB-XXXX',
                               icon: Icons.monitor_rounded,
-                              enabled: provider.step == RegistrationStep.idle,
+                              enabled: !provider.isLoading,
                             ),
                             const SizedBox(height: 24),
                             _buildTextField(
@@ -271,45 +265,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                               label: 'System Password',
                               hint: '••••••••',
                               icon: Icons.lock_outline_rounded,
-                              enabled: provider.step == RegistrationStep.idle,
+                              enabled: !provider.isLoading,
                               isPassword: true,
                             ),
-                            if (provider.step == RegistrationStep.otpSent) ...[
-                              const SizedBox(height: 24),
-                              Text(
-                                'Identity Verified. Please enter the PIN sent to:\n${provider.adminEmail ?? "IT Administrator"}',
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                    color: AppColors.primaryTeal,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.bold),
-                              ),
-                              const SizedBox(height: 16),
-                                _buildTextField(
-                                  controller: _otpController,
-                                  label: 'Administrative PIN',
-                                  hint: 'Enter 6-digit OTP',
-                                  icon: Icons.vpn_key_rounded,
-                                  keyboardType: TextInputType.number,
-                                  maxLength: 6,
-                                ),
-                                const SizedBox(height: 12),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    const Icon(Icons.timer_outlined, size: 14, color: Colors.orange),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      'Expires in: ${provider.formattedOtpTime}',
-                                      style: const TextStyle(
-                                        color: Colors.orange,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
                             const SizedBox(height: 48),
                             SizedBox(
                               width: double.infinity,
@@ -318,18 +276,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                                 onPressed: provider.isLoading
                                     ? null
                                     : () {
-                                        if (provider.step == RegistrationStep.otpSent) {
-                                          if (_formKey.currentState!.validate()) {
-                                            provider.verifyOtp(
-                                                _smartBoardIdController.text,
-                                                _otpController.text);
-                                          }
-                                        } else {
-                                          if (_formKey.currentState!.validate()) {
-                                            provider.login(
-                                                _smartBoardIdController.text,
-                                                _passwordController.text);
-                                          }
+                                        if (_formKey.currentState!.validate()) {
+                                          provider.login(
+                                              _smartBoardIdController.text,
+                                              _passwordController.text);
                                         }
                                       },
                                 style: ElevatedButton.styleFrom(
@@ -345,26 +295,14 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                                         height: 24,
                                         child: CircularProgressIndicator(
                                             color: Colors.white, strokeWidth: 2))
-                                    : Text(
-                                        provider.step == RegistrationStep.otpSent
-                                            ? 'VERIFY & BOND DEVICE'
-                                            : 'AUTHENTICATE SYSTEM',
-                                        style: const TextStyle(
+                                    : const Text(
+                                        'AUTHENTICATE SYSTEM',
+                                        style: TextStyle(
                                             fontSize: 14,
                                             fontWeight: FontWeight.w800,
                                             letterSpacing: 1)),
                               ),
                             ),
-                            if (provider.step == RegistrationStep.otpSent)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 16),
-                                child: TextButton(
-                                  onPressed: provider.reset,
-                                  child: const Text('Cancel & Start Over',
-                                      style: TextStyle(
-                                          color: AppColors.textSecondaryLight, fontSize: 13)),
-                                ),
-                              ),
                           ],
                         ),
                       ),

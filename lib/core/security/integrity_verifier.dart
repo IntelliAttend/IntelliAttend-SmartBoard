@@ -4,6 +4,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import '../config/app_config.dart';
 import '../utils/logger.dart';
+import '../utils/powershell_escape.dart';
 
 class IntegrityVerifier {
   /// Expected SHA-256 hash injected via `--dart-define=INTEGRITY_HASH=...`
@@ -38,13 +39,12 @@ class IntegrityVerifier {
         return result.exitCode == 0;
       }
       if (Platform.isWindows) {
-        final executablePath =
-            Platform.resolvedExecutable.replaceAll("'", "''");
+        final safePath = PowerShellEscape.forCommand(Platform.resolvedExecutable);
         final result = await Process.run('powershell', [
           '-NonInteractive',
           '-NoProfile',
           '-Command',
-          "Get-AuthenticodeSignature -FilePath '$executablePath' | Select-Object -ExpandProperty Status",
+          "Get-AuthenticodeSignature -FilePath $safePath | Select-Object -ExpandProperty Status",
         ]);
         return result.exitCode == 0 &&
             result.stdout.toString().trim() == 'Valid';

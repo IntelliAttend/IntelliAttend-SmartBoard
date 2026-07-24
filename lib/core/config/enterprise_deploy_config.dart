@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../utils/logger.dart';
+import 'app_config.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EnterpriseDeployConfig
@@ -108,10 +109,10 @@ class EnterpriseDeployConfig {
   String toEnvFormat() {
     final lines = <String>[
       'API_BASE_URL=${server.apiBaseUrl}',
-      'FIREBASE_API_KEY=${firebase.apiKey}',
-      'FIREBASE_PROJECT_ID=${firebase.projectId}',
-      'FIREBASE_APP_ID=${firebase.appId}',
-      'FIREBASE_MESSAGING_SENDER_ID=${firebase.messagingSenderId}',
+      'FIREBASE_API_KEY=${firebase.effectiveApiKey}',
+      'FIREBASE_PROJECT_ID=${firebase.effectiveProjectId}',
+      'FIREBASE_APP_ID=${firebase.effectiveAppId}',
+      'FIREBASE_MESSAGING_SENDER_ID=${firebase.effectiveMessagingSenderId}',
       if (server.sslPinFingerprint != null)
         'SSL_PIN_FINGERPRINT=${server.sslPinFingerprint}',
       'ENABLE_DOCUMENTS=${features.enableDocuments}',
@@ -153,23 +154,26 @@ class FirebaseConfig {
   final String messagingSenderId;
 
   const FirebaseConfig({
-    this.apiKey = 'AIzaSyBooFadQf3TZFvZOUJkihMUdgexrbeoQnE',
-    this.projectId = 'intelliattend-a2564',
-    this.appId = '1:738499328288:web:c345f44de9d8393062ff45',
-    this.messagingSenderId = '738499328288',
+    this.apiKey = '',
+    this.projectId = '',
+    this.appId = '',
+    this.messagingSenderId = '',
   });
 
   factory FirebaseConfig.fromJson(Map<String, dynamic> json) {
     return FirebaseConfig(
-      apiKey: json['api_key']?.toString() ??
-          'AIzaSyBooFadQf3TZFvZOUJkihMUdgexrbeoQnE',
-      projectId: json['project_id']?.toString() ?? 'intelliattend-a2564',
-      appId: json['app_id']?.toString() ??
-          '1:738499328288:web:c345f44de9d8393062ff45',
-      messagingSenderId:
-          json['messaging_sender_id']?.toString() ?? '738499328288',
+      apiKey: json['api_key']?.toString() ?? '',
+      projectId: json['project_id']?.toString() ?? '',
+      appId: json['app_id']?.toString() ?? '',
+      messagingSenderId: json['messaging_sender_id']?.toString() ?? '',
     );
   }
+
+  /// Returns the effective value, falling back to AppConfig production defaults.
+  String get effectiveApiKey => apiKey.isNotEmpty ? apiKey : AppConfig.firebaseApiKey;
+  String get effectiveProjectId => projectId.isNotEmpty ? projectId : AppConfig.firebaseProjectId;
+  String get effectiveAppId => appId.isNotEmpty ? appId : AppConfig.firebaseAppId;
+  String get effectiveMessagingSenderId => messagingSenderId.isNotEmpty ? messagingSenderId : AppConfig.firebaseMessagingSenderId;
 
   Map<String, dynamic> toJson() => {
         'api_key': apiKey,

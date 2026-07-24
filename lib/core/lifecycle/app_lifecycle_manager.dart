@@ -228,8 +228,7 @@ class AppLifecycleManager {
   static void _trace(String message) {
     if (kIsWeb || !Platform.isWindows) return;
     try {
-      final dir = File(Platform.resolvedExecutable).parent;
-      final file = File('${dir.path}\\startup_trace.log');
+      final file = File('${InstallPaths.logDir}\\startup_trace.log');
       final now = DateTime.now().toIso8601String();
       file.writeAsStringSync('[$now] $message\n', mode: FileMode.append);
     } catch (_) {
