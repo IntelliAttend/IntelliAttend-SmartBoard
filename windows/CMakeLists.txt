@@ -56,6 +56,11 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 
+# Update agent (standalone C++ process watchdog — not a Flutter dependency)
+add_subdirectory("update_agent")
+install(TARGETS update_agent RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
