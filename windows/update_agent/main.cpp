@@ -56,7 +56,7 @@ static bool SaveState(const std::wstring& path, UpdateState& state,
 
 // ── State: Boot ──────────────────────────────────────────────────────────
 
-static bool DoBoot(const std::wstring& statePath, UpdateState& state) {
+static bool DoBoot(const std::wstring& statePath, UpdateState& /*state*/) {
   UA_LOG_INFO(StateName(State::Boot), L"update_agent.exe starting");
 
   // Acquire singleton mutex — only one agent may run.
