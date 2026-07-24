@@ -79,15 +79,15 @@ jobs:
       - name: Verify SSL certificate fingerprint
         shell: pwsh
         run: |
-          $host = "api.intelliattend.app"
+          $apiHost = "api.intelliattend.app"
           $expected = "${{ secrets.SSL_PIN_FINGERPRINT }}"
 
-          Write-Host "Verifying SSL pin for ${host}..." -ForegroundColor Cyan
+          Write-Host "Verifying SSL pin for ${apiHost}..." -ForegroundColor Cyan
 
           try {
-            $tcp = New-Object System.Net.Sockets.TcpClient($host, 443)
+            $tcp = New-Object System.Net.Sockets.TcpClient($apiHost, 443)
             $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false, { $true })
-            $ssl.AuthenticateAsClient($host)
+            $ssl.AuthenticateAsClient($apiHost)
             $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($ssl.RemoteCertificate)
             $ssl.Close()
             $tcp.Close()

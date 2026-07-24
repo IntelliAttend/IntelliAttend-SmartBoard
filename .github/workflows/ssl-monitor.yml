@@ -37,13 +37,13 @@ jobs:
         id: ssl_check
         shell: pwsh
         run: |
-          $host = "api.intelliattend.app"
-          Write-Host "Checking SSL certificate for ${host}..." -ForegroundColor Cyan
+          $apiHost = "api.intelliattend.app"
+          Write-Host "Checking SSL certificate for ${apiHost}..." -ForegroundColor Cyan
 
           # Extract current cert fingerprint
-          $tcp = New-Object System.Net.Sockets.TcpClient($host, 443)
+          $tcp = New-Object System.Net.Sockets.TcpClient($apiHost, 443)
           $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false, { $true })
-          $ssl.AuthenticateAsClient($host)
+          $ssl.AuthenticateAsClient($apiHost)
           $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($ssl.RemoteCertificate)
           $ssl.Close()
           $tcp.Close()
