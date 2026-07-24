@@ -58,8 +58,12 @@ add_subdirectory("runner")
 
 # Update agent (standalone C++ process watchdog — not a Flutter dependency)
 add_subdirectory("update_agent")
-install(TARGETS update_agent RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
-  COMPONENT Runtime)
+add_custom_command(TARGET intelliattend_smartboard POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:update_agent>
+    $<TARGET_FILE_DIR:intelliattend_smartboard>/update_agent.exe
+  COMMENT "Copying update_agent.exe to bundle directory"
+)
 
 
 # Generated plugin build rules, which manage building the plugins and adding
