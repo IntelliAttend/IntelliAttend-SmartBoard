@@ -1,5 +1,6 @@
 #include "launcher.h"
 #include "logger.h"
+#include <vector>
 
 namespace ua {
 

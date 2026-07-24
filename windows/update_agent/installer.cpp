@@ -1,6 +1,7 @@
 #include "installer.h"
 #include "logger.h"
 #include <sstream>
+#include <vector>
 
 namespace ua {
 

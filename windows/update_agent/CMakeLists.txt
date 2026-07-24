@@ -27,7 +27,6 @@ target_compile_definitions(update_agent PRIVATE
   UNICODE
   _UNICODE
   NOMINMAX
-  WIN32_LEAN_AND_MEAN
 )
 
 if(MSVC)
@@ -45,6 +44,7 @@ target_link_libraries(update_agent PRIVATE
   shlwapi
   wtsapi32
   rstrtmgr
+  psapi
 )
 
 target_include_directories(update_agent PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

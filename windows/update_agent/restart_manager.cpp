@@ -1,6 +1,7 @@
 #include "restart_manager.h"
 #include "logger.h"
 #include <rstrtmgr.h>
+#include <psapi.h>
 
 #pragma comment(lib, "rstrtmgr.lib")
 
