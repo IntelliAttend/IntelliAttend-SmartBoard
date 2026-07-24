@@ -15,7 +15,6 @@
 #include "heartbeat.h"
 #include "install_journal.h"
 #include "authenticode.h"
-#include "restart_manager.h"
 #include "session.h"
 #include "event_log.h"
 
@@ -37,9 +36,9 @@ static const wchar_t* StateName(State s) {
 }
 
 // Write state file and update the in-memory state.
-static bool UpdateState(const std::wstring& path, UpdateState& state,
-                         const std::wstring& newState,
-                         const std::wstring& error = L"") {
+static bool SaveState(const std::wstring& path, UpdateState& state,
+                       const std::wstring& newState,
+                       const std::wstring& error = L"") {
   state.state = newState;
   state.owner = L"agent";
   if (!error.empty()) state.error = error;
@@ -157,21 +156,9 @@ static bool DoWaitingAppExit(UpdateState& state) {
   swprintf_s(buf, L"Watching app PID=%d", state.appPid);
   UA_LOG_INFO(StateName(State::WaitingAppExit), buf);
 
-  // Use Restart Manager to identify locked files.
-  std::wstring appDir = DirectoryOf(state.appExePath);
-  if (RestartManager::BeginSession(appDir)) {
-    auto locked = RestartManager::GetLockedProcesses();
-    if (!locked.empty()) {
-      wchar_t lockBuf[128];
-      swprintf_s(lockBuf, L"Restart Manager found %lu locked processes", (DWORD)locked.size());
-      UA_LOG_INFO(StateName(State::WaitingAppExit), lockBuf);
-
-      // Request graceful shutdown via Restart Manager.
-      UA_LOG_INFO(StateName(State::WaitingAppExit), L"Requesting graceful shutdown via Restart Manager");
-      RestartManager::ShutdownApplications();
-    }
-    RestartManager::EndSession();
-  }
+  // Restart Manager integration deferred to future version.
+  // The existing wait-and-terminate fallback handles locked processes.
+  UA_LOG_INFO(StateName(State::WaitingAppExit), L"Waiting for application to exit (no Restart Manager)");
 
   // Check if app is already gone.
   if (!IsProcessRunning(state.appPid)) {
@@ -221,7 +208,7 @@ static bool DoInstalling(const std::wstring& statePath, UpdateState& state) {
 
   for (int attempt = 1; attempt <= kMsiMaxRetries; attempt++) {
     state.attempt = attempt;
-    UpdateState(statePath, state, L"installing");
+    SaveState(statePath, state, L"installing");
     Heartbeat::Pulse();
 
     wchar_t buf[256];
@@ -316,7 +303,7 @@ static bool DoVerifying(UpdateState& state) {
 // ── State: Restarting ────────────────────────────────────────────────────
 
 static bool DoRestarting(const std::wstring& statePath, UpdateState& state) {
-  UpdateState(statePath, state, L"restarting");
+  SaveState(statePath, state, L"restarting");
 
   wchar_t buf[256];
   swprintf_s(buf, L"Launching %s --intelliattend-autostart", state.appExePath.c_str());
@@ -345,7 +332,7 @@ static bool DoCleanup(const std::wstring& statePath, UpdateState& state) {
     UA_LOG_WARN(StateName(State::Cleanup), L"Failed to delete MSI (non-fatal)");
   }
 
-  UpdateState(statePath, state, L"installed");
+  SaveState(statePath, state, L"installed");
   InstallJournal::Record(L"cleanup_complete");
   EventLog::Info(L"Update completed successfully");
 
@@ -412,7 +399,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
 
   currentState = State::WaitingAppExit;
   if (!DoWaitingAppExit(state)) {
-    UpdateState(statePath, state, L"failed", L"App exit timeout");
+    SaveState(statePath, state, L"failed", L"App exit timeout");
     Logger::Instance().Error(StateName(currentState), L"Exiting with code 1");
     EventLog::Error(L"Update agent: application exit timeout");
     Logger::Instance().Close();
@@ -424,7 +411,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
 
   currentState = State::Installing;
   if (!DoInstalling(statePath, state)) {
-    UpdateState(statePath, state, L"failed", L"MSI install failed");
+    SaveState(statePath, state, L"failed", L"MSI install failed");
     Logger::Instance().Error(StateName(currentState), L"Exiting with code 2");
     EventLog::Error(L"Update agent: MSI installation failed");
     Logger::Instance().Close();
@@ -435,9 +422,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
   // ── VERIFYING ──────────────────────────────────────────────────────
 
   currentState = State::Verifying;
-  UpdateState(statePath, state, L"installed");
+  SaveState(statePath, state, L"installed");
   if (!DoVerifying(state)) {
-    UpdateState(statePath, state, L"failed", L"Post-install verification failed");
+    SaveState(statePath, state, L"failed", L"Post-install verification failed");
     Logger::Instance().Error(StateName(currentState), L"Exiting with code 3");
     EventLog::Error(L"Update agent: post-install verification failed");
     Logger::Instance().Close();
@@ -449,7 +436,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
 
   currentState = State::Restarting;
   if (!DoRestarting(statePath, state)) {
-    UpdateState(statePath, state, L"failed", L"App restart failed");
+    SaveState(statePath, state, L"failed", L"App restart failed");
     Logger::Instance().Error(StateName(currentState), L"Exiting with code 4");
     EventLog::Error(L"Update agent: application restart failed");
     Logger::Instance().Close();

@@ -17,7 +17,6 @@ add_executable(update_agent WIN32
   "heartbeat.cpp"
   "install_journal.cpp"
   "authenticode.cpp"
-  "restart_manager.cpp"
   "session.cpp"
   "event_log.cpp"
   "resources/update_agent.rc"
@@ -43,8 +42,6 @@ target_link_libraries(update_agent PRIVATE
   crypt32
   shlwapi
   wtsapi32
-  rstrtmgr
-  psapi
 )
 
 target_include_directories(update_agent PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

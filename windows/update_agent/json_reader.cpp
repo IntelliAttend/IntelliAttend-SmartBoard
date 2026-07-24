@@ -14,14 +14,6 @@ static std::wstring Trim(const std::wstring& s) {
   return s.substr(start, end - start + 1);
 }
 
-// Remove surrounding quotes from a JSON string value.
-static std::wstring Unquote(const std::wstring& s) {
-  if (s.size() >= 2 && s.front() == L'"' && s.back() == L'"') {
-    return s.substr(1, s.size() - 2);
-  }
-  return s;
-}
-
 // Parse a flat JSON object: { "key": "value", "key2": 123 }
 // Returns map of string keys to string values (integers converted to string).
 static std::map<std::wstring, std::wstring> ParseFlatJson(const std::wstring& json) {
