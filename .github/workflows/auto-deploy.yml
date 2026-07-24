@@ -28,6 +28,7 @@ name: Auto-Deploy
 on:
   push:
     branches: [school-main]
+  workflow_dispatch:
 
 permissions:
   contents: write
