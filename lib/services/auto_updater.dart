@@ -5,11 +5,15 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:path_provider/path_provider.dart';
 
+import '../core/config/install_paths.dart';
+import '../core/observability/observability_manager.dart';
+import '../core/update/manifest_policy.dart';
+import '../core/update/manifest_validator.dart';
 import '../core/utils/logger.dart';
 import '../core/utils/version.dart';
 import '../models/remote_config.dart';
+import 'update_agent_launcher.dart';
 import 'update_health_monitor.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,6 +124,13 @@ class AutoUpdater {
 
   static String? _boardId;
 
+  /// The release channel this board belongs to (e.g. "stable", "beta").
+  static String _boardChannel = 'stable';
+
+  /// HMAC-SHA256 secret key for manifest signature verification.
+  /// Null disables signature checking (dev mode only).
+  static String? _hmacSecretKey;
+
   /// Timestamp when AutoUpdater was initialized. Used to skip checks
   /// during the first 30s of startup (prevents overlay on boot).
   static DateTime? _initializedAt;
@@ -135,15 +146,22 @@ class AutoUpdater {
   // ── Initialisation ────────────────────────────────────────────────────────
 
   /// Must be called once at startup before [checkForUpdate].
-  static Future<void> init({String? boardId}) async {
+  static Future<void> init({
+    String? boardId,
+    String boardChannel = 'stable',
+    String? hmacSecretKey,
+  }) async {
     _boardId = boardId;
+    _boardChannel = boardChannel;
+    _hmacSecretKey = hmacSecretKey;
     _initializedAt = DateTime.now();
     try {
       _packageInfo = await PackageInfo.fromPlatform();
     } catch (e) {
       Log.w('[AutoUpdater] Could not read package info: $e');
     }
-    Log.d('[AutoUpdater] Initialised (version: $_installedVersion)');
+    Log.d('[AutoUpdater] Initialised (version: $_installedVersion, '
+        'channel: $_boardChannel)');
   }
 
   // ── Update check ──────────────────────────────────────────────────────────
@@ -194,6 +212,32 @@ class AutoUpdater {
     }
     _lastCheckedManifestFingerprint = fingerprint;
 
+    // ── Phase 4: Policy Validation ──────────────────────────────────────────
+    //
+    // Before doing anything else, ask ManifestValidator whether this
+    // manifest is allowed to install on this machine. This covers:
+    //   - Schema version compatibility
+    //   - Manifest expiry
+    //   - Release channel enforcement
+    //   - Version range / downgrade protection
+    //   - OS compatibility
+    //   - Rollout cohort inclusion
+    //   - HMAC signature verification
+    final policy = ManifestPolicy(
+      boardChannel: _boardChannel,
+      windowsVersion: UpdateManifest.currentWindowsVersion,
+      installedVersion: _installedVersion.toString(),
+      boardId: _boardId ?? 'unknown',
+      hmacSecretKey: _hmacSecretKey,
+    );
+    final validation = ManifestValidator.check(manifest, policy);
+    if (validation.denied) {
+      Log.w('[AutoUpdater] Manifest denied by policy: ${validation.firstReason}');
+      ObservabilityManager.updateBreadcrumb('denied',
+          detail: validation.firstReason);
+      return false;
+    }
+
     // Guard: don't start a second update while one is running.
     // BUT: if force is true OR progress is stuck (>5 min), allow override.
     if (progress.value != null && progress.value!.state != UpdateState.failed) {
@@ -217,13 +261,6 @@ class AutoUpdater {
     final url = manifest.downloadUrl;
     if (url == null || url.isEmpty) {
       Log.w('[AutoUpdater] Update needed but no download_url in manifest');
-      return false;
-    }
-
-    // Check rollout cohort (skip if force).
-    if (!forceUpdate && _boardId != null && !manifest.includesBoard(_boardId!)) {
-      Log.d('[AutoUpdater] Board $_boardId not in rollout cohort '
-          '(${manifest.rolloutPercentage}%) — skipping');
       return false;
     }
 
@@ -282,8 +319,8 @@ class AutoUpdater {
 
     // ── 1. Download ──────────────────────────────────────────────────────────
 
-    final tempDir = await getTemporaryDirectory();
-    final msiPath = '${tempDir.path}\\IASB-$targetVersion.msi';
+    await InstallPaths.ensureDirectories();
+    final msiPath = '${InstallPaths.updateDir}\\IASB-$targetVersion.msi';
     final msiFile = File(msiPath);
 
     // Remove any partially-downloaded file from a previous attempt.
@@ -357,7 +394,7 @@ class AutoUpdater {
       throw Exception('Update rejected: manifest has no SHA-256 hash');
     }
 
-    // ── 3. Install ───────────────────────────────────────────────────────────
+    // ── 3. Launch Update Agent ──────────────────────────────────────────────
 
     progress.value = UpdateProgress(
       state: UpdateState.installing,
@@ -366,17 +403,25 @@ class AutoUpdater {
       force: manifest.force,
     );
 
-    try {
-      await _installMsi(msiPath);
-    } catch (e) {
-      Log.e('[AutoUpdater] Installation failed: $e');
+    final logPath =
+        '${InstallPaths.logDir}\\update_${DateTime.now().millisecondsSinceEpoch}.log';
+
+    final launched = await UpdateAgentLauncher.launch(
+      msiPath: msiPath,
+      targetVersion: targetVersion,
+      expectedSha256: manifest.sha256 ?? '',
+      logPath: logPath,
+    );
+
+    if (!launched) {
+      Log.e('[AutoUpdater] Failed to launch update agent');
       progress.value = UpdateProgress(
         state: UpdateState.failed,
         targetVersion: targetVersion,
-        error: 'Installation failed: ${_userFriendlyError(e)}',
+        error: 'Failed to launch update agent. Try again later.',
         force: manifest.force,
       );
-      rethrow;
+      return;
     }
 
     // ── 4. Done ──────────────────────────────────────────────────────────────
@@ -388,14 +433,13 @@ class AutoUpdater {
       force: manifest.force,
     );
 
-    Log.i('[AutoUpdater] Update to v$targetVersion installed. Exiting.');
+    Log.i('[AutoUpdater] Agent launched for v$targetVersion. Exiting.');
 
     // Small delay so the UI overlay can show the "completed" state.
     await Future.delayed(const Duration(seconds: 2));
 
-    // Exit the app. The MSI installer (via registry auto-start) will relaunch
-    // the new version.
-    _exitApp();
+    // Exit the app. The agent owns the update process from here.
+    exit(0);
   }
 
   // ── Download with progress ────────────────────────────────────────────────
@@ -462,133 +506,6 @@ class AutoUpdater {
     final bytes = await file.readAsBytes();
     final hash = sha256.convert(bytes).toString();
     return hash.toLowerCase() == expected.toLowerCase();
-  }
-
-  // ── MSI installation ──────────────────────────────────────────────────────
-
-  /// Invoke `msiexec` to install the MSI at [msiPath].
-  ///
-  /// Runs `msiexec` **synchronously** so the full-screen overlay stays visible
-  /// throughout installation. Windows Installer handles "file in use" via
-  /// deferred file replacement (MoveFileEx / pending rename operations) — the
-  /// actual file swap happens after our process exits.
-  ///
-  /// Retries up to 3 times on transient failures. Throws if all retries fail.
-  ///
-  /// Flags:
-  ///   `/passive`     — show progress bar, no user interaction required
-  ///   `/norestart`   — don't force a reboot (the board will relaunch itself)
-  ///   `/log`         — write install log for diagnostics
-  static Future<void> _installMsi(String msiPath) async {
-    if (!Platform.isWindows) {
-      Log.w('[AutoUpdater] MSI install skipped (not Windows)');
-      return;
-    }
-
-    const maxRetries = 3;
-    const retryDelay = Duration(seconds: 5);
-
-    for (int attempt = 1; attempt <= maxRetries; attempt++) {
-      final logPath = '${Directory.systemTemp.path}\\IASB_install_${DateTime.now().millisecondsSinceEpoch}.log';
-
-      Log.i('[AutoUpdater] Install attempt $attempt/$maxRetries: msiexec /i "$msiPath" /passive /norestart /log "$logPath"');
-
-      try {
-        final result = await Process.run(
-          'msiexec',
-          ['/i', msiPath, '/passive', '/norestart', '/log', logPath],
-        ).timeout(const Duration(minutes: 5));
-
-        if (result.exitCode == 0 || result.exitCode == 3010) {
-          // 3010 = "reboot required" — acceptable, the board will relaunch
-          // via auto-start registry key.
-          if (result.exitCode == 3010) {
-            Log.i('[AutoUpdater] msiexec exit code 3010 (reboot required) — continuing');
-          } else {
-            Log.i('[AutoUpdater] msiexec completed successfully');
-          }
-          return;
-        }
-
-        Log.w('[AutoUpdater] Install attempt $attempt failed (exit code ${result.exitCode})');
-        Log.w('[AutoUpdater] stdout: ${result.stdout}');
-        Log.w('[AutoUpdater] stderr: ${result.stderr}');
-        Log.w('[AutoUpdater] Log: $logPath');
-      } catch (e) {
-        Log.w('[AutoUpdater] Install attempt $attempt threw exception: $e');
-      }
-
-      if (attempt < maxRetries) {
-        Log.i('[AutoUpdater] Retrying in ${retryDelay.inSeconds}s...');
-        await Future.delayed(retryDelay);
-      }
-    }
-
-    throw Exception(
-        'msiexec failed after $maxRetries attempts. '
-        'Check install logs in ${Directory.systemTemp.path}');
-  }
-
-  // ── App exit after install ────────────────────────────────────────────────
-
-  /// Terminate the current process after a successful update.
-  ///
-  /// The MSI installs the new version in-place using deferred file
-  /// replacement (MoveFileEx). The actual file swap happens after our
-  /// process exits and releases file handles.
-  ///
-  /// We spawn a detached `cmd /c` helper that waits a few seconds (for
-  /// our process to exit and the OS to apply pending file renames), then
-  /// launches the new binary with `--intelliattend-autostart`. This
-  /// guarantees the app restarts immediately with the updated version —
-  /// the auto-start registry key only fires at Windows login, which is
-  /// not soon enough for a kiosk board.
-  static void _exitApp() {
-    Log.i('[AutoUpdater] Spawning delayed restart helper and exiting.');
-
-    if (Platform.isWindows) {
-      try {
-        // Always use the MSI install location, NOT Platform.resolvedExecutable.
-        // During development the running process is in the build\Debug directory,
-        // but the MSI installs the new version to %LOCALAPPDATA%\intelliattend_smartboard\.
-        // We must relaunch the installed copy to run the updated version.
-        final localAppData = Platform.environment['LOCALAPPDATA'] ?? '';
-        final installDir = '$localAppData\\intelliattend_smartboard';
-        final exePath = '$installDir\\intelliattend_smartboard.exe';
-        Log.i('[AutoUpdater] Restart target: $exePath');
-
-        if (!File(exePath).existsSync()) {
-          Log.w('[AutoUpdater] Installed exe not found at $exePath, '
-              'falling back to Platform.resolvedExecutable');
-        }
-        final launchPath = File(exePath).existsSync()
-            ? exePath
-            : Platform.resolvedExecutable;
-        Log.i('[AutoUpdater] Launch path: $launchPath');
-
-        // Write a temporary batch file to avoid cmd quoting issues.
-        // Process.start('cmd', ['/c', ...]) wraps the /c arg in its own
-        // quotes for CreateProcess, which mangles nested quotes and paths.
-        final tempDir = Directory.systemTemp.createTempSync('sb_restart_');
-        final batFile = File('${tempDir.path}\\restart.bat');
-        batFile.writeAsStringSync(
-          '@echo off\r\n'
-          'timeout /t 3 /nobreak >nul\r\n'
-          'start "" "$launchPath" --intelliattend-autostart\r\n',
-        );
-        Log.i('[AutoUpdater] Restart batch: ${batFile.path}');
-        Process.start('cmd', ['/c', batFile.path],
-            mode: ProcessStartMode.detached);
-      } catch (e) {
-        Log.e('[AutoUpdater] Failed to spawn restart helper: $e');
-      }
-    }
-
-    // Give the detached helper a moment to start, then exit.
-    Future.delayed(const Duration(milliseconds: 500), () {
-      Log.i('[AutoUpdater] Exiting old process.');
-      exit(0);
-    });
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

@@ -3,30 +3,32 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:package_info_plus/package_info_plus.dart';
-import 'package:window_manager/window_manager.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
-import 'core/config/app_config.dart';
 import 'core/theme/app_theme.dart';
+import 'core/config/install_paths.dart';
 import 'core/utils/logger.dart';
+import 'core/lifecycle/app_lifecycle_manager.dart';
+import 'core/lifecycle/lifecycle_phase.dart';
+import 'core/lifecycle/lifecycle_recover.dart';
+import 'core/recovery/recovery_manager.dart';
+import 'core/recovery/recovery_state.dart';
+import 'core/observability/observability_manager.dart';
+import 'core/config/enterprise_deploy_config.dart';
 import 'services/session_manager.dart';
 import 'core/security/secure_storage_service.dart';
 import 'presentation/screens/boot_screen.dart';
-import 'presentation/screens/init_failure_screen.dart';
+import 'presentation/screens/recovery_screen.dart';
 import 'services/api_service.dart';
 import 'services/heartbeat_service.dart';
-import 'core/security/integrity_verifier.dart';
 import 'core/platform/kiosk_service.dart';
-import 'core/startup_service.dart';
 import 'core/platform/window_orchestrator_service.dart';
 import 'services/pre_flight_service.dart';
 import 'services/sync_manager.dart';
 import 'services/time_sync_service.dart';
 import 'services/notification_listener_service.dart';
-import 'services/auto_updater.dart';
-import 'services/remote_config_service.dart';
+import 'services/auto_updater.dart' hide UpdateState;
 import 'services/update_checker.dart';
 import 'services/update_health_monitor.dart';
 import 'core/utils/version.dart';
@@ -111,28 +113,6 @@ class _GlobalKillSwitchState extends State<GlobalKillSwitch> {
   }
 }
 
-class InitStatus {
-  final bool isar;
-  final bool secureStorage;
-  final bool dotenv;
-  final List<String> errors;
-
-  const InitStatus({
-    required this.isar,
-    required this.secureStorage,
-    required this.dotenv,
-    required this.errors,
-  });
-
-  bool get isFatal => !isar || !secureStorage;
-  String get message {
-    if (isFatal) {
-      return 'Critical initialization failed. Please reinstall or contact IT.';
-    }
-    return '';
-  }
-}
-
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 late final IDeviceRepository globalDeviceRepository;
 late final IAuthRepository globalAuthRepository;
@@ -140,232 +120,183 @@ late final IAuthRepository globalAuthRepository;
 void main(List<String> args) {
   runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
-    _traceStartup('main: widgets initialized args=$args');
 
-    final startupGuard = await StartupService.beginLaunch(args);
-    _traceStartup(
-        'startupGuard: crashLoop=${startupGuard.crashLoopDetected} autoStart=${startupGuard.isAutoStart} failures=${startupGuard.failedLaunches}');
-    if (startupGuard.crashLoopDetected) {
-      // ── Version-aware rollback check ──────────────────────────────────
-      // Before declaring total failure, check if this crash loop was
-      // caused by a newly installed version. If so, [UpdateHealthMonitor]
-      // will transparently roll back to the previous known-good version
-      // and restart the app.
-      try {
-        final info = await PackageInfo.fromPlatform();
-        final currentVer = Version.parse(info.version);
-        final rollbackInitiated = await UpdateHealthMonitor.init(currentVer);
-        if (rollbackInitiated) {
-          // UpdateHealthMonitor._performRollback exits the process.
-          // If we get here, rollback failed — fall through to failure screen.
-          Log.e('[Startup] Rollback was initiated but did not exit — '
-              'proceeding to failure screen.');
-        }
-      } catch (e) {
-        Log.e('[Startup] Rollback check failed: $e');
-      }
+    // ─── OBSERVABILITY (Sentry) ─────────────────────────────────────────
+    // Initialise Sentry before the lifecycle manager so crashes during
+    // startup are captured. DSN is read from env.json at runtime; for
+    // now we use the environment variable or leave disabled.
+    const sentryDsn = String.fromEnvironment('SENTRY_DSN', defaultValue: '');
+    await ObservabilityManager.init(dsn: sentryDsn.isEmpty ? null : sentryDsn);
 
-      await _initWindow();
-      await KioskService.forceRelease();
-      runApp(InitFailureScreen(message: startupGuard.message));
-      return;
-    }
-
-    // ─── SINGLE INSTANCE GUARD ──────────────────────────────────────────────
-    // On Windows, prevent two copies of the board software running side-by-side
-    // (e.g. startup registry entry + manual launch). We use an exclusive file
-    // lock in the system temp directory — the OS releases it automatically when
-    // the process exits, so no stale-lock problem on crash.
-    //
-    // The --post-update flag is passed by AutoUpdater._exitApp() after a
-    // successful MSI install. The old process is still alive (it hasn't exited
-    // yet), so we retry the lock acquisition with a short timeout — the old
-    // process exits within 3 seconds.  We no longer skip the guard entirely
-    // because that left a window where a third manual launch could start a
-    // second concurrent instance.
-    final isPostUpdate = args.contains('--post-update');
-    if (!kIsWeb && Platform.isWindows) {
-      await _acquireSingleInstanceLock(retryForPostUpdate: isPostUpdate);
-      _traceStartup('singleInstance: acquired');
-    }
-
-    // ─── TIER 1: Blocking (must pass or app can't run) ──────────────────────
-    await _initWindow();
-    _traceStartup('window: initialized');
-
-    // ─── RESET (--reset flag) ───────────────────────────────────────────────
-    // Wipe all persisted state BEFORE Isar / Firestore open. This lets the user
-    // start the registration flow from scratch without stale SecureStorage keys
-    // or a populated Isar database.
-    if (args.contains('--reset')) {
-      Log.w('[Startup] --reset flag detected. Wiping all local data...');
-      await SecureStorageService.clearAll().catchError((e) {
-        Log.e('[Startup] SecureStorage clear failed: $e');
-      });
-      final isarDir = await getApplicationSupportDirectory();
-      if (isarDir.existsSync()) {
-        isarDir.deleteSync(recursive: true);
-      }
-      Log.w('[Startup] Local data wiped. Booting to registration flow.');
-    }
-
-    // NOTE: Kiosk fullscreen is intentionally deferred until AFTER Tier-1
-    // plugin initialization succeeds. If a native C++ exception is thrown
-    // during plugin init, exiting the process while the window is already
-    // in fullscreen popup mode leaves DWM in a broken state — taskbar
-    // hidden, no visible window, system frozen.  By keeping the window in
-    // normal mode during init, any crash during plugin loading allows DWM
-    // to recover naturally.
-    final status = await _initTier1();
-    _traceStartup(
-        'tier1: isar=${status.isar} secure=${status.secureStorage} dotenv=${status.dotenv} fatal=${status.isFatal} errors=${status.errors}');
-
-    if (status.isFatal) {
-      await StartupService.markLaunchCompleted();
-      runApp(InitFailureScreen(message: status.message));
-      return;
-    }
-
-    // NOTE: Kiosk fullscreen is intentionally deferred until AFTER Tier-2
-    // and Integrity checks succeed. If a native C++ exception is thrown
-    // during plugin init or a fatal error occurs early, exiting the process
-    // while the window is already in fullscreen popup mode leaves DWM in
-    // a broken state — taskbar hidden, no visible window, system frozen.
-    // By keeping the window in normal mode during early boot, any crash
-    // allows DWM to recover naturally.  Fullscreen is applied immediately
-    // after integrity verification passes (see below).
-
-    // Register Windows auto-start immediately (before Tier 2) so the
-    // registry key is written even if a later step crashes the process.
-    // Previously this ran in Tier 3 (fire-and-forget) and was silently
-    // skipped when the app crashed.
-    if (!kIsWeb && Platform.isWindows) {
-      unawaited(StartupService.register().catchError((e) {
-        Log.e('❌ [Startup] Registration failed: $e');
-      }));
-    }
-
-    // ─── Set app version for structured logging ──────────────────────────────
-    try {
-      final info = await PackageInfo.fromPlatform();
-      Log.setAppVersion('${info.version}+${info.buildNumber}');
-    } catch (e) {
-      Log.w('[Startup] Could not read package version: $e');
-    }
-
-    // ─── TIER 2: Timeout-aware (fail gracefully, flag degraded) ─────────────
-    await _initTier2();
-    _traceStartup('tier2: completed');
-
-    // ─── Runtime Integrity ──────────────────────────────────────────────────
-    final tampered = await _verifyIntegrity();
-    _traceStartup('integrity: tampered=$tampered');
-    if (tampered) {
-      await StartupService.markLaunchCompleted();
-      runApp(MaterialApp(
-        home: Scaffold(
-          body: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.error_outline, size: 64, color: Colors.red),
-                const SizedBox(height: 16),
-                const Text('Device Integrity Check Failed',
-                    style:
-                        TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                const Text('Contact IT Support. Code: TAMPER-01'),
-              ],
-            ),
+    // ─── LIFECYCLE MANAGER ──────────────────────────────────────────────
+    // The lifecycle manager is the single authority for startup. It owns
+    // every phase: directories, recovery, validation, config, database,
+    // window. Each phase is timed and logged.
+    final phase = await AppLifecycleManager.run(
+      args: args,
+      onCrashLoop: (message) async {
+        // Crash loop detected — initialise recovery manager and show
+        // the recovery screen with full diagnostics.
+        await _showRecovery(
+          type: RecoveryType.crashLoop,
+          args: args,
+          diagnostics: RecoveryDiagnostics.fromGuard(
+            appVersion: AppLifecycleManager.appVersion,
+            guard: AppLifecycleManager.guardResult!,
+            failedPhase: AppLifecycleManager.currentPhase,
+            errorMessage: message,
+            timings: AppLifecycleManager.timings,
+            elapsed: AppLifecycleManager.elapsed,
           ),
-        ),
-      ));
-      return;
-    }
-
-    // Integrity and Tiers 1-2 passed — enable kiosk hardening and go
-    // fullscreen immediately so the taskbar is never visible.  The
-    // skipTaskbar:true in _initWindow() already hides the taskbar button;
-    // this call covers the entire screen and blocks close/sys commands.
-    KioskService.enable();
-    await KioskService.setMode(KioskMode.fullscreen);
-    _traceStartup('kiosk: enabled, fullscreen applied');
-
-    // ─── Create repositories & mount app ────────────────────────────────────
-    final apiClient = ApiClient();
-    globalAuthRepository = AuthRepository(apiClient);
-    globalDeviceRepository =
-        DeviceRepository(SessionManager.isar, globalAuthRepository);
-    unawaited(globalDeviceRepository.performMigrationBridge());
-
-    runApp(
-      GlobalKillSwitch(
-        child: MultiProvider(
-          providers: [
-            Provider<IDeviceRepository>.value(value: globalDeviceRepository),
-            Provider<IAuthRepository>.value(value: globalAuthRepository),
-            ChangeNotifierProvider(
-                create: (_) => RegistrationProvider(
-                    globalAuthRepository, globalDeviceRepository)),
-          ],
-          child: const IntelliAttendApp(),
-        ),
-      ),
+        );
+      },
+      onReady: () async {
+        // ─── POST-LIFECYCLE: Kiosk + Repos + UI ─────────────────────────
+        await _postLifecycleStartup(args);
+      },
     );
 
-    // ─── TIER 3: Fire-and-forget (don't block UI) ──────────────────────────
-    _initTier3();
-    _traceStartup('tier3: started');
-
-    // ─── Startup watchdog ──────────────────────────────────────────────────
-    // If the app does not reach a stable state (startBackgroundProtocols
-    // completes) within 45 seconds, forcibly release all kiosk constraints
-    // so the user can close the window. This prevents the "frozen fullscreen
-    // with no taskbar icon" scenario even when the event loop is alive but
-    // startup is blocked (e.g. BootScreen stuck on network timeout).
-    _startStartupWatchdog();
+    // If lifecycle didn't reach READY, show the recovery screen.
+    // This covers validation failures, database errors, and any
+    // other phase that returns PhaseResult.fail().
+    if (phase != AppLifecyclePhase.ready) {
+      await _showRecovery(
+        type: RecoveryType.lifecycleFailure,
+        args: args,
+        diagnostics: RecoveryDiagnostics.fromFailure(
+          appVersion: AppLifecycleManager.appVersion,
+          failedPhase: AppLifecycleManager.currentPhase,
+          errorMessage: 'Lifecycle stopped at ${phase.name}',
+          timings: AppLifecycleManager.timings,
+          elapsed: AppLifecycleManager.elapsed,
+        ),
+      );
+    }
   }, (Object error, StackTrace stack) {
-    Log.e('🔥 Unhandled application error', error, stack);
-    unawaited(
-        StartupService.markLaunchFailed('Unhandled application error: $error'));
-    _traceStartup('zone error: $error\n$stack');
+    Log.e('Unhandled application error', error, stack);
+    unawaited(ObservabilityManager.captureException(error, stackTrace: stack));
+    unawaited(LifecycleRecover.markLaunchFailed('Unhandled: $error'));
     unawaited(KioskService.forceRelease());
   });
 }
 
-void _traceStartup(String message) {
-  if (kIsWeb || !Platform.isWindows) return;
-  try {
-    final dir = File(Platform.resolvedExecutable).parent;
-    final file = File('${dir.path}\\startup_trace.log');
-    final now = DateTime.now().toIso8601String();
-    file.writeAsStringSync('[$now] $message\n', mode: FileMode.append);
-  } catch (_) {
-    // Startup tracing must never affect app launch.
+/// Show the recovery screen. Handles rollback attempt, kiosk release,
+/// and RecoveryManager initialisation.
+Future<void> _showRecovery({
+  required RecoveryType type,
+  required RecoveryDiagnostics diagnostics,
+  List<String> args = const [],
+}) async {
+  // Attempt rollback if this is an update-related crash loop.
+  if (type == RecoveryType.crashLoop) {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      final currentVer = Version.parse(info.version);
+      final rollbackInitiated = await UpdateHealthMonitor.init(currentVer);
+      if (rollbackInitiated) {
+        Log.e('[Main] Rollback initiated — exiting for restart');
+        return;
+      }
+    } catch (e) {
+      Log.e('[Main] Rollback check failed: $e');
+    }
+    await LifecycleRecover.markLaunchCompleted();
   }
+
+  await KioskService.forceRelease();
+
+  // Initialise the recovery manager — it drives the state machine
+  // and handles automatic recovery / user actions.
+  await RecoveryManager.init(
+    type: type,
+    diagnostics: diagnostics,
+    onRelaunch: () {
+      // Relaunch the full app lifecycle.
+      main(args);
+    },
+  );
+
+  runApp(const RecoveryScreen());
 }
 
-/// Tracks whether startup has reached a stable state.  Set to true after
-/// [startBackgroundProtocols] completes.  Reset to false on each full restart.
-bool _startupCompleted = false;
+/// Post-lifecycle startup: kiosk hardening, repositories, UI, services.
+///
+/// Called by the lifecycle manager's onReady callback after all phases
+/// have completed successfully.
+Future<void> _postLifecycleStartup(List<String> args) async {
+  // ─── RESET (--reset flag) ─────────────────────────────────────────────
+  if (args.contains('--reset')) {
+    Log.w('[Main] --reset flag detected. Wiping all local data...');
+    await SecureStorageService.clearAll().catchError((e) {
+      Log.e('[Main] SecureStorage clear failed: $e');
+    });
+    final isarDir = await getApplicationSupportDirectory();
+    if (isarDir.existsSync()) {
+      isarDir.deleteSync(recursive: true);
+    }
+    Log.w('[Main] Local data wiped. Booting to registration flow.');
+  }
+
+  // ─── SINGLE INSTANCE GUARD ────────────────────────────────────────────
+  final isPostUpdate = args.contains('--post-update');
+  if (!kIsWeb && Platform.isWindows) {
+    await _acquireSingleInstanceLock(retryForPostUpdate: isPostUpdate);
+  }
+
+  // ─── KIOSK HARDENING ──────────────────────────────────────────────────
+  KioskService.enable();
+  await KioskService.setMode(KioskMode.fullscreen);
+
+  // ─── REPOSITORIES & UI ────────────────────────────────────────────────
+  final apiClient = ApiClient();
+  globalAuthRepository = AuthRepository(apiClient);
+  globalDeviceRepository =
+      DeviceRepository(SessionManager.isar, globalAuthRepository);
+  unawaited(globalDeviceRepository.performMigrationBridge());
+
+  runApp(
+    GlobalKillSwitch(
+      child: MultiProvider(
+        providers: [
+          Provider<IDeviceRepository>.value(value: globalDeviceRepository),
+          Provider<IAuthRepository>.value(value: globalAuthRepository),
+          ChangeNotifierProvider(
+              create: (_) => RegistrationProvider(
+                  globalAuthRepository, globalDeviceRepository)),
+        ],
+        child: const IntelliAttendApp(),
+      ),
+    ),
+  );
+
+  // ─── FIRE-AND-FORGET SERVICES ────────────────────────────────────────
+  _initFireAndForget();
+  _startStartupWatchdog();
+}
 
 /// Starts a one-shot timer that force-releases kiosk constraints if
-/// [_startupCompleted] is not set within 60 seconds of app launch.
+/// startup is not complete within 60 seconds of app launch.
 void _startStartupWatchdog() {
   Future.delayed(const Duration(seconds: 60), () async {
-    if (!_startupCompleted) {
-      Log.w('🚨 [Startup] Watchdog fired — startup not complete after 60s. '
-          'Releasing kiosk constraints.');
-      _traceStartup('watchdog: startup incomplete after 60s');
-      await StartupService.markLaunchFailed('Startup watchdog timed out.');
+    if (!AppLifecycleManager.isCompleted) {
+      Log.w('[Main] Watchdog fired - startup not complete after 60s');
+      await LifecycleRecover.markLaunchFailed('Startup watchdog timed out.');
       await KioskService.forceRelease();
-      // Show error screen with retry option
-      navigatorKey.currentState?.pushAndRemoveUntil(
-        MaterialPageRoute(
-          builder: (_) => const InitFailureScreen(
-            message: 'Startup timed out. The board will retry automatically.',
-          ),
+
+      // Show the recovery screen with startup timeout diagnostics.
+      await RecoveryManager.init(
+        type: RecoveryType.startupTimeout,
+        diagnostics: RecoveryDiagnostics.fromFailure(
+          appVersion: AppLifecycleManager.appVersion,
+          failedPhase: AppLifecycleManager.currentPhase,
+          errorMessage: 'Startup timed out after 60s',
+          timings: AppLifecycleManager.timings,
+          elapsed: AppLifecycleManager.elapsed,
         ),
+      );
+
+      navigatorKey.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const RecoveryScreen()),
         (_) => false,
       );
     }
@@ -385,8 +316,7 @@ void _startStartupWatchdog() {
 
 Future<void> _acquireSingleInstanceLock(
     {bool retryForPostUpdate = false}) async {
-  final lockFile =
-      File('${Directory.systemTemp.path}/intelliattend_smartboard.lock');
+  final lockFile = InstallPaths.lockFileInstance;
 
   Future<RandomAccessFile?> tryAcquire() async {
     try {
@@ -509,97 +439,11 @@ Future<bool> _isProcessAlive(int targetPid) async {
 // ignore: unused_element
 RandomAccessFile? _retainedLock;
 
-// ─── TIER 1: Blocking init steps ─────────────────────────────────────────
+// ─── Fire-and-forget services ────────────────────────────────────────────
 
-Future<void> _initWindow() async {
-  try {
-    if (!kIsWeb &&
-        (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
-      await windowManager.ensureInitialized();
-
-      // Set initial window to 1920×1080 (the most common kiosk resolution)
-      // so Flutter's MediaQuery has correct logical dimensions from the
-      // very first frame.  Without explicit sizing, the window opens at a
-      // default 800×600 and switching to fullscreen moments later can
-      // leave MediaQuery with stale dimensions on certain Windows
-      // DPI / multi-monitor configurations — causing stretched / clipped
-      // layouts.
-      //
-      // skipTaskbar: true hides the taskbar button from the start so the
-      // taskbar is never visible during boot.  Fullscreen is applied
-      // later after Tier-1 + Tier-2 + integrity checks pass.
-      final windowReady = Completer<void>();
-      windowManager.waitUntilReadyToShow(
-        WindowOptions(
-          size: const Size(1920, 1080),
-          minimumSize: const Size(800, 600),
-          center: true,
-          titleBarStyle: TitleBarStyle.hidden,
-          skipTaskbar: true,
-          backgroundColor: AppColors.bgLight,
-        ),
-        () async {
-          try {
-            await windowManager.show();
-            await windowManager.focus();
-          } finally {
-            if (!windowReady.isCompleted) windowReady.complete();
-          }
-        },
-      );
-      await windowReady.future;
-    }
-  } catch (e) {
-    Log.w('[WindowManager] Init error: $e');
-  }
-}
-
-Future<InitStatus> _initTier1() async {
-  final errors = <String>[];
-
-  final dotenvOk = await _tryInit('Environment', _loadEnvironment);
-  if (!dotenvOk) errors.add('Environment');
-
-  final secureOk = await _tryInit('Secure Storage', _initSecureStorage);
-  if (!secureOk) errors.add('SecureStorage');
-
-  final isarOk = await _tryInit('Local Vault', _initLocalVault);
-  if (!isarOk) errors.add('Isar');
-
-  return InitStatus(
-    isar: isarOk,
-    secureStorage: secureOk,
-    dotenv: dotenvOk,
-    errors: errors,
-  );
-}
-
-// ─── TIER 2: Timeout-aware init steps ────────────────────────────────────
-
-Future<void> _initTier2() async {
-  _configureOrientation();
-
-  await _tryInit(
-    'Time Sync',
-    TimeSyncService.init,
-    timeout: const Duration(seconds: 3),
-  );
-
-  // Restore cached remote config from SharedPreferences so feature flags
-  // are available before the first heartbeat completes. This is a fast,
-  // non-blocking read — typically <5 ms.
-  await _tryInit(
-    'Remote Config',
-    RemoteConfigService.init,
-    timeout: const Duration(seconds: 2),
-  );
-}
-
-// ─── TIER 3: Fire-and-forget (non-blocking) ──────────────────────────────
-
-void _initTier3() {
+void _initFireAndForget() {
   unawaited(HeartbeatService.start(globalDeviceRepository).catchError((e) {
-    Log.e('❌ [Tier3] Heartbeat start failed: $e');
+    Log.e('[Main] Heartbeat start failed: $e');
   }));
 
   // Background protocols (timetable/notification listeners, window orchestrator,
@@ -622,11 +466,40 @@ Future<void> startBackgroundProtocols() async {
     SyncManager().init(queryId);
     final boardId = registration.smartBoardId;
 
+    // Configure Sentry fleet-scale tags. Pulls location metadata from
+    // deploy_config.json if present (school, building, room). These tags
+    // enable filtering the Sentry dashboard by school, building, version,
+    // channel, and OS — essential for fleet-scale observability.
+    final deployConfig = await EnterpriseDeployConfig.loadFromFile(
+      '${InstallPaths.configDir}\\deploy_config.json',
+    );
+    ObservabilityManager.configureFleetTags(
+      boardId: boardId,
+      appVersion: AppLifecycleManager.appVersion ?? 'unknown',
+      channel: deployConfig?.update.channel ?? 'stable',
+      osVersion: Platform.operatingSystemVersion,
+      school: deployConfig?.location?.school,
+      building: deployConfig?.location?.building,
+      room: deployConfig?.location?.room,
+      deploymentId: deployConfig?.deployment?.deploymentId,
+      buildNumber: const String.fromEnvironment('BUILD_NUMBER'),
+      gitCommit: const String.fromEnvironment('GIT_COMMIT'),
+      buildDate: const String.fromEnvironment('BUILD_DATE'),
+    );
+
     // Initialise the auto-update subsystem. [AutoUpdater.init] reads the
     // current installed version; [UpdateChecker.start] begins polling the
     // server manifest (already cached by [RemoteConfigService.init]) so
     // any pending forced update is caught within seconds of launch.
     await AutoUpdater.init(boardId: boardId);
+
+    // Wire update state to Sentry tag for fleet observability.
+    // When crashes cluster around a particular update phase, the
+    // update.state tag identifies it immediately.
+    AutoUpdater.progress.addListener(() {
+      final state = AutoUpdater.progress.value?.state;
+      ObservabilityManager.setUpdateState(state?.name ?? 'idle');
+    });
 
     // Initialise the update health monitor with the current version. This
     // detects whether this is the first launch after an update and tracks
@@ -652,10 +525,9 @@ Future<void> startBackgroundProtocols() async {
     // "stable" and the rollback backup is deleted.
     await UpdateHealthMonitor.markStartupSuccessful();
   } catch (e) {
-    Log.e('❌ [Protocols] Background initialization failed: $e');
+    Log.e('[Protocols] Background initialization failed: $e');
   } finally {
-    _startupCompleted = true;
-    await StartupService.markLaunchCompleted();
+    await LifecycleRecover.markLaunchCompleted();
   }
 }
 
@@ -694,144 +566,6 @@ Future<void> _doTimeSync() async {
 }
 
 // ─── Shared helpers ──────────────────────────────────────────────────────
-
-Future<bool> _tryInit(
-  String name,
-  Future<void> Function() fn, {
-  Duration? timeout,
-}) async {
-  try {
-    if (timeout != null) {
-      await fn().timeout(timeout);
-    } else {
-      await fn();
-    }
-    return true;
-  } catch (e) {
-    if (e is TimeoutException) {
-      Log.w('⚠️ [$name] Timed out after ${timeout?.inSeconds}s');
-    } else {
-      Log.e('❌ [$name] Initialization failed: $e');
-    }
-    return false;
-  }
-}
-
-Future<bool> _verifyIntegrity() async {
-  bool tampered = false;
-
-  if (!IntegrityVerifier.verify()) {
-    Log.e(
-        '🚨 [Integrity] Critical constants hash mismatch — possible tampering');
-    tampered = true;
-  }
-
-  if (!tampered) {
-    try {
-      final sigValid = await IntegrityVerifier.verifyCodeSignature()
-          .timeout(const Duration(seconds: 5));
-      if (!sigValid) {
-        Log.e('🚨 [Integrity] Code signature invalid — binary modified');
-        tampered = true;
-      }
-    } catch (e) {
-      Log.w('⚠️ [Integrity] Signature verification skipped ($e)');
-    }
-  }
-
-  if (tampered) {
-    await SecureStorageService.clearAll();
-  }
-  return tampered;
-}
-
-// Firebase init removed — auth is handled by FirebaseRestAuth
-// (Identity Toolkit + Secure Token API over HTTPS) which requires no
-// Flutter Firebase plugins. Timetable data is fetched via REST APIs.
-
-Future<void> _loadEnvironment() async {
-  bool loaded = false;
-
-  // Production machine-local config. This survives MSI upgrades because it's
-  // stored outside the install directory at:
-  //   %LOCALAPPDATA%\IntelliAttendSmartBoard\.env
-  // The install_production_msi.ps1 script writes this file before launching.
-  if (!kIsWeb && Platform.isWindows) {
-    try {
-      final localAppData = Platform.environment['LOCALAPPDATA'] ??
-          '${Platform.environment['USERPROFILE']}\\AppData\\Local';
-      final envPath = '$localAppData\\IntelliAttendSmartBoard\\.env';
-      await dotenv.load(fileName: envPath);
-      loaded = dotenv.env.isNotEmpty;
-      if (loaded) {
-        Log.i('[Startup] Environment loaded from: $envPath');
-      }
-    } catch (e) {
-      Log.d('[Startup] Local .env not found at expected path: $e');
-    }
-  }
-  // Try loading from Flutter assets (legacy path — .env may be bundled here
-  // for development builds, but production should use the path above).
-  if (!loaded) {
-    try {
-      await dotenv.load();
-      loaded = dotenv.env.isNotEmpty;
-      if (loaded) {
-        Log.i('[Startup] Environment loaded from Flutter assets (legacy)');
-      }
-    } catch (_) {}
-  }
-
-  // Fall back to filesystem .env (development / local builds only).
-  if (!loaded) {
-    try {
-      await dotenv.load(fileName: '.env');
-      loaded = dotenv.env.isNotEmpty;
-      if (loaded) {
-        Log.i('[Startup] Environment loaded from CWD/.env');
-      }
-    } catch (_) {}
-  }
-
-  // Last resort: try the directory next to the running executable.
-  if (!loaded && !kIsWeb && Platform.isWindows) {
-    try {
-      final exeDir = File(Platform.resolvedExecutable).parent.path;
-      await dotenv.load(fileName: '$exeDir\\.env');
-      loaded = dotenv.env.isNotEmpty;
-      if (loaded) {
-        Log.i('[Startup] Environment loaded from exe directory');
-      }
-    } catch (_) {}
-  }
-
-  if (!loaded) {
-    Log.w('[Startup] No .env file found — using --dart-define fallbacks.');
-  }
-  AppConfig.validate();
-  Log.i('[Startup] Environment config ready');
-}
-
-void _configureOrientation() {
-  if (!kIsWeb &&
-      (defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.iOS)) {
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
-  }
-}
-
-Future<void> _initSecureStorage() async {
-  await SecureStorageService.init();
-  Log.i('[Startup] Secure storage initialized');
-}
-
-Future<void> _initLocalVault() async {
-  await SessionManager.init();
-  Log.i('[Startup] Local vault initialized');
-}
 
 class IntelliAttendApp extends StatelessWidget {
   const IntelliAttendApp({super.key});

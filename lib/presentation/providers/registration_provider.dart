@@ -107,23 +107,51 @@ class RegistrationProvider extends ChangeNotifier {
 
             if (initResult != null) {
               Log.i('[RegistrationProvider] initiateRegistration response: $initResult');
-              // S5: Server says board is already registered — skip OTP
+              // S5: Server says board is already registered — still call
+              // completeRegistration() to get custom_token + full profile.
               if (initResult['is_registered'] == true ||
                   initResult['status'] == 'already_registered') {
-                final profile = Map<String, dynamic>.from(initResult);
-                profile['smart_board_id'] = initResult['smart_board_id'];
-                await _authRepository.saveRegistration(
-                    profile, SessionManager.isar);
-                // Load existing hardware binding from local storage
-                final reg = await _deviceRepository.getRegistration();
-                if (reg != null) {
-                  _step = RegistrationStep.completed;
-                  unawaited(StartupService.register());
-                  unawaited(startBackgroundProtocols());
-                  Log.i(
-                      '[RegistrationProvider] Board already registered. Skipping OTP.');
-                  return;
+                Log.i('[RegistrationProvider] Board already registered on server. '
+                    'Binding hardware to obtain custom_token + full profile.');
+
+                final hardwareId = await HardwareFingerprintService.getDeviceId();
+                final metadata = await HardwareFingerprintService.getHardwareMetadata();
+
+                Map<String, dynamic>? completeResult;
+                try {
+                  completeResult = await _authRepository.completeRegistration(
+                      boardId, hardwareId, '',
+                      metadata: metadata);
+                } catch (e) {
+                  Log.w('[RegistrationProvider] completeRegistration for existing '
+                      'board failed (non-fatal, using initiateResult): $e');
                 }
+
+                // Merge: prefer completeResult (has custom_token + full profile),
+                // fall back to initResult for any missing fields.
+                final profile = <String, dynamic>{
+                  ...initResult,
+                  if (completeResult != null) ...completeResult,
+                };
+                profile['smart_board_id'] =
+                    initResult['smart_board_id'] ?? boardId;
+                profile['room_id'] =
+                    profile['room_id'] ?? profile['classroom_id'];
+
+                await _authRepository.saveRegistration(
+                  profile,
+                  SessionManager.isar,
+                  hardwareId: hardwareId,
+                );
+                Log.i('[RegistrationProvider] Registration saved for existing board.');
+
+                _otpTimer?.cancel();
+                _step = RegistrationStep.completed;
+                unawaited(StartupService.register());
+                unawaited(startBackgroundProtocols());
+                Log.i('[RegistrationProvider] Board already registered. '
+                    'Hardware bound. Entering Idle state.');
+                return;
               }
               _step = RegistrationStep.otpSent;
               _startOtpTimer();

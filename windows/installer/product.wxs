@@ -1,9 +1,29 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  IntelliAttend SmartBoard — Stateless MSI Installer
+
+  Installer Contract (G-1 through G-7):
+    G-1: Atomic file operations (MajorUpgrade + component GUIDs)
+    G-2: No user data modification (MSI only manages App\)
+    G-3: No network access (zero network custom actions)
+    G-4: Upgrade any v5.5.0+ version (MajorUpgrade with stable UpgradeCode)
+    G-5: Clean uninstall (removes App\, preserves Data\Config\Backup\Logs\)
+    G-6: Interactive and silent (/passive, /qn, /qr all supported)
+    G-7: Interruption safe (MSI rollback on failure/reboot)
+
+  Build:
+    candle.exe -dSourceDir=<build_output> -dVersion=<version> -arch x64 product.wxs
+    light.exe -ext WixUIExtension product.wixobj -o IASB.msi
+
+  Variables (required):
+    SourceDir  — Flutter build output (e.g. build\windows\x64\runner\Release)
+    Version    — SemVer version (e.g. 5.6.0)
+-->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
 
   <Product
       Id="*"
-      Name="$(var.AppName)"
+      Name="IntelliAttend SmartBoard"
       Language="1033"
       Version="$(var.Version)"
       Manufacturer="IntelliAttend"
@@ -16,161 +36,244 @@
         Platform="x64"
         Description="IntelliAttend SmartBoard Attendance Kiosk"
         Manufacturer="IntelliAttend"
-        InstallPrivileges="limited"
-        Comments="IntelliAttend SmartBoard - Classroom attendance tracking kiosk for educational institutions." />
+        Comments="IntelliAttend SmartBoard — Classroom attendance tracking kiosk for educational institutions." />
 
-    <!-- Handle upgrades: uninstall old version, install new version -->
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         MAJOR UPGRADE
+         Schedule="afterInstallInitialize": old version removed first, then
+         new version installed. No file conflicts between versions.
+         ═══════════════════════════════════════════════════════════════════════ -->
     <MajorUpgrade
+        Schedule="afterInstallInitialize"
         AllowSameVersionUpgrades="yes"
-        DowngradeErrorMessage="A newer version of IntelliAttend SmartBoard is already installed." />
+        DowngradeErrorMessage="A newer version of IntelliAttend SmartBoard is already installed."
+        AllowDowngrades="no"
+        IgnoreRemoveFailure="yes" />
 
     <Media Id="1" Cabinet="product.cab" EmbedCab="yes" />
 
-    <Icon Id="AppIcon" SourceFile="$(var.SourceDir)\$(var.AppName).exe" />
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         ARP (Add/Remove Programs) METADATA
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <Icon Id="AppIcon" SourceFile="$(var.SourceDir)\IntelliAttendSmartBoard.exe" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
     <Property Id="ARPHELPLINK" Value="https://intelliattend.app/support" />
     <Property Id="ARPURLINFOABOUT" Value="https://intelliattend.app" />
+    <Property Id="ARPNOREPAIR" Value="yes" Secure="yes" />
+    <Property Id="ARPNOMODIFY" Value="yes" Secure="yes" />
+    <Property Id="ARPINSTALLLOCATION" Value="[APPLICATIONFOLDER]" Secure="yes" />
 
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         DIRECTORY STRUCTURE
+         MSI manages App\ only. Data\Config\ etc. are app-managed.
+         ═══════════════════════════════════════════════════════════════════════ -->
     <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="TempFolder" Name="Temp" />
-
       <Directory Id="LocalAppDataFolder">
-        <Directory Id="APPLICATIONFOLDER" Name="$(var.AppName)">
+        <Directory Id="IntelliAttendFolder" Name="IntelliAttendSmartBoard">
+          <Directory Id="APPLICATIONFOLDER" Name="App" />
 
-          <!-- App executable and core DLLs -->
-          <Component Id="C_App_Core" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
-            <File Id="F_exe" Name="$(var.AppName).exe" DiskId="1" Source="$(var.SourceDir)\$(var.AppName).exe" />
-            <File Id="F_flutter_windows" Name="flutter_windows.dll" DiskId="1" Source="$(var.SourceDir)\flutter_windows.dll" />
-            <File Id="F_isar" Name="isar.dll" DiskId="1" Source="$(var.SourceDir)\isar.dll" />
-            <File Id="F_isar_flutter_libs" Name="isar_flutter_libs_plugin.dll" DiskId="1" Source="$(var.SourceDir)\isar_flutter_libs_plugin.dll" />
-            <File Id="F_pdfium" Name="pdfium.dll" DiskId="1" Source="$(var.SourceDir)\pdfium.dll" />
-            <File Id="F_window_manager" Name="window_manager_plugin.dll" DiskId="1" Source="$(var.SourceDir)\window_manager_plugin.dll" />
-            <File Id="F_audioplayers" Name="audioplayers_windows_plugin.dll" DiskId="1" Source="$(var.SourceDir)\audioplayers_windows_plugin.dll" />
-            <File Id="F_connectivity" Name="connectivity_plus_plugin.dll" DiskId="1" Source="$(var.SourceDir)\connectivity_plus_plugin.dll" />
-            <File Id="F_notifications" Name="flutter_local_notifications_windows.dll" DiskId="1" Source="$(var.SourceDir)\flutter_local_notifications_windows.dll" />
-            <File Id="F_secure_storage" Name="flutter_secure_storage_windows_plugin.dll" DiskId="1" Source="$(var.SourceDir)\flutter_secure_storage_windows_plugin.dll" />
-            <File Id="F_url_launcher" Name="url_launcher_windows_plugin.dll" DiskId="1" Source="$(var.SourceDir)\url_launcher_windows_plugin.dll" />
-            <File Id="F_screen_retriever" Name="screen_retriever_windows_plugin.dll" DiskId="1" Source="$(var.SourceDir)\screen_retriever_windows_plugin.dll" />
-            <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\Files" Name="installed" Type="integer" Value="1" KeyPath="yes" />
-          </Component>
-
-          <!-- Data directory: AOT compiled code, ICU data, and Flutter assets -->
-          <Directory Id="DataDir" Name="data">
-            <Component Id="C_Data_Files" Guid="C2D3E4F5-A6B7-4890-CDEF-123456789ABC">
-              <File Id="F_app_so" Name="app.so" DiskId="1" Source="$(var.SourceDir)\data\app.so" />
-              <File Id="F_icudtl" Name="icudtl.dat" DiskId="1" Source="$(var.SourceDir)\data\icudtl.dat" />
-              <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\Data" Name="installed" Type="integer" Value="1" KeyPath="yes" />
-            </Component>
-
-            <Directory Id="FlutterAssetsDir" Name="flutter_assets">
-              <Component Id="C_FlutterAssets" Guid="D3E4F5A6-B7C8-4901-DEF2-3456789ABCDE">
-                <File Id="FA_AssetManifest" Name="AssetManifest.bin" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\AssetManifest.bin" />
-                <File Id="FA_FontManifest" Name="FontManifest.json" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\FontManifest.json" />
-                <File Id="FA_NativeAssetsManifest" Name="NativeAssetsManifest.json" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\NativeAssetsManifest.json" />
-                <File Id="FA_NOTICES" Name="NOTICES.Z" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\NOTICES.Z" />
-                <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\FlutterAssets" Name="installed" Type="integer" Value="1" KeyPath="yes" />
-              </Component>
-
-              <Directory Id="FlutterAssetsAssetsDir" Name="assets">
-                <Component Id="C_FlutterAssets_Assets" Guid="E4F5A6B7-C8D9-4012-EFAB-456789ABCDEF">
-                  <File Id="FA_bg" Name="background.png" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\background.png" />
-                  <File Id="FA_lottie" Name="Errorfailure.lottie" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\Errorfailure.lottie" />
-                  <File Id="FA_logo" Name="logo.png" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\logo.png" />
-                  <File Id="FA_logo_sq" Name="logo_square.png" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\assets\logo_square.png" />
-                  <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\FlutterAssets\Assets" Name="installed" Type="integer" Value="1" KeyPath="yes" />
-                </Component>
-              </Directory>
-
-              <Directory Id="FlutterAssetsFontsDir" Name="fonts">
-                <Component Id="C_FlutterAssets_Fonts" Guid="F5A6B7C8-D9E0-4123-ABCD-56789ABCDEF0">
-                  <File Id="FA_font" Name="MaterialIcons-Regular.otf" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\fonts\MaterialIcons-Regular.otf" />
-                  <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\FlutterAssets\Fonts" Name="installed" Type="integer" Value="1" KeyPath="yes" />
-                </Component>
-              </Directory>
-
-              <Directory Id="FlutterAssetsShadersDir" Name="shaders">
-                <Component Id="C_FlutterAssets_Shaders" Guid="A6B7C8D9-E0F1-4234-BCDE-67890ABCDEF1">
-                  <File Id="FA_shader1" Name="ink_sparkle.frag" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\shaders\ink_sparkle.frag" />
-                  <File Id="FA_shader2" Name="stretch_effect.frag" DiskId="1" Source="$(var.SourceDir)\data\flutter_assets\shaders\stretch_effect.frag" />
-                  <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\FlutterAssets\Shaders" Name="installed" Type="integer" Value="1" KeyPath="yes" />
-                </Component>
-              </Directory>
-            </Directory>
-          </Directory>
-
-          <Component Id="C_RemoveFolder" Guid="B1C2D3E4-F5A6-7890-BCDE-123456789012">
-            <RemoveFile Id="RemoveStartupTrace" Name="startup_trace.log" On="uninstall" />
-            <RemoveFile
-                Id="RemoveNativeEngineCrashFlag"
-                Directory="TempFolder"
-                Name="intelliattend_smartboard_native_engine_crash.flag"
-                On="uninstall" />
-            <RemoveFolder Id="RemoveAppFolder" On="uninstall" />
-            <RegistryValue Root="HKCU" Key="Software\$(var.AppName)\Remove" Name="installed" Type="integer" Value="1" KeyPath="yes" />
-          </Component>
+          <!-- These directories are created by the app at startup, but we
+               ensure they exist on first install so the app never encounters
+               a missing directory. They are NOT removed on uninstall. -->
+          <Directory Id="DataDir" Name="Data" />
+          <Directory Id="ConfigDir" Name="Config" />
+          <Directory Id="CacheDir" Name="Cache" />
+          <Directory Id="UpdatesDir" Name="Updates" />
+          <Directory Id="LogsDir" Name="Logs" />
+          <Directory Id="BackupDir" Name="Backup" />
         </Directory>
       </Directory>
 
       <Directory Id="ProgramMenuFolder">
-        <Directory Id="ApplicationProgramsFolder" Name="IntelliAttend">
-          <Component Id="C_StartMenuShortcut" Guid="F6A7B8C9-D0E1-2345-EFAB-678901234567">
-            <Shortcut
-                Id="StartMenuShortcut"
-                Name="SmartBoard"
-                Description="IntelliAttend SmartBoard Attendance Kiosk"
-                Target="[APPLICATIONFOLDER]$(var.AppName).exe"
-                WorkingDirectory="APPLICATIONFOLDER"
-                Icon="AppIcon" />
-            <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
-            <RegistryValue
-                Root="HKCU"
-                Key="Software\Microsoft\$(var.AppName)"
-                Name="installed"
-                Type="integer"
-                Value="1"
-                KeyPath="yes" />
-          </Component>
-        </Directory>
+        <Directory Id="ApplicationProgramsFolder" Name="IntelliAttend" />
       </Directory>
     </Directory>
 
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         COMPONENTS — App binaries (MSI-managed)
+         ═══════════════════════════════════════════════════════════════════════ -->
     <DirectoryRef Id="APPLICATIONFOLDER">
-      <Component Id="C_AutoStart" Guid="A7B8C9D0-E1F2-3456-ABCD-789012345678">
-        <RegistryValue
-            Root="HKCU"
-            Key="Software\Microsoft\Windows\CurrentVersion\Run"
-            Name="$(var.AppName)"
-            Value="&quot;[APPLICATIONFOLDER]$(var.AppName).exe&quot; --intelliattend-autostart"
-            Type="string"
-            KeyPath="yes" />
+
+      <!-- Core application files -->
+      <Component Id="C_Exe" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890" Win64="yes">
+        <File Id="F_Exe" Name="IntelliAttendSmartBoard.exe" Source="$(var.SourceDir)\IntelliAttendSmartBoard.exe" KeyPath="yes" />
       </Component>
+
+      <Component Id="C_UpdateAgent" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567891" Win64="yes">
+        <File Id="F_UpdateAgent" Name="update_agent.exe" Source="$(var.SourceDir)\update_agent.exe" KeyPath="yes" />
+      </Component>
+
+      <Component Id="C_FlutterWindows" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567892" Win64="yes">
+        <File Id="F_FlutterWindows" Name="flutter_windows.dll" Source="$(var.SourceDir)\flutter_windows.dll" KeyPath="yes" />
+      </Component>
+
+      <Component Id="C_Isar" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567893" Win64="yes">
+        <File Id="F_Isar" Name="isar.dll" Source="$(var.SourceDir)\isar.dll" KeyPath="yes" />
+      </Component>
+
+      <Component Id="C_IsarFlutterLibs" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567894" Win64="yes">
+        <File Id="F_IsarFlutterLibs" Name="isar_flutter_libs_plugin.dll" Source="$(var.SourceDir)\isar_flutter_libs_plugin.dll" KeyPath="yes" />
+      </Component>
+
+      <Component Id="C_Pdfium" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567895" Win64="yes">
+        <File Id="F_Pdfium" Name="pdfium.dll" Source="$(var.SourceDir)\pdfium.dll" KeyPath="yes" />
+      </Component>
+
+      <Component Id="C_WindowManager" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567896" Win64="yes">
+        <File Id="F_WindowManager" Name="window_manager_plugin.dll" Source="$(var.SourceDir)\window_manager_plugin.dll" KeyPath="yes" />
+      </Component>
+
+      <Component Id="C_Audioplayers" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567897" Win64="yes">
+        <File Id="F_Audioplayers" Name="audioplayers_windows_plugin.dll" Source="$(var.SourceDir)\audioplayers_windows_plugin.dll" KeyPath="yes" />
+      </Component>
+
+      <Component Id="C_Connectivity" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567898" Win64="yes">
+        <File Id="F_Connectivity" Name="connectivity_plus_plugin.dll" Source="$(var.SourceDir)\connectivity_plus_plugin.dll" KeyPath="yes" />
+      </Component>
+
+      <Component Id="C_Notifications" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567899" Win64="yes">
+        <File Id="F_Notifications" Name="flutter_local_notifications_windows.dll" Source="$(var.SourceDir)\flutter_local_notifications_windows.dll" KeyPath="yes" />
+      </Component>
+
+      <Component Id="C_SecureStorage" Guid="A1B2C3D4-E5F6-7890-ABCD-EF123456789A" Win64="yes">
+        <File Id="F_SecureStorage" Name="flutter_secure_storage_windows_plugin.dll" Source="$(var.SourceDir)\flutter_secure_storage_windows_plugin.dll" KeyPath="yes" />
+      </Component>
+
+      <Component Id="C_UrlLauncher" Guid="A1B2C3D4-E5F6-7890-ABCD-EF123456789B" Win64="yes">
+        <File Id="F_UrlLauncher" Name="url_launcher_windows_plugin.dll" Source="$(var.SourceDir)\url_launcher_windows_plugin.dll" KeyPath="yes" />
+      </Component>
+
+      <Component Id="C_ScreenRetriever" Guid="A1B2C3D4-E5F6-7890-ABCD-EF123456789C" Win64="yes">
+        <File Id="F_ScreenRetriever" Name="screen_retriever_windows_plugin.dll" Source="$(var.SourceDir)\screen_retriever_windows_plugin.dll" KeyPath="yes" />
+      </Component>
+
     </DirectoryRef>
 
-    <Feature Id="DefaultFeature" Title="$(var.AppName)" Level="1">
-      <ComponentRef Id="C_App_Core" />
-      <ComponentRef Id="C_Data_Files" />
-      <ComponentRef Id="C_FlutterAssets" />
+    <!-- Data directory: AOT compiled code and ICU data -->
+    <DirectoryRef Id="APPLICATIONFOLDER">
+      <Directory Id="DataSubDir" Name="data">
+        <Component Id="C_Data_AppSo" Guid="C2D3E4F5-A6B7-4890-CDEF-123456780001" Win64="yes">
+          <File Id="F_AppSo" Name="app.so" Source="$(var.SourceDir)\data\app.so" KeyPath="yes" />
+        </Component>
+
+        <Component Id="C_Data_IcuDtl" Guid="C2D3E4F5-A6B7-4890-CDEF-123456780002" Win64="yes">
+          <File Id="F_IcuDtl" Name="icudtl.dat" Source="$(var.SourceDir)\data\icudtl.dat" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </DirectoryRef>
+
+    <!-- Flutter assets -->
+    <DirectoryRef Id="DataSubDir">
+      <Directory Id="FlutterAssetsDir" Name="flutter_assets">
+        <Component Id="C_FlutterAssets_Root" Guid="D3E4F5A6-B7C8-4901-DEF2-345678900001" Win64="yes">
+          <File Id="FA_AssetManifest" Name="AssetManifest.bin" Source="$(var.SourceDir)\data\flutter_assets\AssetManifest.bin" KeyPath="yes" />
+          <File Id="FA_FontManifest" Name="FontManifest.json" Source="$(var.SourceDir)\data\flutter_assets\FontManifest.json" />
+          <File Id="FA_NativeAssetsManifest" Name="NativeAssetsManifest.json" Source="$(var.SourceDir)\data\flutter_assets\NativeAssetsManifest.json" />
+          <File Id="FA_Notices" Name="NOTICES.Z" Source="$(var.SourceDir)\data\flutter_assets\NOTICES.Z" />
+        </Component>
+
+        <Directory Id="AssetsDir" Name="assets">
+          <Component Id="C_FlutterAssets_Assets" Guid="E4F5A6B7-C8D9-4012-EFAB-456789000001" Win64="yes">
+            <File Id="FA_Bg" Name="background.png" Source="$(var.SourceDir)\data\flutter_assets\assets\background.png" KeyPath="yes" />
+            <File Id="FA_Lottie" Name="Errorfailure.lottie" Source="$(var.SourceDir)\data\flutter_assets\assets\Errorfailure.lottie" />
+            <File Id="FA_Logo" Name="logo.png" Source="$(var.SourceDir)\data\flutter_assets\assets\logo.png" />
+            <File Id="FA_LogoSq" Name="logo_square.png" Source="$(var.SourceDir)\data\flutter_assets\assets\logo_square.png" />
+          </Component>
+        </Directory>
+
+        <Directory Id="FontsDir" Name="fonts">
+          <Component Id="C_FlutterAssets_Fonts" Guid="F5A6B7C8-D9E0-4123-ABCD-567890000001" Win64="yes">
+            <File Id="FA_Font" Name="MaterialIcons-Regular.otf" Source="$(var.SourceDir)\data\flutter_assets\fonts\MaterialIcons-Regular.otf" KeyPath="yes" />
+          </Component>
+        </Directory>
+
+        <Directory Id="ShadersDir" Name="shaders">
+          <Component Id="C_FlutterAssets_Shaders" Guid="A6B7C8D9-E0F1-4234-BCDE-678900000001" Win64="yes">
+            <File Id="FA_Shader1" Name="ink_sparkle.frag" Source="$(var.SourceDir)\data\flutter_assets\shaders\ink_sparkle.frag" KeyPath="yes" />
+            <File Id="FA_Shader2" Name="stretch_effect.frag" Source="$(var.SourceDir)\data\flutter_assets\shaders\stretch_effect.frag" />
+          </Component>
+        </Directory>
+      </Directory>
+    </DirectoryRef>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         COMPONENTS — Shortcuts & registry
+         ═══════════════════════════════════════════════════════════════════════ -->
+
+    <!-- Start Menu shortcut -->
+    <Component Id="C_StartMenuShortcut" Directory="ApplicationProgramsFolder" Guid="F6A7B8C9-D0E1-2345-EFAB-678901234567" Win64="yes">
+      <Shortcut
+          Id="StartMenuShortcut"
+          Name="SmartBoard"
+          Description="IntelliAttend SmartBoard Attendance Kiosk"
+          Target="[APPLICATIONFOLDER]IntelliAttendSmartBoard.exe"
+          WorkingDirectory="APPLICATIONFOLDER"
+          Icon="AppIcon" />
+      <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\IntelliAttend\SmartBoard" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <!-- Auto-start registry key -->
+    <Component Id="C_AutoStart" Directory="APPLICATIONFOLDER" Guid="A7B8C9D0-E1F2-3456-ABCD-789012345678" Win64="yes">
+      <RegistryValue
+          Root="HKCU"
+          Key="Software\Microsoft\Windows\CurrentVersion\Run"
+          Name="IntelliAttendSmartBoard"
+          Value="&quot;[APPLICATIONFOLDER]IntelliAttendSmartBoard.exe&quot; --intelliattend-autostart"
+          Type="string"
+          KeyPath="yes" />
+    </Component>
+
+    <!-- Uninstall cleanup: remove App\ folder -->
+    <Component Id="C_UninstallCleanup" Directory="APPLICATIONFOLDER" Guid="B1C2D3E4-F5A6-7890-BCDE-123456780001" Win64="yes">
+      <RemoveFolder Id="RemoveAppFolder" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\IntelliAttend\SmartBoard" Name="uninstall_cleanup" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         FEATURE
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <Feature Id="DefaultFeature" Title="IntelliAttend SmartBoard" Level="1">
+      <ComponentRef Id="C_Exe" />
+      <ComponentRef Id="C_UpdateAgent" />
+      <ComponentRef Id="C_FlutterWindows" />
+      <ComponentRef Id="C_Isar" />
+      <ComponentRef Id="C_IsarFlutterLibs" />
+      <ComponentRef Id="C_Pdfium" />
+      <ComponentRef Id="C_WindowManager" />
+      <ComponentRef Id="C_Audioplayers" />
+      <ComponentRef Id="C_Connectivity" />
+      <ComponentRef Id="C_Notifications" />
+      <ComponentRef Id="C_SecureStorage" />
+      <ComponentRef Id="C_UrlLauncher" />
+      <ComponentRef Id="C_ScreenRetriever" />
+      <ComponentRef Id="C_Data_AppSo" />
+      <ComponentRef Id="C_Data_IcuDtl" />
+      <ComponentRef Id="C_FlutterAssets_Root" />
       <ComponentRef Id="C_FlutterAssets_Assets" />
       <ComponentRef Id="C_FlutterAssets_Fonts" />
       <ComponentRef Id="C_FlutterAssets_Shaders" />
-      <ComponentRef Id="C_RemoveFolder" />
       <ComponentRef Id="C_StartMenuShortcut" />
       <ComponentRef Id="C_AutoStart" />
+      <ComponentRef Id="C_UninstallCleanup" />
     </Feature>
 
-    <!-- Embedded license RTF for the EULA dialog -->
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         UI — License + Exit dialog
+         ═══════════════════════════════════════════════════════════════════════ -->
     <Binary Id="WixUILicenseRtf" SourceFile="License.rtf" />
     <Property Id="LICENSEACCEPTED" Value="no" Secure="yes" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch IntelliAttend SmartBoard" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" Secure="yes" />
 
     <UI>
       <UIRef Id="WixUI_Minimal" />
       <Property Id="WIXUI_INSTALLDIR" Value="APPLICATIONFOLDER" />
 
-      <!-- Replace the standard Welcome dialog flow with our license step -->
+      <!-- Override Welcome → License flow -->
       <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="IntelliAttendLicenseDlg" Order="9999">1</Publish>
       <Publish Dialog="IntelliAttendLicenseDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="9999">1</Publish>
       <Publish Dialog="IntelliAttendLicenseDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="9999">LICENSEACCEPTED = "yes"</Publish>
-      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApplication" Order="9999">1</Publish>
 
       <!-- Custom License Agreement dialog -->
       <Dialog Id="IntelliAttendLicenseDlg" Width="370" Height="270" Title="[ProductName] Setup">
@@ -203,12 +306,20 @@
       </Dialog>
     </UI>
 
-    <!-- Custom action to launch app after install -->
-    <CustomAction Id="LaunchApplication" FileKey="F_exe" ExeCommand="" Return="asyncNoWait" />
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         CUSTOM ACTIONS
+         ═══════════════════════════════════════════════════════════════════════ -->
 
+    <!-- Post-install launch (interactive only, controlled by exit dialog checkbox) -->
+    <CustomAction Id="LaunchApplication" FileKey="F_Exe" ExeCommand="" Return="asyncNoWait" Impersonate="yes" />
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         CONDITIONS
+         ═══════════════════════════════════════════════════════════════════════ -->
     <Condition Message="This application requires a 64-bit Windows system.">
       VersionNT64
     </Condition>
+
   </Product>
 
 </Wix>

@@ -13,11 +13,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$appName = "intelliattend_smartboard"
-$configDir = Join-Path $env:LOCALAPPDATA "IntelliAttendSmartBoard"
-$installDir = Join-Path $env:LOCALAPPDATA $appName
-$exePath = Join-Path $installDir "$appName.exe"
-$logDir = Join-Path $env:TEMP "IntelliAttendInstall"
+$appName = "IntelliAttendSmartBoard"
+$rootDir = Join-Path $env:LOCALAPPDATA $appName
+$configDir = Join-Path $rootDir "Config"
+$appDir = Join-Path $rootDir "App"
+$exePath = Join-Path $appDir "$appName.exe"
+$logDir = Join-Path $env:TEMP "IntelliAttend\Logs"
 $msiexec = Join-Path $env:WINDIR "System32\msiexec.exe"
 
 function Write-Step($message) {
@@ -64,7 +65,9 @@ $hasConfig = -not [string]::IsNullOrWhiteSpace($ApiBaseUrl) -or
     -not [string]::IsNullOrWhiteSpace($FirebaseApiKey) -or
     -not [string]::IsNullOrWhiteSpace($FirebaseProjectId)
 if ($hasConfig) {
-    $envFile = Join-Path $configDir ".env"
+    # Write config as env.json (new convention) and .env (legacy fallback).
+    $envJsonFile = Join-Path $configDir "env.json"
+    $envLegacyFile = Join-Path $configDir ".env"
     $lines = @()
     if (-not [string]::IsNullOrWhiteSpace($ApiBaseUrl)) { $lines += "API_BASE_URL=$ApiBaseUrl" }
     if (-not [string]::IsNullOrWhiteSpace($FirebaseApiKey)) { $lines += "FIREBASE_API_KEY=$FirebaseApiKey" }
@@ -74,8 +77,9 @@ if ($hasConfig) {
     if (-not [string]::IsNullOrWhiteSpace($SslPinFingerprint)) { $lines += "SSL_PIN_FINGERPRINT=$SslPinFingerprint" }
     $lines += "ENABLE_DOCUMENTS=true"
     $lines += "DEBUG=false"
-    $lines -join "`r`n" | Set-Content -LiteralPath $envFile -Encoding UTF8
-    Write-Host "Config: $envFile"
+    $lines -join "`r`n" | Set-Content -LiteralPath $envJsonFile -Encoding UTF8
+    $lines -join "`r`n" | Set-Content -LiteralPath $envLegacyFile -Encoding UTF8
+    Write-Host "Config: $envJsonFile"
 } else {
     Write-Host "No config overrides provided - app will use built-in production defaults."
 }
@@ -107,5 +111,5 @@ $launchArgs = @()
 if ($useGpuCompatibility) {
     $launchArgs += "--intelliattend-high-performance-gpu"
 }
-Start-Process -FilePath $exePath -ArgumentList $launchArgs -WorkingDirectory $installDir
+Start-Process -FilePath $exePath -ArgumentList $launchArgs -WorkingDirectory $appDir
 Write-Host "Started: $exePath $($launchArgs -join ' ')"
