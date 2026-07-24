@@ -219,4 +219,34 @@ class AuthRepository implements IAuthRepository {
     await SecureStorageService.clearAll();
     Log.i('[AuthRepository] Logged out (REST tokens cleared).');
   }
+
+  // ─── Deregister (factory reset) ────────────────────────────────────────
+
+  /// Clears all local registration data: Isar records, Firebase tokens,
+  /// and secure storage. The app will return to the registration screen
+  /// on next launch.
+  Future<void> deregister(Isar isar) async {
+    try {
+      // Clear Isar device registration + hydration data
+      await isar.writeTxn(() async {
+        await isar.deviceRegistrations.clear();
+        await isar.hydrationProfiles.clear();
+        await isar.timetableEntrys.clear();
+        await isar.storedNotifications.clear();
+        await isar.activeSessions.clear();
+        await isar.queuedScans.clear();
+        await isar.completedSessions.clear();
+        await isar.hydrationRosters.clear();
+      });
+
+      // Clear Firebase tokens + secure storage
+      await FirebaseRestAuth.signOut();
+      await SecureStorageService.clearAll();
+
+      Log.i('[AuthRepository] Device deregistered — all local data cleared.');
+    } catch (e) {
+      Log.e('[AuthRepository] Deregister failed: $e');
+      rethrow;
+    }
+  }
 }
