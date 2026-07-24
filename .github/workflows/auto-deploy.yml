@@ -228,6 +228,34 @@ jobs:
             choco install wixtoolset --no-progress -y
           }
 
+      - name: Copy update_agent.exe to bundle
+        shell: pwsh
+        run: |
+          $buildDir = "build\windows\x64\runner\Release"
+          # update_agent builds to its own output dir under the CMake tree
+          $agentCandidates = @(
+            "build\windows\x64\update_agent\Release\update_agent.exe",
+            "build\windows\x64\update_agent\update_agent.exe",
+            "build\windows\x64\update_agent\DebRel\update_agent.exe"
+          )
+          $agentExe = $null
+          foreach ($c in $agentCandidates) {
+            if (Test-Path $c) { $agentExe = $c; break }
+          }
+          if (-not $agentExe) {
+            Write-Host "ERROR: update_agent.exe not found in build output" -ForegroundColor Red
+            Write-Host "Searching..." -ForegroundColor Yellow
+            Get-ChildItem -Path "build\windows\x64" -Filter "update_agent.exe" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "  Found: $($_.FullName)"
+              $agentExe = $_.FullName
+            }
+            if (-not $agentExe) {
+              exit 1
+            }
+          }
+          Copy-Item $agentExe "$buildDir\update_agent.exe" -Force
+          Write-Host "Copied update_agent.exe from $agentExe to $buildDir" -ForegroundColor Green
+
       - name: Package MSI
         id: msi
         shell: pwsh
