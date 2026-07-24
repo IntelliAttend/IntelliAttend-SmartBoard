@@ -193,6 +193,9 @@ class TokenManager {
     _cachedRefreshToken = null;
     _tokenExpiryTime = null;
     _pendingRefreshFuture = null;
+    _autoRefreshTimer?.cancel();
+    _autoRefreshTimer = null;
+    _setAuthState(AuthState.unauthenticated);
   }
 
   // ── Auth state management ─────────────────────────────────────────────

@@ -13,7 +13,6 @@ import '../../services/hydration_service.dart';
 import '../../services/timetable_cache.dart';
 import '../../services/network_info_service.dart';
 import '../../services/hotspot_service.dart';
-import 'registration_screen.dart';
 import 'package:number_flow/number_flow.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -47,6 +46,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _networkSub?.cancel();
     _speedTimer?.cancel();
     _holdTimer?.cancel();
+    _syncResetTimer?.cancel();
     super.dispose();
   }
 
@@ -97,6 +97,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isHolding = false;
   String? _holdAction;
 
+  // Hidden 45s hold-to-reset on sync button
+  Timer? _syncResetTimer;
+  bool _isSyncHoldActive = false;
+
   String get _hotspotName {
     final room = _profile?.roomNumber ?? _registration?.roomName ?? '0000';
     return 'IntelliAttend-$room';
@@ -123,6 +127,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             .thenByStartTime()
             .findAll();
         TimetableCache().updateAll(allEntries);
+
+        // Re-load profile + registration so hotspot name/password
+        // and device info card reflect the fresh hydration data.
+        await _loadDeviceInfo();
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -228,19 +236,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
 
                     const SizedBox(height: 48),
-                    _buildSectionHeader('DEVICE MANAGEMENT'),
-                    const SizedBox(height: 24),
-                    _buildResetDeviceButton(),
-                    const SizedBox(height: 48),
                     _buildSectionHeader('SYSTEM ACTIONS'),
                     const SizedBox(height: 24),
-                    _buildActionButton(
-                      icon: Icons.sync_rounded,
-                      label: 'SYNC',
-                      onTap: _isSyncing ? null : _handleSyncTimetable,
-                      isLoading: _isSyncing,
-                      height: 80,
-                    ),
+                    _buildSyncButton(),
                     const SizedBox(height: 16),
                     Row(
                       children: [
@@ -285,84 +283,87 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildResetDeviceButton() {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.error.withValues(alpha: 0.15)),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.error.withValues(alpha: 0.05),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
+  Widget _buildSyncButton() {
+    return GestureDetector(
+      onTap: _isSyncing ? null : _handleSyncTimetable,
+      onLongPressStart: _isSyncing ? null : (_) => _startSyncResetHold(),
+      onLongPressEnd: (_) => _cancelSyncResetHold(),
+      onLongPressCancel: _cancelSyncResetHold,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        height: 80,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        decoration: BoxDecoration(
+          color: _isSyncHoldActive
+              ? AppColors.error.withValues(alpha: 0.05)
+              : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: _isSyncHoldActive
+                ? AppColors.error.withValues(alpha: 0.3)
+                : AppColors.primaryTeal.withValues(alpha: 0.1),
+            width: _isSyncHoldActive ? 2 : 1,
           ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: AppColors.error.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+              color: (_isSyncHoldActive ? AppColors.error : AppColors.primaryTeal)
+                  .withValues(alpha: _isSyncHoldActive ? 0.1 : 0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (_isSyncing)
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppColors.primaryTeal,
                 ),
-                child: const Icon(Icons.restore_rounded, color: AppColors.error, size: 26),
+              )
+            else
+              Icon(
+                _isSyncHoldActive ? Icons.lock_outline_rounded : Icons.sync_rounded,
+                size: 22,
+                color: _isSyncHoldActive ? AppColors.error : AppColors.primaryTeal,
               ),
-              const SizedBox(width: 16),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Factory Reset',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimaryLight),
-                    ),
-                    SizedBox(height: 2),
-                    Text(
-                      'Deregister this device and return to setup',
-                      style: TextStyle(fontSize: 13, color: AppColors.textSecondaryLight),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          Divider(color: Colors.black.withValues(alpha: 0.05), height: 1),
-          const SizedBox(height: 16),
-          const Text(
-            'This will clear all local data (timetable, attendance cache, registration) '
-            'and restart the app to the setup screen. You will need the Board ID and '
-            'password to re-register this device.',
-            style: TextStyle(fontSize: 12, color: AppColors.textSecondaryLight, height: 1.5),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: _handleResetDevice,
-              icon: const Icon(Icons.restore_rounded, size: 18),
-              label: const Text(
-                'RESET DEVICE',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, letterSpacing: 0.5),
-              ),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.error,
-                side: BorderSide(color: AppColors.error.withValues(alpha: 0.3)),
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            const SizedBox(width: 12),
+            Text(
+              'SYNC',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: _isSyncHoldActive ? AppColors.error : AppColors.primaryTeal,
+                letterSpacing: 0.5,
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
+  }
+
+  void _startSyncResetHold() {
+    _syncResetTimer?.cancel();
+    _isSyncHoldActive = true;
+    setState(() {});
+    _syncResetTimer = Timer(const Duration(seconds: 45), () {
+      _isSyncHoldActive = false;
+      setState(() {});
+      _handleResetDevice();
+    });
+  }
+
+  void _cancelSyncResetHold() {
+    _syncResetTimer?.cancel();
+    if (_isSyncHoldActive) {
+      _isSyncHoldActive = false;
+      setState(() {});
+    }
   }
 
   Future<void> _handleResetDevice() async {
@@ -407,8 +408,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (isar == null) throw Exception('Database not initialized');
 
       final authRepo = AuthRepository(
-        // We need a minimal ApiClient — the deregister method only clears local data
-        // and doesn't make any network calls.
         ApiClient(),
       );
       await authRepo.deregister(isar);
@@ -416,24 +415,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Device reset. Restarting to setup screen...'),
+            content: Text('Device reset. Restarting...'),
             backgroundColor: AppColors.primaryTeal,
           ),
         );
 
-        // Small delay to show the snackbar, then restart
         await Future.delayed(const Duration(seconds: 1));
-
-        if (mounted) {
-          // Restart the app by replacing the entire navigation stack
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(
-              builder: (_) => const RegistrationScreen(),
-            ),
-            (route) => false,
-          );
-        }
       }
+
+      // Exit the app so the next launch is a completely fresh process —
+      // identical to first-time install. All local data (Isar, SecureStorage,
+      // singletons) is already cleared by deregister(). On relaunch the app
+      // detects no registration and shows the login screen.
+      exit(0);
     } catch (e) {
       Log.e('[Settings] Factory reset failed: $e');
       if (mounted) {
@@ -660,38 +654,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ],
           ),
           const SizedBox(height: 12),
-          Row(
-            children: [
-              Icon(Icons.lock_outline_rounded, size: 18, color: AppColors.primaryTeal),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Password', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.textSecondaryLight)),
-                    const SizedBox(height: 2),
-                    Text(
-                      _passwordVisible ? _hotspotPassword : '••••••••',
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.textPrimaryLight,
-                        letterSpacing: 0.5,
+          if (_hotspotEnabled) ...[
+            Row(
+              children: [
+                Icon(Icons.lock_outline_rounded, size: 18, color: AppColors.primaryTeal),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Password', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.textSecondaryLight)),
+                      const SizedBox(height: 2),
+                      Text(
+                        _passwordVisible ? _hotspotPassword : '••••••••',
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimaryLight,
+                          letterSpacing: 0.5,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              IconButton(
-                icon: Icon(
-                  _passwordVisible ? Icons.visibility_off_rounded : Icons.visibility_rounded,
-                  size: 18,
+                IconButton(
+                  icon: Icon(
+                    _passwordVisible ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                    size: 18,
+                  ),
+                  color: AppColors.textSecondaryLight,
+                  onPressed: () => setState(() => _passwordVisible = !_passwordVisible),
                 ),
-                color: AppColors.textSecondaryLight,
-                onPressed: () => setState(() => _passwordVisible = !_passwordVisible),
-              ),
-            ],
-          ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -952,57 +948,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _updateTheme(String theme) async {
     await SecureStorageService.storeIdleTheme(theme);
     setState(() => _idleTheme = theme);
-  }
-
-  Widget _buildActionButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback? onTap,
-    Color? color,
-    bool isLoading = false,
-    double height = 120,
-  }) {
-    final primaryColor = color ?? AppColors.primaryTeal;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        height: height,
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: primaryColor.withValues(alpha: 0.1)),
-          boxShadow: [
-            BoxShadow(
-              color: primaryColor.withValues(alpha: 0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (isLoading)
-              const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primaryTeal))
-            else
-              Icon(icon, size: 22, color: primaryColor),
-            const SizedBox(width: 12),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: color ?? AppColors.textPrimaryLight,
-                letterSpacing: 0.5,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   void _startHold(String action) {

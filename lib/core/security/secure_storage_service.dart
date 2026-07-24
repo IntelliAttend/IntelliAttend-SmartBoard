@@ -206,5 +206,6 @@ class SecureStorageService {
     await _delete(_keyIsarEncrypt);
     await _delete(_keyBoardEmail);
     await _delete(_keyBoardPassword);
+    await _delete(_keyBoardManifestHash);
   }
 }

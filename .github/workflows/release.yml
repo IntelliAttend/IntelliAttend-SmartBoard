@@ -62,6 +62,46 @@ jobs:
       HAS_SIGN_CERT: ${{ secrets.WIX_SIGN_CERT_BASE64 != '' }}
 
     steps:
+      - name: Verify SSL certificate fingerprint
+        shell: pwsh
+        run: |
+          $host = "api.intelliattend.app"
+          $expected = "${{ secrets.SSL_PIN_FINGERPRINT }}"
+
+          Write-Host "Verifying SSL pin for ${host}..." -ForegroundColor Cyan
+
+          try {
+            $tcp = New-Object System.Net.Sockets.TcpClient($host, 443)
+            $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false, { $true })
+            $ssl.AuthenticateAsClient($host)
+            $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($ssl.RemoteCertificate)
+            $ssl.Close()
+            $tcp.Close()
+
+            $actual = $cert.GetCertHashString('sha256').ToLower()
+            $daysLeft = ($cert.NotAfter - (Get-Date)).Days
+            Write-Host "Server cert SHA-256: $actual"
+            Write-Host "Expected pin:        $expected"
+            Write-Host "Expires in:          $daysLeft days"
+
+            if ($daysLeft -lt 14) {
+              Write-Host "WARNING: Certificate expires in $daysLeft days!" -ForegroundColor Yellow
+            }
+
+            if ($actual -ne $expected) {
+              Write-Host ""
+              Write-Host "ERROR: SSL fingerprint mismatch!" -ForegroundColor Red
+              Write-Host "The production cert has been renewed. Update SSL_PIN_FINGERPRINT secret:" -ForegroundColor Yellow
+              Write-Host "  gh secret set SSL_PIN_FINGERPRINT --body '$actual'" -ForegroundColor White
+              exit 1
+            }
+
+            Write-Host "SSL pin verified" -ForegroundColor Green
+          } catch {
+            Write-Host "WARNING: Could not verify SSL pin: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "Proceeding with build (will rely on runtime fallback)" -ForegroundColor Yellow
+          }
+
       - name: Validate required variables
         shell: pwsh
         run: |

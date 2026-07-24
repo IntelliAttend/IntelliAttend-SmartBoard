@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import '../config/app_config.dart';
@@ -21,10 +20,6 @@ class SslPinningService {
     final fingerprint = AppConfig.sslFingerprint;
 
     if (fingerprint.isEmpty) {
-      if (kReleaseMode) {
-        throw StateError(
-            'SSL_PIN_FINGERPRINT is required for production builds.');
-      }
       Log.w('[SSL] SSL_PIN_FINGERPRINT not set. Certificate pinning disabled.');
     }
 

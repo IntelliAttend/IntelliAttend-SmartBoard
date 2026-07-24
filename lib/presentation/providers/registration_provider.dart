@@ -14,6 +14,7 @@ import '../../core/startup_service.dart';
 import '../../main.dart' show startBackgroundProtocols;
 
 enum RegistrationStep { idle, completed }
+enum HydrationState { pending, hydrating, completed, failed }
 
 class RegistrationProvider extends ChangeNotifier {
   final IAuthRepository _authRepository;
@@ -26,6 +27,9 @@ class RegistrationProvider extends ChangeNotifier {
   RegistrationStep _step = RegistrationStep.idle;
   RegistrationStep get step => _step;
 
+  HydrationState _hydrationState = HydrationState.pending;
+  HydrationState get hydrationState => _hydrationState;
+
   bool _isLoading = false;
   bool get isLoading => _isLoading;
 
@@ -35,6 +39,21 @@ class RegistrationProvider extends ChangeNotifier {
   String? _verificationToken;
   String? _adminEmail;
   String? get adminEmail => _adminEmail;
+
+  /// Await hydration from the server. This must complete BEFORE
+  /// setting _step = completed so that the UI has data in Isar
+  /// when it navigates to IdleScreen.
+  Future<void> _hydrateAndWait() async {
+    _hydrationState = HydrationState.hydrating;
+    notifyListeners();
+    try {
+      await _deviceRepository.hydrateFromServer();
+      _hydrationState = HydrationState.completed;
+    } catch (e) {
+      Log.w('[RegistrationProvider] Post-login hydration failed: $e');
+      _hydrationState = HydrationState.failed;
+    }
+  }
 
   Future<void> _attemptAutoRecovery() async {
     final token = await SecureStorageService.getRegistrationToken();
@@ -65,6 +84,7 @@ class RegistrationProvider extends ChangeNotifier {
         await SecureStorageService.clearRegistrationToken();
         await SecureStorageService.delete('reg_board_id');
 
+        await _hydrateAndWait();
         _step = RegistrationStep.completed;
         unawaited(StartupService.register());
         unawaited(startBackgroundProtocols());
@@ -134,6 +154,7 @@ class RegistrationProvider extends ChangeNotifier {
               );
               Log.i('[RegistrationProvider] Registration saved for existing board.');
 
+              await _hydrateAndWait();
               _step = RegistrationStep.completed;
               unawaited(StartupService.register());
               unawaited(startBackgroundProtocols());
@@ -188,6 +209,7 @@ class RegistrationProvider extends ChangeNotifier {
               await SecureStorageService.clearRegistrationToken();
               await SecureStorageService.delete('reg_board_id');
 
+              await _hydrateAndWait();
               _step = RegistrationStep.completed;
               unawaited(StartupService.register());
               unawaited(startBackgroundProtocols());
@@ -249,6 +271,7 @@ class RegistrationProvider extends ChangeNotifier {
 
   void reset() {
     _step = RegistrationStep.idle;
+    _hydrationState = HydrationState.pending;
     _errorMessage = null;
     _isLoading = false;
     SecureStorageService.clearRegistrationToken();

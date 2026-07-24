@@ -151,7 +151,10 @@ class ApiService {
           Log.w('[API] $method $path got 401 — attempting re-auth');
           final reAuthed = await _handleAuthFailure();
           if (reAuthed) {
-            // Retry with fresh token
+            // Re-fetch auth headers with the fresh token so the retry
+            // does not reuse the stale Authorization header.
+            final freshHeaders = await _authHeaders();
+            headers = freshHeaders;
             continue;
           }
           throw UnauthorizedException('Session expired. Please login again.');

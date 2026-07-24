@@ -33,6 +33,13 @@ Thumbs.db
 coverage/
 .nyc_output/
 
+# Code signing certificates (NEVER commit these)
+*.pfx
+*.p12
+*.cer
+*.pem
+scripts/certs/
+
 # Executables
 vs_BuildTools.exe
 

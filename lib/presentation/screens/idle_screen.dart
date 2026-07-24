@@ -222,10 +222,37 @@ class _IdleScreenState extends State<IdleScreen>
 
       if (!mounted) return;
 
+      // 1b. EARLY HYDRATION: Ensure board data is fetched from server
+      //     before background protocols run. If HydrationProfile is missing
+      //     from Isar (e.g. after restart/shutdown), hydrate immediately
+      //     so the UI has real data (timetable, room number, etc.).
+      try {
+        final isar = Isar.getInstance();
+        if (isar != null) {
+          final profile = await isar.hydrationProfiles.where().findFirst();
+          if (profile == null) {
+            Log.i('[Idle] No HydrationProfile found — hydrating from server');
+            await globalDeviceRepository.hydrateFromServer();
+          } else {
+            Log.i('[Idle] HydrationProfile exists (room=${profile.roomNumber})');
+          }
+        }
+      } catch (e) {
+        Log.w('[Idle] Early hydration check failed: $e');
+      }
+
+      if (!mounted) return;
+
       // 2. Start global background protocols (SyncManager, WindowOrchestrator,
       //    PreFlightService). These open Firestore listeners + a Timer that
       //    can call window_manager. Now safe because setMode has completed.
-      await startBackgroundProtocols();
+      //    Wrap in try/catch so post-protocol refresh ALWAYS runs, even if
+      //    protocols partially fail (e.g. network timeout).
+      try {
+        await startBackgroundProtocols();
+      } catch (e) {
+        Log.e('[Idle] Background protocols failed: $e');
+      }
 
       if (!mounted) return;
 

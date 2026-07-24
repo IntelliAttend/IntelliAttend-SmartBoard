@@ -64,6 +64,12 @@ class HydrationService {
         fromCache: false,
         manifestHash: remoteHash,
       );
+    } on UnauthorizedException catch (e) {
+      // Auth errors must propagate — do NOT fall back to cache.
+      // This allows callers (sync button, post-login) to show proper
+      // error messages instead of silently showing "already up to date".
+      Log.e('[Hydration] Auth error — propagating: $e');
+      rethrow;
     } catch (e) {
       Log.w('[Hydration] Network error — falling back to cache: $e');
       return _fallbackToCache(isar, error: e.toString());
@@ -85,7 +91,7 @@ class HydrationService {
   static HydrationResult _fallbackToCache(Isar isar, {String? error}) {
     return HydrationResult(
       changed: false,
-      fromCache: true,
+      fromCache: error == null,
       manifestHash: null,
       error: error,
     );

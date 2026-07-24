@@ -7,6 +7,7 @@ import '../../core/platform/hardware_fingerprint_service.dart';
 import '../../core/security/firebase_rest_auth.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../core/utils/logger.dart';
+import '../../core/auth/token_manager.dart';
 import '../../models/isar_schemas.dart';
 import '../../services/time_sync_service.dart';
 
@@ -242,6 +243,10 @@ class AuthRepository implements IAuthRepository {
       // Clear Firebase tokens + secure storage
       await FirebaseRestAuth.signOut();
       await SecureStorageService.clearAll();
+
+      // Reset TokenManager in-memory cache so stale tokens from the
+      // previous session are never reused after re-login.
+      TokenManager().invalidateCache();
 
       Log.i('[AuthRepository] Device deregistered — all local data cleared.');
     } catch (e) {

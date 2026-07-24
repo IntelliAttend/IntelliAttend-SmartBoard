@@ -1,0 +1,186 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SSL Certificate Monitor — IntelliAttend SmartBoard
+#
+# Runs daily to verify the production SSL certificate fingerprint still
+# matches the pinned fingerprint stored in the SSL_PIN_FINGERPRINT secret.
+#
+# If the cert has renewed (mismatch), this workflow:
+#   1. Creates a GitHub Issue alerting the team
+#   2. Fails the workflow (visible in Actions tab)
+#
+# If the cert is expiring within 30 days, it emits a warning annotation.
+#
+# Can also be triggered manually from the Actions tab.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: SSL Certificate Monitor
+
+on:
+  schedule:
+    - cron: '0 8 * * *'  # Daily at 08:00 UTC
+
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  check-ssl:
+    name: Verify SSL Pin
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract and verify certificate fingerprint
+        id: ssl_check
+        shell: pwsh
+        run: |
+          $host = "api.intelliattend.app"
+          Write-Host "Checking SSL certificate for ${host}..." -ForegroundColor Cyan
+
+          # Extract current cert fingerprint
+          $tcp = New-Object System.Net.Sockets.TcpClient($host, 443)
+          $ssl = New-Object System.Net.Security.SslStream($tcp.GetStream(), $false, { $true })
+          $ssl.AuthenticateAsClient($host)
+          $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($ssl.RemoteCertificate)
+          $ssl.Close()
+          $tcp.Close()
+
+          $actual = $cert.GetCertHashString('sha256').ToLower()
+          $daysLeft = ($cert.NotAfter - (Get-Date)).Days
+
+          Write-Host "Subject:       $($cert.Subject)"
+          Write-Host "Expires:       $($cert.NotAfter) ($daysLeft days)"
+          Write-Host "SHA-256:       $actual"
+
+          "actual_sha256=$actual" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "days_until_expiry=$daysLeft" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "cert_subject=$($cert.Subject)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "cert_expires=$($cert.NotAfter.ToString('yyyy-MM-ddTHH:mm:ssZ'))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+          if ($daysLeft -lt 30) {
+            Write-Host ""
+            Write-Host "WARNING: Certificate expires in $daysLeft days!" -ForegroundColor Yellow
+            "::warning::SSL certificate expires in $daysLeft days ($($cert.NotAfter))"
+          }
+
+      - name: Compare with pinned fingerprint
+        id: compare
+        shell: pwsh
+        run: |
+          $expected = "${{ secrets.SSL_PIN_FINGERPRINT }}"
+          $actual = "${{ steps.ssl_check.outputs.actual_sha256 }}"
+
+          Write-Host ""
+          Write-Host "Expected (secret): $expected"
+          Write-Host "Actual (server):   $actual"
+
+          if ([string]::IsNullOrWhiteSpace($expected)) {
+            Write-Host ""
+            Write-Host "ERROR: SSL_PIN_FINGERPRINT secret is not set!" -ForegroundColor Red
+            "::error::SSL_PIN_FINGERPRINT repository secret is not configured"
+            "match=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            exit 0
+          }
+
+          if ($expected -eq $actual) {
+            Write-Host ""
+            Write-Host "MATCH - SSL pin is valid" -ForegroundColor Green
+            "match=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            Write-Host ""
+            Write-Host "MISMATCH - Certificate has been renewed!" -ForegroundColor Red
+            "::error::SSL certificate fingerprint mismatch. Server: $actual, Expected: $expected. Update the SSL_PIN_FINGERPRINT secret."
+            "match=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
+      - name: Create GitHub Issue on mismatch
+        if: steps.compare.outputs.match == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const actual = '${{ steps.ssl_check.outputs.actual_sha256 }}';
+            const daysLeft = '${{ steps.ssl_check.outputs.days_until_expiry }}';
+            const certSubject = '${{ steps.ssl_check.outputs.cert_subject }}';
+            const certExpires = '${{ steps.ssl_check.outputs.cert_expires }}';
+            const expected = '${{ secrets.SSL_PIN_FINGERPRINT }}';
+
+            // Check if an open issue already exists to avoid duplicates
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'ssl-cert-renewal',
+              per_page: 1,
+            });
+
+            if (issues.length > 0) {
+              console.log(`Issue #${issues[0].number} already exists — adding comment instead.`);
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues[0].number,
+                body: `## SSL Certificate Still Mismatched\n\n` +
+                      `The production certificate still differs from the pinned fingerprint.\n\n` +
+                      `| Field | Value |\n|---|---|\n` +
+                      `| **Actual SHA-256** | \`${actual}\` |\n` +
+                      `| **Expected SHA-256** | \`${expected}\` |\n` +
+                      `| **Expires** | ${certExpires} (${daysLeft} days) |\n` +
+                      `| **Subject** | ${certSubject} |\n\n` +
+                      `### Fix\n` +
+                      `\`\`\`bash\n` +
+                      `gh secret set SSL_PIN_FINGERPRINT --body '${actual}'\n` +
+                      `\`\`\`\n`,
+              });
+              return;
+            }
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'SSL Certificate Renewed — Update SSL_PIN_FINGERPRINT',
+              labels: ['ssl-cert-renewal', 'critical'],
+              body: `## SSL Certificate Fingerprint Mismatch\n\n` +
+                    `The production TLS certificate at \`api.intelliattend.app\` has been renewed and no longer matches the pinned fingerprint.\n\n` +
+                    `**All builds using the old fingerprint will fail SSL pinning at runtime.**\n\n` +
+                    `### Current State\n\n` +
+                    `| Field | Value |\n|---|---|\n` +
+                    `| **Actual SHA-256** | \`${actual}\` |\n` +
+                    `| **Expected SHA-256** | \`${expected}\` |\n` +
+                    `| **Expires** | ${certExpires} (${daysLeft} days) |\n` +
+                    `| **Subject** | ${certSubject} |\n\n` +
+                    `### How to Fix\n\n` +
+                    `Update the \`SSL_PIN_FINGERPRINT\` repository secret:\n\n` +
+                    `\`\`\`bash\n` +
+                    `gh secret set SSL_PIN_FINGERPRINT --body '${actual}'\n` +
+                    `\`\`\`\n\n` +
+                    `Or run locally:\n` +
+                    `\`\`\`powershell\n` +
+                    `.\\scripts\\check_ssl_fingerprint.ps1 -UpdateEnv\n` +
+                    `\`\`\`\n`,
+            });
+
+      - name: Summary
+        shell: pwsh
+        run: |
+          $match = "${{ steps.compare.outputs.match }}"
+          $actual = "${{ steps.ssl_check.outputs.actual_sha256 }}"
+          $daysLeft = "${{ steps.ssl_check.outputs.days_until_expiry }}"
+
+          Write-Host ""
+          Write-Host "========================================" -ForegroundColor $(if ($match -eq 'true') { 'Green' } else { 'Red' })
+          if ($match -eq 'true') {
+            Write-Host " SSL PIN OK — fingerprint matches" -ForegroundColor Green
+          } else {
+            Write-Host " SSL PIN MISMATCH — action required" -ForegroundColor Red
+          }
+          Write-Host "========================================" -ForegroundColor $(if ($match -eq 'true') { 'Green' } else { 'Red' })
+          Write-Host "  Fingerprint: $actual"
+          Write-Host "  Expires in:  $daysLeft days"
+          Write-Host ""
+
+          if ($match -eq 'false') {
+            exit 1
+          }

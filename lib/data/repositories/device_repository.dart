@@ -110,6 +110,7 @@ class DeviceRepository implements IDeviceRepository {
       Log.i('[DeviceRepository] Timetable cache refreshed after hydration (changed=${result.changed})');
     } catch (e) {
       Log.e('[DeviceRepository] Hydration failed: $e');
+      rethrow;
     }
   }
 

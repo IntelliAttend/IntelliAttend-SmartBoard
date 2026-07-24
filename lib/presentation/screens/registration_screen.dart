@@ -10,7 +10,6 @@ import '../../core/platform/kiosk_service.dart';
 import '../../core/utils/logger.dart';
 import '../../data/repositories/device_repository.dart';
 import '../providers/registration_provider.dart';
-import 'boot_screen.dart';
 import 'idle_screen.dart';
 
 class RegistrationScreen extends StatefulWidget {
@@ -120,25 +119,25 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           WidgetsBinding.instance.addPostFrameCallback((_) async {
             if (!mounted) return;
             final deviceRepo = context.read<IDeviceRepository>();
-            final nav = Navigator.of(context);
             final registration = await deviceRepo.getRegistration();
             if (!mounted) return;
             if (registration != null) {
               Log.i('[RegistrationScreen] Registration confirmed in Isar — navigating directly to IdleScreen.');
-              nav.pushAndRemoveUntil(
+              Navigator.of(context).pushAndRemoveUntil(
                 MaterialPageRoute(
                   builder: (context) => IdleScreen(registration: registration),
                 ),
                 (route) => false,
               );
             } else {
-              // Fallback: Isar read returned null (unexpected). Let BootScreen
-              // re-verify state and decide where to go.
-              Log.w('[RegistrationScreen] Registration not found in Isar after completion — falling back to BootScreen.');
-              nav.pushAndRemoveUntil(
-                MaterialPageRoute(builder: (context) => const BootScreen()),
-                (route) => false,
-              );
+              // Isar is empty but _step is completed — stale state from a
+              // factory reset where RegistrationProvider.reset() was not
+              // called. Reset the provider back to idle instead of
+              // navigating to BootScreen, which would just loop back here.
+              Log.w('[RegistrationScreen] step=completed but Isar empty — '
+                  'stale state detected. Resetting provider to idle.');
+              _navigationScheduled = false;
+              provider.reset();
             }
           });
         }
@@ -269,6 +268,31 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                               isPassword: true,
                             ),
                             const SizedBox(height: 48),
+                            if (provider.isLoading && provider.hydrationState == HydrationState.hydrating) ...[
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: AppColors.primaryTeal.withValues(alpha: 0.6),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Text(
+                                    'Syncing board data...',
+                                    style: TextStyle(
+                                      color: AppColors.textSecondaryLight.withValues(alpha: 0.8),
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 24),
+                            ],
                             SizedBox(
                               width: double.infinity,
                               height: 60,
