@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
+import '../core/config/install_paths.dart';
 import '../core/utils/logger.dart';
 import '../core/utils/version.dart';
 import 'api_service.dart';
@@ -198,9 +199,9 @@ class UpdateHealthMonitor {
         return;
       }
 
-      final dirName = appDir.uri.pathSegments.last;
+      // Use InstallPaths.backupDir for consistent backup location.
       final backupDir = Directory(
-          '${appDir.parent.path}\\${dirName}_backup_v$currentVersion');
+          '${InstallPaths.backupDir}\\v$currentVersion');
       if (await backupDir.exists()) {
         // Remove stale backup from a previous failed update.
         await backupDir.delete(recursive: true);
@@ -373,21 +374,7 @@ class UpdateHealthMonitor {
     }
   }
 
-  static File get _prefsFile {
-    final dir = _appDataDir;
-    return File('${dir.path}\\update_health.json');
-  }
-
-  static Directory get _appDataDir {
-    // Use a well-known path that survives MSI upgrades.
-    final localAppData = Platform.environment['LOCALAPPDATA'] ??
-        '${Platform.environment['USERPROFILE']}\\AppData\\Local';
-    final dir = Directory('$localAppData\\IntelliAttendSmartBoard');
-    if (!dir.existsSync()) {
-      dir.createSync(recursive: true);
-    }
-    return dir;
-  }
+  static File get _prefsFile => InstallPaths.updateHealthFileInstance;
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 

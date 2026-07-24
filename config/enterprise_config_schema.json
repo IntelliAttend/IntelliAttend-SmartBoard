@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "intelliattend-smartboard-deploy-config",
+  "title": "IntelliAttend SmartBoard Enterprise Deployment Config",
+  "description": "Pre-deployment configuration for IT administrators. Place this file at <install_dir>\\Config\\deploy_config.json before running the MSI installer, or pass it via deploy_silent.ps1 -ConfigPath.",
+
+  "type": "object",
+  "required": ["board_id", "server"],
+  "additionalProperties": false,
+
+  "properties": {
+    "board_id": {
+      "type": "string",
+      "pattern": "^IASB-[A-Z0-9]{4,16}$",
+      "description": "Unique SmartBoard identifier. Assigned by Super Admin. Example: IASB-4208"
+    },
+
+    "server": {
+      "type": "object",
+      "required": ["api_base_url"],
+      "additionalProperties": false,
+      "properties": {
+        "api_base_url": {
+          "type": "string",
+          "format": "uri",
+          "default": "https://api.intelliattend.app",
+          "description": "Backend API base URL"
+        },
+        "ssl_pin_fingerprint": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$",
+          "description": "SHA-256 certificate fingerprint for SSL pinning (64 hex chars). Leave empty to disable pinning."
+        }
+      }
+    },
+
+    "firebase": {
+      "type": "object",
+      "description": "Firebase configuration. Defaults are provided for production — only override for custom deployments.",
+      "additionalProperties": false,
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "default": "AIzaSyBooFadQf3TZFvZOUJkihMUdgexrbeoQnE"
+        },
+        "project_id": {
+          "type": "string",
+          "default": "intelliattend-a2564"
+        },
+        "app_id": {
+          "type": "string",
+          "default": "1:738499328288:web:c345f44de9d8393062ff45"
+        },
+        "messaging_sender_id": {
+          "type": "string",
+          "default": "738499328288"
+        }
+      }
+    },
+
+    "update": {
+      "type": "object",
+      "description": "Update policy for this board.",
+      "additionalProperties": false,
+      "properties": {
+        "channel": {
+          "type": "string",
+          "enum": ["stable", "beta", "internal", "dev"],
+          "default": "stable",
+          "description": "Release channel. Stable boards only receive stable updates."
+        },
+        "auto_update": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the board checks for updates automatically."
+        },
+        "hmac_secret_key": {
+          "type": "string",
+          "description": "HMAC-SHA256 secret for manifest signature verification. Leave empty to disable signature checking."
+        }
+      }
+    },
+
+    "features": {
+      "type": "object",
+      "description": "Feature flags for this board.",
+      "additionalProperties": false,
+      "properties": {
+        "enable_documents": {
+          "type": "boolean",
+          "default": true
+        },
+        "enable_video_breaks": {
+          "type": "boolean",
+          "default": false
+        },
+        "kiosk_mode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable kiosk mode (fullscreen, restricted input)."
+        }
+      }
+    },
+
+    "location": {
+      "type": "object",
+      "description": "Physical location metadata. Used for Sentry fleet filtering (filter by school, building, or room). Values are operational identifiers only — never student PII.",
+      "additionalProperties": false,
+      "properties": {
+        "school": {
+          "type": "string",
+          "description": "School or institution name. Example: MRCET"
+        },
+        "building": {
+          "type": "string",
+          "description": "Building or block identifier. Example: Block A"
+        },
+        "room": {
+          "type": "string",
+          "description": "Room or lab identifier. Example: A-204"
+        }
+      }
+    },
+
+    "deployment": {
+      "type": "object",
+      "description": "Deployment metadata for IT tracking.",
+      "additionalProperties": false,
+      "properties": {
+        "deployment_id": {
+          "type": "string",
+          "description": "Globally unique deployment identifier for cross-customer fleet filtering. Example: mrcet-prod, customer-001"
+        },
+        "deployed_by": {
+          "type": "string",
+          "description": "Name or ID of the IT admin who deployed this board."
+        },
+        "deployed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO-8601 timestamp of deployment."
+        },
+        "site": {
+          "type": "string",
+          "description": "Physical location (building, floor, room)."
+        },
+        "department": {
+          "type": "string",
+          "description": "Academic department."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-text deployment notes."
+        }
+      }
+    }
+  }
+}

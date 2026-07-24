@@ -54,6 +54,10 @@ dependencies:
   # Logging
   logger: ^2.0.2+1
 
+  # Observability (crash reporting + performance monitoring)
+  sentry: ^8.14.2
+  sentry_flutter: ^8.14.1
+
   # Audio
   audioplayers: ^6.4.0
 
