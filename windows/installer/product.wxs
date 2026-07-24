@@ -55,7 +55,7 @@
     <!-- ═══════════════════════════════════════════════════════════════════════
          ARP (Add/Remove Programs) METADATA
          ═══════════════════════════════════════════════════════════════════════ -->
-    <Icon Id="AppIcon" SourceFile="$(var.SourceDir)\IntelliAttendSmartBoard.exe" />
+    <Icon Id="AppIcon" SourceFile="$(var.SourceDir)\$(var.AppName).exe" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
     <Property Id="ARPHELPLINK" Value="https://intelliattend.app/support" />
     <Property Id="ARPURLINFOABOUT" Value="https://intelliattend.app" />
@@ -96,7 +96,7 @@
 
       <!-- Core application files -->
       <Component Id="C_Exe" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890" Win64="yes">
-        <File Id="F_Exe" Name="IntelliAttendSmartBoard.exe" Source="$(var.SourceDir)\IntelliAttendSmartBoard.exe" KeyPath="yes" />
+        <File Id="F_Exe" Name="$(var.AppName).exe" Source="$(var.SourceDir)\$(var.AppName).exe" KeyPath="yes" />
       </Component>
 
       <Component Id="C_UpdateAgent" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567891" Win64="yes">
@@ -206,7 +206,7 @@
           Id="StartMenuShortcut"
           Name="SmartBoard"
           Description="IntelliAttend SmartBoard Attendance Kiosk"
-          Target="[APPLICATIONFOLDER]IntelliAttendSmartBoard.exe"
+          Target="[APPLICATIONFOLDER]$(var.AppName).exe"
           WorkingDirectory="APPLICATIONFOLDER"
           Icon="AppIcon" />
       <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
@@ -219,7 +219,7 @@
           Root="HKCU"
           Key="Software\Microsoft\Windows\CurrentVersion\Run"
           Name="IntelliAttendSmartBoard"
-          Value="&quot;[APPLICATIONFOLDER]IntelliAttendSmartBoard.exe&quot; --intelliattend-autostart"
+          Value="&quot;[APPLICATIONFOLDER]$(var.AppName).exe&quot; --intelliattend-autostart"
           Type="string"
           KeyPath="yes" />
     </Component>
