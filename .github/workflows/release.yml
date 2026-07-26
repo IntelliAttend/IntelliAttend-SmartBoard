@@ -247,7 +247,7 @@ jobs:
           if (-not (Test-Path $bsBuildDir)) { New-Item -ItemType Directory -Path $bsBuildDir -Force | Out-Null }
 
           Push-Location $bsBuildDir
-          cmake.exe "$env:GITHUB_WORKSPACE\windows\bootstrapper" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
+          cmake.exe "$env:GITHUB_WORKSPACE\windows\bootstrapper" -G "Visual Studio 17 2022" -A x64
           if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
           cmake.exe --build . --config Release
           if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
