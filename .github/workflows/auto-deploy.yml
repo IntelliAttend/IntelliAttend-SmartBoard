@@ -431,8 +431,7 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           FLUTTER_VERSION="${{ steps.version.outputs.flutter_version }}"
-          APP_NAME="${{ steps.detect.outputs.app_name }}"
-          SETUP_PATH="build/windows/x64/runner/Release/${APP_NAME}-${VERSION}-Setup.exe"
+          SETUP_PATH="build/windows/x64/runner/Release/${{ steps.installer.outputs.setup_name }}"
           SERVER_URL="${{ vars.SERVER_URL }}"
           
           echo "Uploading v${FLUTTER_VERSION} (Setup: ${VERSION}) to ${SERVER_URL}..."
