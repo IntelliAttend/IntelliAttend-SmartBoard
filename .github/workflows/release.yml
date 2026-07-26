@@ -1,17 +1,17 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Release Workflow — IntelliAttend SmartBoard
 #
-# Triggered when a tag matching `v*` is pushed. Builds a Windows MSI release,
-# uploads it as a GitHub Release artifact, and generates a version manifest
-# that boards can poll to discover the update.
+# Triggered when a tag matching `v*` is pushed. Builds a Windows release,
+# packages with Inno Setup, uploads as a GitHub Release artifact, and
+# generates a version manifest that boards can poll to discover the update.
 #
 # Required repository secrets:
 #   - FIREBASE_API_KEY              Firebase Web API key
 #   - FIREBASE_APP_ID               Firebase App ID
 #   - FIREBASE_MESSAGING_SENDER_ID  Firebase Cloud Messaging sender ID
 #   - SSL_PIN_FINGERPRINT            SHA-256 hash of production TLS certificate
-#   - WIX_SIGN_CERT_BASE64          Base64-encoded Authenticode signing certificate (optional)
-#   - WIX_SIGN_PASSWORD             Certificate password (optional)
+#   - SIGN_CERT_BASE64              Base64-encoded Authenticode signing certificate (optional)
+#   - SIGN_PASSWORD                 Certificate password (optional)
 #
 # Required repository variables:
 #   - API_BASE_URL         Production API base URL (e.g. https://api.intelliattend.com)
@@ -20,10 +20,10 @@
 # ── Workflow ────────────────────────────────────────────────────────────────
 #   1. Checkout + install Flutter
 #   2. Build `flutter build windows --release`
-#   3. Package MSI via candle + light (WiX Toolset)
-#   4. Authenticode-sign the MSI (if cert present)
+#   3. Package with Inno Setup → single setup.exe
+#   4. Authenticode-sign the setup.exe (if cert present)
 #   5. Compute SHA-256
-#   6. Upload MSI + SHA-256 as release assets
+#   6. Upload setup.exe + SHA-256 as release assets
 #   7. Publish version manifest (latest.json)
 #   8. Create GitHub Release
 # ─────────────────────────────────────────────────────────────────────────────
@@ -56,10 +56,10 @@ env:
 
 jobs:
   build:
-    name: Build Windows MSI
+    name: Build Windows Release
     runs-on: windows-latest
     env:
-      HAS_SIGN_CERT: ${{ secrets.WIX_SIGN_CERT_BASE64 != '' }}
+      HAS_SIGN_CERT: ${{ secrets.SIGN_CERT_BASE64 != '' }}
 
     steps:
       - name: Verify SSL certificate fingerprint
@@ -181,117 +181,68 @@ jobs:
           }
           Write-Host "Build output size: $((Get-Item $exe).Length / 1MB) MB"
 
-      - name: Setup WiX Toolset
+      - name: Setup Inno Setup
         shell: pwsh
         run: |
-          # WiX Toolset v3 is available via Chocolatey.
-          # Install if not already present.
-          $wixPath = "$env:WIX"
-          if (-not (Test-Path "$wixPath\bin\candle.exe")) {
-            choco install wixtoolset --no-progress -y
+          choco install innosetup --no-progress -y
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
           }
-          $wixPath = "$env:WIX"
-          Write-Host "WiX installed at: $wixPath"
-          Write-Host "candle: $(Get-Command "$wixPath\bin\candle.exe" | Select-Object -ExpandProperty Source)"
-          Write-Host "light:  $(Get-Command "$wixPath\bin\light.exe" | Select-Object -ExpandProperty Source)"
-
-      - name: Package MSI
-        shell: pwsh
-        run: |
-          $tag = "${{ github.ref_name }}"
-          $version = $tag -replace '^v', ''
-          $buildDir = "build\windows\x64\runner\Release"
-          $installerDir = "windows\installer"
-
-          # Build the MSI
-          Push-Location $installerDir
-
-          # Compile .wxs to .wixobj
-          & "$env:WIX\bin\candle.exe" `
-            -dAppName="${{ env.APP_NAME }}" `
-            -dVersion="$version" `
-            -dSourceDir="..\..\$buildDir" `
-            -arch x64 `
-            -ext WixUIExtension `
-            product.wxs `
-            -out product.wixobj
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-          # Link .wixobj to .msi
-          & "$env:WIX\bin\light.exe" `
-            -ext WixUIExtension `
-            product.wixobj `
-            -out "..\..\$buildDir\${{ env.APP_NAME }}-$version.msi"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-          Pop-Location
-
-          $msi = "$buildDir\${{ env.APP_NAME }}-$version.msi"
-          if (-not (Test-Path $msi)) {
-            Write-Host "ERROR: MSI not created at $msi" -Foreground Red
+          if (-not (Test-Path $iscc)) {
+            Write-Host "ERROR: ISCC.exe not found after install" -ForegroundColor Red
             exit 1
           }
+          Write-Host "Inno Setup found: $iscc" -ForegroundColor Green
 
-          $msiSize = (Get-Item $msi).Length / 1MB
-          Write-Host "MSI created: $msi ($([math]::Round($msiSize, 2)) MB)"
-
-      - name: Build Bootstrapper
+      - name: Build Installer
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
           $version = $tag -replace '^v', ''
           $buildDir = "build\windows\x64\runner\Release"
 
-          $bsBuildDir = "build\bootstrapper"
-          if (-not (Test-Path $bsBuildDir)) { New-Item -ItemType Directory -Path $bsBuildDir -Force | Out-Null }
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
+          }
 
-          Push-Location $bsBuildDir
-          cmake.exe "$env:GITHUB_WORKSPACE\windows\bootstrapper" -G Ninja -DCMAKE_BUILD_TYPE=Release
-          if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
-          cmake.exe --build . --config Release
-          if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
-          Pop-Location
-
-          $bsExe = "$bsBuildDir\bootstrapper.exe"
-          if (-not (Test-Path $bsExe)) {
-            Write-Host "ERROR: bootstrapper.exe not found" -ForegroundColor Red
+          & $iscc /DAppVersion="$version" /DSourceDir="$env:GITHUB_WORKSPACE\$buildDir" "$env:GITHUB_WORKSPACE\windows\inno_setup\setup.iss"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: Inno Setup compilation failed" -ForegroundColor Red
             exit 1
           }
 
-          $bsDest = "$buildDir\${{ env.APP_NAME }}-${version}-x64-Setup.exe"
-          Copy-Item $bsExe $bsDest -Force
-          Write-Host "Bootstrapper: $bsDest" -ForegroundColor Green
+          $setupExe = "$buildDir\${{ env.APP_NAME }}-$version-Setup.exe"
+          if (-not (Test-Path $setupExe)) {
+            Write-Host "ERROR: setup.exe not found at $setupExe" -ForegroundColor Red
+            Get-ChildItem $buildDir -Filter "*Setup*" | ForEach-Object { Write-Host "  Found: $($_.Name)" }
+            exit 1
+          }
 
-      - name: Sign MSI (Authenticode)
+          $sizeMB = [math]::Round((Get-Item $setupExe).Length / 1MB, 2)
+          Write-Host "Installer created: $setupExe ($sizeMB MB)" -ForegroundColor Green
+
+      - name: Sign Installer (Authenticode)
         if: ${{ env.HAS_SIGN_CERT == 'true' }}
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
           $version = $tag -replace '^v', ''
           $buildDir = "build\windows\x64\runner\Release"
-          $msi = "$buildDir\${{ env.APP_NAME }}-$version.msi"
+          $setupExe = "$buildDir\${{ env.APP_NAME }}-$version-Setup.exe"
 
-          # Decode the signing certificate
-          $certBytes = [Convert]::FromBase64String("${{ secrets.WIX_SIGN_CERT_BASE64 }}")
+          $certBytes = [Convert]::FromBase64String("${{ secrets.SIGN_CERT_BASE64 }}")
           $certPath = Join-Path $env:RUNNER_TEMP "signing_cert.pfx"
           [IO.File]::WriteAllBytes($certPath, $certBytes)
 
           try {
-            # Sign the MSI with the certificate
-            $password = ConvertTo-SecureString "${{ secrets.WIX_SIGN_PASSWORD }}" -AsPlainText -Force
+            $password = ConvertTo-SecureString "${{ secrets.SIGN_PASSWORD }}" -AsPlainText -Force
             $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certPath, $password)
             
-            Set-AuthenticodeSignature -FilePath $msi -Certificate $cert -TimestampServer "http://timestamp.digicert.com"
-            Write-Host "MSI signed successfully" -Foreground Green
-
-            # Sign bootstrapper too
-            $bs = "$buildDir\${{ env.APP_NAME }}-$version-x64-Setup.exe"
-            if (Test-Path $bs) {
-              Set-AuthenticodeSignature -FilePath $bs -Certificate $cert -TimestampServer "http://timestamp.digicert.com"
-              Write-Host "Bootstrapper signed successfully" -Foreground Green
-            }
+            Set-AuthenticodeSignature -FilePath $setupExe -Certificate $cert -TimestampServer "http://timestamp.digicert.com"
+            Write-Host "Installer signed successfully" -Foreground Green
           } finally {
-            # Clean up certificate file
             if (Test-Path $certPath) { Remove-Item $certPath -Force }
           }
 
@@ -301,17 +252,15 @@ jobs:
           $tag = "${{ github.ref_name }}"
           $version = $tag -replace '^v', ''
           $buildDir = "build\windows\x64\runner\Release"
-          $msi = "$buildDir\${{ env.APP_NAME }}-$version.msi"
+          $setupExe = "$buildDir\${{ env.APP_NAME }}-$version-Setup.exe"
 
-          $hash = (Get-FileHash -Path $msi -Algorithm SHA256).Hash.ToLower()
+          $hash = (Get-FileHash -Path $setupExe -Algorithm SHA256).Hash.ToLower()
           Write-Host "SHA-256: $hash"
 
-          # Write hash file
           $hashFile = "$buildDir\${{ env.APP_NAME }}-$version.sha256"
           $hash | Out-File -FilePath $hashFile -NoNewline
           Write-Host "Hash written to: $hashFile"
 
-          # Write as step output for later use
           "sha256=$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
         id: hash
 
@@ -324,7 +273,7 @@ jobs:
 
           $manifest = @{
             latest_version = $version
-            download_url    = "https://github.com/${{ github.repository }}/releases/download/$tag/${{ env.APP_NAME }}-$version.msi"
+            download_url    = "https://github.com/${{ github.repository }}/releases/download/$tag/${{ env.APP_NAME }}-$version-Setup.exe"
             sha256          = $sha256
             release_date    = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
             force           = $false
@@ -342,7 +291,6 @@ jobs:
         with:
           name: windows-release-${{ github.ref_name }}
           path: |
-            build\windows\x64\runner\Release\*.msi
             build\windows\x64\runner\Release\*-Setup.exe
             build\windows\x64\runner\Release\*.sha256
             build\windows\x64\runner\Release\latest.json
@@ -355,16 +303,11 @@ jobs:
           body: |
             ## IntelliAttend SmartBoard ${{ github.ref_name }}
 
-            ### Installation
-            Download the MSI below and run it on the classroom board.
+            Download `IntelliAttendSmartBoard-${{ github.ref_name }}-Setup.exe` and double-click to install.
 
             ### Verification
             SHA-256: `${{ steps.hash.outputs.sha256 }}`
-
-            ### Changelog
-            See the commit history for details.
           files: |
-            build\windows\x64\runner\Release\*.msi
             build\windows\x64\runner\Release\*-Setup.exe
             build\windows\x64\runner\Release\*.sha256
             build\windows\x64\runner\Release\latest.json

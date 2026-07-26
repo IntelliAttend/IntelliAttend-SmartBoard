@@ -59,9 +59,6 @@ add_subdirectory("runner")
 # Update agent (standalone C++ process watchdog — not a Flutter dependency)
 add_subdirectory("update_agent")
 
-# Bootstrapper (EXE wrapper for MSI — handles Mark-of-the-Web and UI)
-add_subdirectory("bootstrapper")
-
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
