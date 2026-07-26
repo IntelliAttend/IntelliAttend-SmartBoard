@@ -323,7 +323,8 @@ jobs:
             exit 1
           }
 
-          $setupExe = "$buildDir\$appName-$version-Setup.exe"
+          # Inno Setup outputs IntelliAttendSmartBoard-{version}-Setup.exe (PascalCase)
+          $setupExe = "$buildDir\IntelliAttendSmartBoard-$version-Setup.exe"
           if (-not (Test-Path $setupExe)) {
             Write-Host "ERROR: setup.exe not found at $setupExe" -ForegroundColor Red
             Get-ChildItem $buildDir -Filter "*Setup*" | ForEach-Object { Write-Host "  Found: $($_.Name)" }
@@ -351,12 +352,12 @@ jobs:
           Write-Host "Installer: $setupExe"
           Write-Host "SHA-256: $sha256"
 
-          Set-Content -Path "$buildDir\$appName-$version.sha256" -Value $sha256 -Encoding UTF8
+          Set-Content -Path "$buildDir\IntelliAttendSmartBoard-$version.sha256" -Value $sha256 -Encoding UTF8
 
           $sizeMB = [math]::Round((Get-Item $setupExe).Length / 1MB, 2)
           Write-Host "Installer size: $sizeMB MB" -ForegroundColor Green
 
-          "setup_name=$appName-$version-Setup.exe" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "setup_name=IntelliAttendSmartBoard-$version-Setup.exe" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Create version manifest

@@ -213,6 +213,7 @@ jobs:
             exit 1
           }
 
+          # Inno Setup outputs IntelliAttendSmartBoard-{version}-Setup.exe (PascalCase)
           $setupExe = "$buildDir\${{ env.APP_NAME }}-$version-Setup.exe"
           if (-not (Test-Path $setupExe)) {
             Write-Host "ERROR: setup.exe not found at $setupExe" -ForegroundColor Red
