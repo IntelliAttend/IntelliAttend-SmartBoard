@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(bootstrapper WIN32
   "main.cpp"
+  "common.cpp"
   "logger.cpp"
   "installer.cpp"
   "dialog.cpp"
@@ -34,6 +35,7 @@ target_link_libraries(bootstrapper PRIVATE
   shell32
   shlwapi
   comctl32
+  winhttp
 )
 
 target_include_directories(bootstrapper PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

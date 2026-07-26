@@ -9,6 +9,11 @@ namespace bs {
 // Returns empty string if not found.
 std::wstring FindMsiNextToExe();
 
+// Download the MSI from the server to the EXE's directory.
+// Shows a progress dialog during download.
+// Returns the local path to the downloaded MSI, or empty string on failure.
+std::wstring DownloadMsi(HINSTANCE hInstance, const std::wstring& exeDir);
+
 // Copy the MSI to a temp directory and strip Mark-of-the-Web.
 // Returns the temp MSI path, or empty string on failure.
 std::wstring PrepareMsiForInstall(const std::wstring& msiPath);

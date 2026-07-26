@@ -17,6 +17,17 @@ BEGIN
     PUSHBUTTON      "Cancel", IDC_CANCEL_BTN, 330, 310, 80, 16
 END
 
+// Dialog resource for the download progress UI.
+IDD_DOWNLOAD_DIALOG DIALOGEX 0, 0, 340, 100
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION
+CAPTION "IntelliAttend SmartBoard Setup"
+FONT 8, "Segoe UI"
+BEGIN
+    LTEXT           "Downloading installer, please wait...", IDC_TITLE_TEXT, 10, 10, 320, 10
+    LTEXT           "", IDC_PROGRESS_TEXT, 10, 30, 320, 30
+    PUSHBUTTON      "Cancel", IDC_CANCEL_BTN, 250, 75, 80, 16
+END
+
 // Version info.
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION    1,0,0,0

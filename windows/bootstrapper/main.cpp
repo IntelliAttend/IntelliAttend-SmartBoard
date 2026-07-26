@@ -32,22 +32,13 @@ std::wstring GetLogPath() {
   return logDir + L"\\" + filename;
 }
 
-bool HasSilentFlag() {
-  int argc = 0;
-  LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-  if (!argv) return false;
-
-  bool silent = false;
-  for (int i = 1; i < argc; i++) {
-    std::wstring arg(argv[i]);
-    // Case-insensitive comparison.
-    if (arg == L"/silent" || arg == L"/S" || arg == L"--silent" || arg == L"-s") {
-      silent = true;
-      break;
-    }
-  }
-  LocalFree(argv);
-  return silent;
+std::wstring GetExeDir() {
+  wchar_t exePath[MAX_PATH] = {};
+  DWORD len = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+  if (len == 0 || len >= MAX_PATH) return L"";
+  std::wstring fullPath(exePath, len);
+  size_t lastSlash = fullPath.find_last_of(L'\\');
+  return (lastSlash != std::wstring::npos) ? fullPath.substr(0, lastSlash + 1) : L"";
 }
 
 } // namespace
@@ -64,13 +55,26 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
   // Find MSI next to this EXE.
   std::wstring msiPath = bs::FindMsiNextToExe();
   if (msiPath.empty()) {
-    BS_LOG_ERROR(L"FIND_MSI", (L"No MSI found matching pattern: " + std::wstring(bs::kMsiPattern)).c_str());
-    MessageBoxW(nullptr,
-      L"No installer package found.\n\n"
-      L"Please ensure the MSI file is in the same directory as this Setup program.",
-      bs::kAppName, MB_OK | MB_ICONERROR);
-    bs::Logger::Instance().Close();
-    return (int)bs::ExitCode::MsiNotFound;
+    BS_LOG_INFO(L"FIND_MSI", L"No MSI found locally, attempting download...");
+
+    // Try to download the MSI from GitHub releases.
+    std::wstring exeDir = GetExeDir();
+    msiPath = bs::DownloadMsi(hInstance, exeDir);
+
+    if (msiPath.empty()) {
+      BS_LOG_ERROR(L"DOWNLOAD", L"Failed to download MSI installer package");
+      MessageBoxW(nullptr,
+        L"No installer package found, and the automatic download failed.\n\n"
+        L"Please ensure the MSI file is in the same directory as this Setup program,\n"
+        L"or check your internet connection and try again.",
+        bs::kAppName, MB_OK | MB_ICONERROR);
+      bs::Logger::Instance().Close();
+      return (int)bs::ExitCode::DownloadFailed;
+    }
+
+    BS_LOG_INFO(L"DOWNLOAD", (L"MSI downloaded to: " + msiPath).c_str());
+  } else {
+    BS_LOG_INFO(L"FIND_MSI", (L"Found MSI: " + msiPath).c_str());
   }
 
   // Extract just the filename for display.
@@ -80,9 +84,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     msiFileName = msiFileName.substr(lastSlash + 1);
   }
 
-  BS_LOG_INFO(L"FIND_MSI", (L"Found MSI: " + msiPath).c_str());
-
-  bool silent = HasSilentFlag();
+  bool silent = bs::HasSilentFlag();
   bool accepted = true;
 
   if (!silent) {

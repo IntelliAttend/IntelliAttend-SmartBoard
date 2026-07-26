@@ -196,4 +196,67 @@ void ShowResultDialog(DWORD exitCode) {
   MessageBoxW(nullptr, message.c_str(), title.c_str(), flags);
 }
 
+// ── Download dialog ────────────────────────────────────────────────────────────
+
+#define WM_DOWNLOAD_PROGRESS (WM_USER + 1)
+
+static HWND s_hDownloadDlg = nullptr;
+static bool s_downloadCancelled = false;
+
+bool IsDownloadCancelled() {
+  return s_downloadCancelled;
+}
+
+void UpdateDownloadProgress(HWND hDlg, const std::wstring& text) {
+  if (!hDlg) return;
+  HWND hStatus = GetDlgItem(hDlg, IDC_PROGRESS_TEXT);
+  if (hStatus) SetWindowTextW(hStatus, text.c_str());
+}
+
+static INT_PTR CALLBACK DownloadDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM /*lParam*/) {
+  switch (msg) {
+    case WM_INITDIALOG: {
+      s_hDownloadDlg = hDlg;
+      s_downloadCancelled = false;
+      HWND hStatus = GetDlgItem(hDlg, IDC_PROGRESS_TEXT);
+      if (hStatus) SetWindowTextW(hStatus, L"Connecting to server...");
+
+      // Center on screen.
+      RECT rcDlg, rcScreen;
+      GetWindowRect(hDlg, &rcDlg);
+      GetWindowRect(GetDesktopWindow(), &rcScreen);
+      int x = (rcScreen.right - rcScreen.left - (rcDlg.right - rcDlg.left)) / 2;
+      int y = (rcScreen.bottom - rcScreen.top - (rcDlg.bottom - rcDlg.top)) / 2;
+      SetWindowPos(hDlg, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+      return TRUE;
+    }
+
+    case WM_COMMAND:
+      if (LOWORD(wParam) == IDC_CANCEL_BTN) {
+        s_downloadCancelled = true;
+        DestroyWindow(hDlg);
+      }
+      return TRUE;
+
+    case WM_CLOSE:
+      s_downloadCancelled = true;
+      DestroyWindow(hDlg);
+      return TRUE;
+
+    default:
+      return FALSE;
+  }
+}
+
+HWND ShowDownloadDialog(HINSTANCE hInstance, HWND hWndParent) {
+  HWND hDlg = CreateDialogParamW(
+    hInstance,
+    MAKEINTRESOURCEW(IDD_DOWNLOAD_DIALOG),
+    hWndParent,
+    DownloadDlgProc,
+    0
+  );
+  return hDlg;
+}
+
 } // namespace bs
