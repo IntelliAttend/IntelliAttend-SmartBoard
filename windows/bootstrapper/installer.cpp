@@ -4,7 +4,9 @@
 #include <vector>
 #include <shlwapi.h>
 
+#ifdef _MSC_VER
 #pragma comment(lib, "shlwapi.lib")
+#endif
 
 namespace bs {
 

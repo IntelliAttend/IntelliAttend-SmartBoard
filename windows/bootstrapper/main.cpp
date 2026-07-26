@@ -6,18 +6,11 @@
 #include <shlwapi.h>
 #include <vector>
 
+#ifdef _MSC_VER
 #pragma comment(lib, "shlwapi.lib")
+#endif
 
 namespace {
-
-std::wstring GetExeDir() {
-  wchar_t path[MAX_PATH] = {};
-  DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
-  if (len == 0 || len >= MAX_PATH) return L"";
-  std::wstring fullPath(path, len);
-  size_t pos = fullPath.find_last_of(L'\\');
-  return (pos != std::wstring::npos) ? fullPath.substr(0, pos) : L"";
-}
 
 std::wstring GetLogPath() {
   wchar_t tempPath[MAX_PATH] = {};
