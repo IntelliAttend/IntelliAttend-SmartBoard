@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(bootstrapper LANGUAGES CXX)
+project(bootstrapper LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,7 +22,10 @@ target_compile_definitions(bootstrapper PRIVATE
 if(MSVC)
   target_compile_options(bootstrapper PRIVATE /W4 /WX /EHsc /Zc:__cplusplus)
   target_compile_options(bootstrapper PRIVATE /MT$<$<CONFIG:Debug>:d>)
-  target_link_options(bootstrapper PRIVATE /INCREMENTAL:NO)
+  target_link_options(bootstrapper PRIVATE /INCREMENTAL:NO /GUARD:CF /CETCOMPAT)
+else()
+  target_compile_options(bootstrapper PRIVATE -Wall -Wextra -Werror -O3 -municode)
+  target_link_options(bootstrapper PRIVATE -municode -static -mwindows -s)
 endif()
 
 target_link_libraries(bootstrapper PRIVATE
