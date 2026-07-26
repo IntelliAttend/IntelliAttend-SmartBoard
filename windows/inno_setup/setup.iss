@@ -80,12 +80,12 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: no
 Type: filesandordirs; Name: "{app}"
 
 [Code]
-// Detect existing installation and offer to close the app before upgrade
 function InitializeSetup(): Boolean;
 var
   ResultCode: Integer;
+  ExePath: String;
 begin
   Result := True;
-  // Try to close existing instance silently
-  Exec(ExpandConstant('{app}\{#MyAppExeName}'), '--exit', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  ExePath := ExpandConstant('{localappdata}\IntelliAttendSmartBoard\{#MyAppExeName}');
+  Exec(ExePath, '--exit', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
