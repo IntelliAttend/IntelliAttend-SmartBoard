@@ -1,0 +1,51 @@
+#include <windows.h>
+#include "resource.h"
+
+// Dialog resource for the install UI.
+IDD_INSTALL_DIALOG DIALOGEX 0, 0, 420, 360
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "IntelliAttend SmartBoard Setup"
+FONT 8, "Segoe UI"
+BEGIN
+    LTEXT           "IntelliAttend SmartBoard Installer", IDC_TITLE_TEXT, 10, 10, 400, 12
+    LTEXT           "License Agreement:", IDC_STATIC, 10, 30, 400, 10
+    EDITTEXT        IDC_LICENSE_TEXT, 10, 42, 400, 200, ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_BORDER
+    AUTORADIOBUTTON "I &accept the terms in the License Agreement", IDC_ACCEPT_RADIO, 10, 252, 400, 10
+    AUTORADIOBUTTON "I &decline the License Agreement", IDC_DECLINE_RADIO, 10, 266, 400, 10
+    LTEXT           "", IDC_STATUS_TEXT, 10, 290, 400, 10
+    DEFPUSHBUTTON   "&Install", IDC_INSTALL_BTN, 240, 310, 80, 16, WS_DISABLED
+    PUSHBUTTON      "Cancel", IDC_CANCEL_BTN, 330, 310, 80, 16
+END
+
+// Version info.
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION    1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
+#ifdef _DEBUG
+FILEFLAGS      VS_FF_DEBUG
+#else
+FILEFLAGS      0x0L
+#endif
+FILEOS         VOS_NT_WINDOWS32
+FILETYPE       VFT_APP
+FILESUBTYPE    VFT2_UNKNOWN
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName",      "IntelliAttend"
+      VALUE "FileDescription",  "IntelliAttend SmartBoard Installer"
+      VALUE "FileVersion",      "1.0.0.0"
+      VALUE "InternalName",     "setup"
+      VALUE "OriginalFilename", "IntelliAttendSmartBoard-Setup.exe"
+      VALUE "ProductName",      "IntelliAttend SmartBoard"
+      VALUE "ProductVersion",   "1.0.0.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1200
+  END
+END

@@ -211,6 +211,8 @@ jobs:
             -dAppName="${{ env.APP_NAME }}" `
             -dVersion="$version" `
             -dSourceDir="..\..\$buildDir" `
+            -arch x64 `
+            -ext WixUIExtension `
             product.wxs `
             -out product.wixobj
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -233,6 +235,35 @@ jobs:
           $msiSize = (Get-Item $msi).Length / 1MB
           Write-Host "MSI created: $msi ($([math]::Round($msiSize, 2)) MB)"
 
+      - name: Build Bootstrapper
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          $buildDir = "build\windows\x64\runner\Release"
+
+          # Build bootstrapper EXE
+          $bsBuildDir = "build\bootstrapper"
+          if (-not (Test-Path $bsBuildDir)) { New-Item -ItemType Directory -Path $bsBuildDir -Force | Out-Null }
+
+          Push-Location $bsBuildDir
+          cmake.exe "$env:GITHUB_WORKSPACE\windows\bootstrapper" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
+          if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
+          cmake.exe --build . --config Release
+          if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
+          Pop-Location
+
+          $bsExe = "$bsBuildDir\bootstrapper.exe"
+          if (-not (Test-Path $bsExe)) {
+            Write-Host "ERROR: bootstrapper.exe not found" -ForegroundColor Red
+            exit 1
+          }
+
+          # Copy to build output with proper name
+          $bsDest = "$buildDir\${{ env.APP_NAME }}-${version}-x64-Setup.exe"
+          Copy-Item $bsExe $bsDest -Force
+          Write-Host "Bootstrapper: $bsDest" -ForegroundColor Green
+
       - name: Sign MSI (Authenticode)
         if: ${{ env.HAS_SIGN_CERT == 'true' }}
         shell: pwsh
@@ -254,6 +285,13 @@ jobs:
             
             Set-AuthenticodeSignature -FilePath $msi -Certificate $cert -TimestampServer "http://timestamp.digicert.com"
             Write-Host "MSI signed successfully" -Foreground Green
+
+            # Sign bootstrapper too
+            $bs = "$buildDir\${{ env.APP_NAME }}-$version-x64-Setup.exe"
+            if (Test-Path $bs) {
+              Set-AuthenticodeSignature -FilePath $bs -Certificate $cert -TimestampServer "http://timestamp.digicert.com"
+              Write-Host "Bootstrapper signed successfully" -Foreground Green
+            }
           } finally {
             # Clean up certificate file
             if (Test-Path $certPath) { Remove-Item $certPath -Force }
@@ -307,6 +345,7 @@ jobs:
           name: windows-release-${{ github.ref_name }}
           path: |
             build\windows\x64\runner\Release\*.msi
+            build\windows\x64\runner\Release\*-Setup.exe
             build\windows\x64\runner\Release\*.sha256
             build\windows\x64\runner\Release\latest.json
 
@@ -328,6 +367,7 @@ jobs:
             See the commit history for details.
           files: |
             build\windows\x64\runner\Release\*.msi
+            build\windows\x64\runner\Release\*-Setup.exe
             build\windows\x64\runner\Release\*.sha256
             build\windows\x64\runner\Release\latest.json
           draft: false

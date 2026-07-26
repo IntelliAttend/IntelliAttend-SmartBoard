@@ -306,7 +306,7 @@ jobs:
           $buildDir = "build\windows\x64\runner\Release"
 
           Push-Location "windows\installer"
-          & "$env:WIX\bin\candle.exe" -dAppName="$appName" -dVersion="$version" -dSourceDir="..\..\$buildDir" product.wxs -out product.wixobj
+          & "$env:WIX\bin\candle.exe" -dAppName="$appName" -dVersion="$version" -dSourceDir="..\..\$buildDir" -arch x64 -ext WixUIExtension product.wxs -out product.wixobj
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "$env:WIX\bin\light.exe" -sval -ext WixUIExtension product.wixobj -out "..\..\$buildDir\$appName-$version.msi"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -339,6 +339,52 @@ jobs:
 
           "msi_name=$appName-$version.msi" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Build Bootstrapper
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $appName = "${{ steps.detect.outputs.app_name }}"
+          $buildDir = "build\windows\x64\runner\Release"
+
+          # Build bootstrapper EXE
+          $bsBuildDir = "build\bootstrapper"
+          if (-not (Test-Path $bsBuildDir)) { New-Item -ItemType Directory -Path $bsBuildDir -Force | Out-Null }
+
+          Push-Location $bsBuildDir
+          cmake.exe "$env:GITHUB_WORKSPACE\windows\bootstrapper" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
+          if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
+          cmake.exe --build . --config Release
+          if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
+          Pop-Location
+
+          $bsExe = "$bsBuildDir\bootstrapper.exe"
+          if (-not (Test-Path $bsExe)) {
+            Write-Host "ERROR: bootstrapper.exe not found" -ForegroundColor Red
+            exit 1
+          }
+
+          # Copy to build output with proper name
+          $bsDest = "$buildDir\$appName-${version}-x64-Setup.exe"
+          Copy-Item $bsExe $bsDest -Force
+          Write-Host "Bootstrapper: $bsDest" -ForegroundColor Green
+
+          # Sign bootstrapper if certificate is available
+          if ("${{ secrets.WIX_SIGN_CERT_BASE64 }}" -ne "") {
+            $certBytes = [Convert]::FromBase64String("${{ secrets.WIX_SIGN_CERT_BASE64 }}")
+            $certPath = Join-Path $env:RUNNER_TEMP "signing_cert.pfx"
+            [IO.File]::WriteAllBytes($certPath, $certBytes)
+            try {
+              $password = ConvertTo-SecureString "${{ secrets.WIX_SIGN_PASSWORD }}" -AsPlainText -Force
+              $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certPath, $password)
+              Set-AuthenticodeSignature -FilePath $bsDest -Certificate $cert -TimestampServer "http://timestamp.digicert.com"
+              Write-Host "Bootstrapper signed successfully" -ForegroundColor Green
+            } finally {
+              if (Test-Path $certPath) { Remove-Item $certPath -Force }
+            }
+          }
+
+          "bootstrapper_name=$appName-${version}-x64-Setup.exe" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Create version manifest
         shell: pwsh
@@ -376,6 +422,7 @@ jobs:
             **Commit:** ${{ github.sha }}
           files: |
             build\windows\x64\runner\Release\*.msi
+            build\windows\x64\runner\Release\*-Setup.exe
             build\windows\x64\runner\Release\*.sha256
             build\windows\x64\runner\Release\latest.json
           draft: false
