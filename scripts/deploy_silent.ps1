@@ -160,15 +160,61 @@ if ($Action -eq 'Install') {
         Write-Host "No config overrides provided — app will use built-in defaults."
     }
 
+    Write-Step "Preparing MSI"
+    # Copy MSI to temp to avoid SmartScreen/Defender file locks on Downloads folder.
+    # When a user downloads an unsigned MSI, SmartScreen and real-time protection may
+    # hold a lock on the original file. Running msiexec directly from Downloads can fail
+    # with error 1620 ("package could not be opened"). Copying to a fresh temp path
+    # creates an unlocked copy that msiexec can always open.
+    $msiTempCopy = Join-Path $env:TEMP "IntelliAttend\msi_$(Get-Date -Format yyyyMMdd_HHmmss).msi"
+    $msiTempDir = Split-Path $msiTempCopy -Parent
+    if (-not (Test-Path $msiTempDir)) { New-Item -ItemType Directory -Path $msiTempDir -Force | Out-Null }
+    Copy-Item -LiteralPath $MsiPath -Destination $msiTempCopy -Force
+    $msiSizeMB = [math]::Round((Get-Item $msiTempCopy).Length / 1MB, 2)
+    Write-Host ("MSI copied to temp: {0} ({1} MB)" -f $msiTempCopy, $msiSizeMB)
+
     Write-Step "Installing MSI (silent)"
     $installLog = Join-Path $logDir "install_$(Get-Date -Format yyyyMMdd_HHmmss).log"
-    $installArgs = @("/i", $MsiPath, "/qn", "/norestart", "/log", $installLog)
-    $process = Start-Process -FilePath $msiexec -ArgumentList $installArgs -Wait -PassThru
-    Write-Host "MSI exit code: $($process.ExitCode)"
-    Write-Host "MSI log: $installLog"
-    if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
-        throw "MSI install failed with exit code $($process.ExitCode). See $installLog"
+
+    # Retry loop: msiexec may fail with error 1620/1619 if SmartScreen Defender
+    # is still scanning the file. Retry up to 3 times with 5-second delays.
+    $maxRetries = 3
+    $retryDelay = 5
+    $installExitCode = $null
+
+    for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
+        Write-Host "Install attempt $attempt of $maxRetries..."
+        $installArgs = @("/i", $msiTempCopy, "/qn", "/norestart", "/log", $installLog)
+        $process = Start-Process -FilePath $msiexec -ArgumentList $installArgs -Wait -PassThru
+        $installExitCode = $process.ExitCode
+        Write-Host "MSI exit code: $installExitCode"
+
+        # 0 = success, 3010 = success + reboot required
+        if ($installExitCode -eq 0 -or $installExitCode -eq 3010) {
+            break
+        }
+
+        # 1620 = invalid package, 1619 = package cannot be opened — likely SmartScreen lock
+        if ($installExitCode -eq 1620 -or $installExitCode -eq 1619) {
+            if ($attempt -lt $maxRetries) {
+                Write-Warning "MSI could not be opened (error $installExitCode). SmartScreen/Defender may still be scanning. Retrying in $retryDelay seconds..."
+                Start-Sleep -Seconds $retryDelay
+                # Re-copy in case the temp copy was also flagged
+                Copy-Item -LiteralPath $MsiPath -Destination $msiTempCopy -Force
+            }
+        } else {
+            # Different error — no point retrying
+            break
+        }
     }
+
+    Write-Host "MSI log: $installLog"
+    if ($installExitCode -ne 0 -and $installExitCode -ne 3010) {
+        throw "MSI install failed with exit code $installExitCode after $maxRetries attempt(s). See $installLog"
+    }
+
+    # Clean up temp MSI copy
+    Remove-Item -LiteralPath $msiTempCopy -Force -ErrorAction SilentlyContinue
 
     if (-not (Test-Path -LiteralPath $exePath)) {
         throw "Install completed but executable not found at $exePath"

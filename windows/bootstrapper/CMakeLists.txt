@@ -11,7 +11,6 @@ add_executable(bootstrapper WIN32
   "installer.cpp"
   "dialog.cpp"
   "resources/bootstrapper.rc"
-  "resources/bootstrapper.manifest"
 )
 
 target_compile_definitions(bootstrapper PRIVATE
@@ -23,7 +22,7 @@ target_compile_definitions(bootstrapper PRIVATE
 if(MSVC)
   target_compile_options(bootstrapper PRIVATE /W4 /WX /EHsc /Zc:__cplusplus)
   target_compile_options(bootstrapper PRIVATE /MT$<$<CONFIG:Debug>:d>)
-  target_link_options(bootstrapper PRIVATE /INCREMENTAL:NO /GUARD:CF /CETCOMPAT)
+  target_link_options(bootstrapper PRIVATE /INCREMENTAL:NO /GUARD:CF /CETCOMPAT /MANIFEST:NO)
 else()
   target_compile_options(bootstrapper PRIVATE -Wall -Wextra -Werror -O3 -municode)
   target_link_options(bootstrapper PRIVATE -municode -static -mwindows -s)

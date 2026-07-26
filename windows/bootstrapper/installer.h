@@ -14,18 +14,14 @@ std::wstring FindMsiNextToExe();
 // Returns the local path to the downloaded MSI, or empty string on failure.
 std::wstring DownloadMsi(HINSTANCE hInstance, const std::wstring& exeDir);
 
-// Copy the MSI to a temp directory and strip Mark-of-the-Web.
-// Returns the temp MSI path, or empty string on failure.
-std::wstring PrepareMsiForInstall(const std::wstring& msiPath);
+// Install the MSI using the Windows Installer API (in-process, no subprocess).
+// Returns ERROR_SUCCESS (0) or ERROR_SUCCESS_REBOOT_REQUIRED (3010) on success.
+UINT InstallMsi(const std::wstring& msiPath);
 
-// Run msiexec to install the MSI.
-// Returns the msiexec exit code (0 or 3010 = success).
-DWORD RunMsiExec(const std::wstring& msiPath, const std::wstring& logPath);
+// Check if an MSI return code is considered successful.
+bool IsMsiSuccess(UINT resultCode);
 
-// Check if an MSI exit code is considered successful.
-bool IsMsiSuccess(DWORD exitCode);
-
-// Clean up the temp MSI copy.
-void CleanupTempMsi(const std::wstring& tempMsiPath);
+// Clean up any downloaded MSI files next to the bootstrapper EXE.
+void CleanupDownloadedMsi();
 
 } // namespace bs

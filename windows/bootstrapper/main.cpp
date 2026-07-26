@@ -4,10 +4,12 @@
 #include "dialog.h"
 #include <shellapi.h>
 #include <shlwapi.h>
+#include <shlobj.h>
 #include <vector>
 
 #ifdef _MSC_VER
 #pragma comment(lib, "shlwapi.lib")
+#pragma comment(lib, "shell32.lib")
 #endif
 
 namespace {
@@ -41,6 +43,16 @@ std::wstring GetExeDir() {
   return (lastSlash != std::wstring::npos) ? fullPath.substr(0, lastSlash + 1) : L"";
 }
 
+void LaunchApp() {
+  wchar_t localAppData[MAX_PATH] = {};
+  if (SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, localAppData) != S_OK) return;
+
+  std::wstring appPath = std::wstring(localAppData) + L"\\IntelliAttendSmartBoard\\App\\intelliattend_smartboard.exe";
+  if (GetFileAttributesW(appPath.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+
+  ShellExecuteW(nullptr, L"open", appPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+}
+
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
@@ -52,36 +64,23 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
 
   BS_LOG_INFO(L"START", (L"Bootstrapper v" + std::wstring(bs::kBootstrapperVersion) + L" launched").c_str());
 
-  // Find MSI next to this EXE.
+  // Find MSI next to this EXE, or download it.
   std::wstring msiPath = bs::FindMsiNextToExe();
   if (msiPath.empty()) {
     BS_LOG_INFO(L"FIND_MSI", L"No MSI found locally, attempting download...");
-
-    // Try to download the MSI from GitHub releases.
     std::wstring exeDir = GetExeDir();
     msiPath = bs::DownloadMsi(hInstance, exeDir);
-
     if (msiPath.empty()) {
       BS_LOG_ERROR(L"DOWNLOAD", L"Failed to download MSI installer package");
       MessageBoxW(nullptr,
-        L"No installer package found, and the automatic download failed.\n\n"
-        L"Please ensure the MSI file is in the same directory as this Setup program,\n"
-        L"or check your internet connection and try again.",
+        L"Failed to download the installer. Please check your internet connection and try again.",
         bs::kAppName, MB_OK | MB_ICONERROR);
       bs::Logger::Instance().Close();
       return (int)bs::ExitCode::DownloadFailed;
     }
-
     BS_LOG_INFO(L"DOWNLOAD", (L"MSI downloaded to: " + msiPath).c_str());
   } else {
     BS_LOG_INFO(L"FIND_MSI", (L"Found MSI: " + msiPath).c_str());
-  }
-
-  // Extract just the filename for display.
-  std::wstring msiFileName = msiPath;
-  size_t lastSlash = msiFileName.find_last_of(L'\\');
-  if (lastSlash != std::wstring::npos) {
-    msiFileName = msiFileName.substr(lastSlash + 1);
   }
 
   bool silent = bs::HasSilentFlag();
@@ -89,48 +88,43 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
 
   if (!silent) {
     // Show license dialog.
+    std::wstring msiFileName = msiPath;
+    size_t lastSlash = msiFileName.find_last_of(L'\\');
+    if (lastSlash != std::wstring::npos) msiFileName = msiFileName.substr(lastSlash + 1);
     BS_LOG_INFO(L"DIALOG", L"Showing install dialog...");
     accepted = bs::ShowInstallDialog(hInstance, msiFileName);
   }
 
   if (!accepted) {
     BS_LOG_INFO(L"DIALOG", L"User declined license or cancelled");
+    bs::CleanupDownloadedMsi();
     bs::Logger::Instance().Close();
     return (int)bs::ExitCode::UserCancelled;
   }
 
-  BS_LOG_INFO(L"PREPARE", L"Preparing MSI for installation...");
-
-  // Copy MSI to temp and strip Mark-of-the-Web.
-  std::wstring tempMsi = bs::PrepareMsiForInstall(msiPath);
-  if (tempMsi.empty()) {
-    BS_LOG_ERROR(L"PREPARE", L"Failed to prepare MSI for installation");
-    MessageBoxW(nullptr,
-      L"Failed to prepare the installer package.\n\n"
-      L"Please try running the MSI file directly.",
-      bs::kAppName, MB_OK | MB_ICONERROR);
-    bs::Logger::Instance().Close();
-    return (int)bs::ExitCode::MsiCopyFailed;
-  }
-
-  // Run msiexec.
+  // Install via Windows Installer API (in-process, no subprocess).
+  // Zone.Identifier was already stripped during download.
   BS_LOG_INFO(L"INSTALL", L"Starting installation...");
-  DWORD exitCode = bs::RunMsiExec(tempMsi, logPath);
+  UINT installResult = bs::InstallMsi(msiPath);
 
-  // Clean up temp copy.
-  bs::CleanupTempMsi(tempMsi);
+  if (bs::IsMsiSuccess(installResult)) {
+    BS_LOG_INFO(L"INSTALL", (L"Installation successful, result: " + std::to_wstring(installResult)).c_str());
 
-  if (bs::IsMsiSuccess(exitCode)) {
-    BS_LOG_INFO(L"INSTALL", (L"Installation successful, exit code: " + std::to_wstring(exitCode)).c_str());
+    // Clean up any downloaded MSI in the EXE directory.
+    bs::CleanupDownloadedMsi();
+
+    // Launch the installed application.
+    BS_LOG_INFO(L"LAUNCH", L"Launching application...");
+    LaunchApp();
   } else {
-    BS_LOG_ERROR(L"INSTALL", (L"Installation failed, exit code: " + std::to_wstring(exitCode)).c_str());
-  }
-
-  // Show result dialog (unless silent).
-  if (!silent) {
-    bs::ShowResultDialog(exitCode);
+    BS_LOG_ERROR(L"INSTALL", (L"Installation failed, result: " + std::to_wstring(installResult)).c_str());
+    if (!silent) {
+      std::wstring title = std::wstring(bs::kAppName) + L" Setup";
+      std::wstring msg = L"Installation failed (error " + std::to_wstring(installResult) + L").\nPlease try again.";
+      MessageBoxW(nullptr, msg.c_str(), title.c_str(), MB_OK | MB_ICONERROR);
+    }
   }
 
   bs::Logger::Instance().Close();
-  return bs::IsMsiSuccess(exitCode) ? (int)bs::ExitCode::Success : (int)bs::ExitCode::MsiInstallFailed;
+  return bs::IsMsiSuccess(installResult) ? (int)bs::ExitCode::Success : (int)bs::ExitCode::MsiInstallFailed;
 }

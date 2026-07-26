@@ -1,6 +1,9 @@
 #include <windows.h>
 #include "resource.h"
 
+// Embed UAC manifest (requireAdministrator) — triggers UAC prompt on launch.
+1 RT_MANIFEST "bootstrapper.manifest"
+
 // Dialog resource for the install UI.
 IDD_INSTALL_DIALOG DIALOGEX 0, 0, 420, 360
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU

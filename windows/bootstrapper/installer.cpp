@@ -5,10 +5,12 @@
 #include <vector>
 #include <shlwapi.h>
 #include <winhttp.h>
+#include <msi.h>
 
 #ifdef _MSC_VER
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "msi.lib")
 #endif
 
 namespace bs {
@@ -42,122 +44,83 @@ std::wstring FindMsiNextToExe() {
   return result;
 }
 
-std::wstring PrepareMsiForInstall(const std::wstring& msiPath) {
-  // Create temp directory.
-  wchar_t tempPath[MAX_PATH] = {};
-  DWORD tempLen = GetTempPathW(MAX_PATH, tempPath);
-  if (tempLen == 0 || tempLen >= MAX_PATH) return L"";
+UINT InstallMsi(const std::wstring& msiPath) {
+  BS_LOG_INFO(L"INSTALL", (L"Installing MSI via Windows Installer API: " + msiPath).c_str());
 
-  std::wstring tempDir = std::wstring(tempPath) + L"IntelliAttend";
-  CreateDirectoryW(tempDir.c_str(), nullptr);
+  // Set UI level to none (fully silent).
+  MsiSetInternalUI(INSTALLUILEVEL_NONE, nullptr);
 
-  // Generate temp MSI filename with timestamp.
-  SYSTEMTIME st;
-  GetLocalTime(&st);
-  wchar_t timestamp[32] = {};
-  swprintf_s(timestamp, L"%04d%02d%02d_%02d%02d%02d",
-    st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+  // Attempt install.
+  UINT result = MsiInstallProductW(msiPath.c_str(), L"REBOOT=ReallySuppress");
 
-  std::wstring tempMsi = tempDir + L"\\setup_" + timestamp + L".msi";
+  if (result == 1603) {
+    // Product may already be installed. Try removing it first, then re-install.
+    BS_LOG_INFO(L"INSTALL", L"Install failed (1603), trying remove+reinstall...");
 
-  BS_LOG_INFO(L"PREPARE", (L"Copying MSI to temp: " + tempMsi).c_str());
-
-  // Copy the MSI to temp.
-  if (!CopyFileW(msiPath.c_str(), tempMsi.c_str(), FALSE)) {
-    BS_LOG_ERROR(L"PREPARE", (L"Failed to copy MSI to temp, error: " + std::to_wstring(GetLastError())).c_str());
-    return L"";
-  }
-
-  // Strip Mark-of-the-Web (Zone.Identifier alternate data stream).
-  // This removes the "downloaded from internet" flag that causes Explorer
-  // to block MSI execution.
-  std::wstring zoneStream = tempMsi + L":Zone.Identifier";
-  if (DeleteFileW(zoneStream.c_str())) {
-    BS_LOG_INFO(L"PREPARE", L"Stripped Zone.Identifier from temp MSI");
-  } else {
-    // Zone.Identifier may not exist — that's fine.
-    DWORD err = GetLastError();
-    if (err != ERROR_FILE_NOT_FOUND) {
-      BS_LOG_WARN(L"PREPARE", (L"Could not strip Zone.Identifier, error: " + std::to_wstring(err)).c_str());
+    WCHAR productCode[39] = {};
+    int idx = 0;
+    while (MsiEnumProductsW(idx++, productCode) == ERROR_SUCCESS) {
+      WCHAR name[256] = {};
+      DWORD nameLen = 256;
+      if (MsiGetProductInfoW(productCode, INSTALLPROPERTY_PRODUCTNAME, name, &nameLen) == ERROR_SUCCESS) {
+        std::wstring productName(name, nameLen);
+        if (productName.find(L"SmartBoard") != std::wstring::npos ||
+            productName.find(L"IntelliAttend") != std::wstring::npos) {
+          BS_LOG_INFO(L"INSTALL", (L"Found existing: " + productName + L" — uninstalling...").c_str());
+          UINT removeResult = MsiConfigureProductW(productCode, INSTALLLEVEL_DEFAULT, INSTALLSTATE_ABSENT);
+          BS_LOG_INFO(L"INSTALL", (L"MsiConfigureProduct returned: " + std::to_wstring(removeResult)).c_str());
+          break;
+        }
+      }
+      productCode[0] = L'\0';
     }
+
+    // Give Windows Installer service time to finish cleanup after uninstall.
+    Sleep(1000);
+
+    // Verify the MSI file is still accessible before retrying.
+    HANDLE hTest = CreateFileW(msiPath.c_str(), GENERIC_READ, FILE_SHARE_READ,
+      nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hTest == INVALID_HANDLE_VALUE) {
+      BS_LOG_ERROR(L"INSTALL", (L"MSI file inaccessible before retry, error: " + std::to_wstring(GetLastError())).c_str());
+      return 1603;
+    }
+    CloseHandle(hTest);
+
+    // Retry install after uninstall.
+    result = MsiInstallProductW(msiPath.c_str(), L"REBOOT=ReallySuppress");
+    BS_LOG_INFO(L"INSTALL", (L"MsiInstallProduct (retry) returned: " + std::to_wstring(result)).c_str());
   }
 
-  // Verify the copy is valid by checking file size.
-  LARGE_INTEGER fileSize = {};
-  HANDLE hFile = CreateFileW(tempMsi.c_str(), GENERIC_READ, FILE_SHARE_READ,
-    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (hFile != INVALID_HANDLE_VALUE) {
-    GetFileSizeEx(hFile, &fileSize);
-    CloseHandle(hFile);
-  }
-
-  if (fileSize.QuadPart == 0) {
-    BS_LOG_ERROR(L"PREPARE", L"Temp MSI is empty, aborting");
-    DeleteFileW(tempMsi.c_str());
-    return L"";
-  }
-
-  BS_LOG_INFO(L"PREPARE", (L"MSI prepared: " + std::to_wstring(fileSize.QuadPart) + L" bytes").c_str());
-  return tempMsi;
+  BS_LOG_INFO(L"INSTALL", (L"Final result: " + std::to_wstring(result)).c_str());
+  return result;
 }
 
-DWORD RunMsiExec(const std::wstring& msiPath, const std::wstring& logPath) {
-  std::wstring cmdLine = L"msiexec.exe /i \"" + msiPath +
-                         L"\" /passive /norestart /log \"" + logPath + L"\"";
-
-  BS_LOG_INFO(L"INSTALL", (L"Running: " + cmdLine).c_str());
-
-  STARTUPINFOW si = {};
-  si.cb = sizeof(si);
-  PROCESS_INFORMATION pi = {};
-
-  std::vector<wchar_t> cmdBuf(cmdLine.begin(), cmdLine.end());
-  cmdBuf.push_back(L'\0');
-
-  BOOL created = CreateProcessW(
-    nullptr,
-    cmdBuf.data(),
-    nullptr, nullptr,
-    FALSE,
-    CREATE_NO_WINDOW,
-    nullptr, nullptr,
-    &si, &pi
-  );
-
-  if (!created) {
-    BS_LOG_ERROR(L"INSTALL", (L"CreateProcessW failed, error: " + std::to_wstring(GetLastError())).c_str());
-    return (DWORD)-1;
-  }
-
-  BS_LOG_INFO(L"INSTALL", L"msiexec started, waiting for completion...");
-
-  DWORD waitResult = WaitForSingleObject(pi.hProcess, kMsiExecTimeoutMs);
-
-  DWORD exitCode = 0;
-  if (waitResult == WAIT_OBJECT_0) {
-    GetExitCodeProcess(pi.hProcess, &exitCode);
-  } else {
-    BS_LOG_ERROR(L"INSTALL", L"msiexec timed out, terminating...");
-    TerminateProcess(pi.hProcess, 1);
-    WaitForSingleObject(pi.hProcess, 5000);
-    GetExitCodeProcess(pi.hProcess, &exitCode);
-  }
-
-  CloseHandle(pi.hProcess);
-  CloseHandle(pi.hThread);
-
-  BS_LOG_INFO(L"INSTALL", (L"msiexec exit code: " + std::to_wstring(exitCode)).c_str());
-  return exitCode;
+bool IsMsiSuccess(UINT resultCode) {
+  return resultCode == ERROR_SUCCESS || resultCode == ERROR_SUCCESS_REBOOT_REQUIRED;
 }
 
-bool IsMsiSuccess(DWORD exitCode) {
-  return exitCode == 0 || exitCode == 3010;
-}
+void CleanupDownloadedMsi() {
+  wchar_t exePath[MAX_PATH] = {};
+  DWORD len = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+  if (len == 0 || len >= MAX_PATH) return;
+  std::wstring fullPath(exePath, len);
+  size_t lastSlash = fullPath.find_last_of(L'\\');
+  std::wstring dir = (lastSlash != std::wstring::npos) ? fullPath.substr(0, lastSlash + 1) : L"";
 
-void CleanupTempMsi(const std::wstring& tempMsiPath) {
-  if (tempMsiPath.empty()) return;
-  DeleteFileW(tempMsiPath.c_str());
-  BS_LOG_INFO(L"CLEANUP", L"Removed temp MSI copy");
+  WIN32_FIND_DATAW fd = {};
+  std::wstring search = dir + L"IntelliAttendSmartBoard-*.msi";
+  HANDLE hFind = FindFirstFileW(search.c_str(), &fd);
+  if (hFind != INVALID_HANDLE_VALUE) {
+    do {
+      if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+        std::wstring msiFile = dir + fd.cFileName;
+        DeleteFileW(msiFile.c_str());
+        BS_LOG_INFO(L"CLEANUP", (L"Removed downloaded MSI: " + msiFile).c_str());
+      }
+    } while (FindNextFileW(hFind, &fd));
+    FindClose(hFind);
+  }
 }
 
 std::wstring DownloadMsi(HINSTANCE hInstance, const std::wstring& exeDir) {
