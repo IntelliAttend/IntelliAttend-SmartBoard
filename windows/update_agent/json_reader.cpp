@@ -87,14 +87,24 @@ std::map<std::wstring, std::wstring> ReadJson(const std::wstring& path) {
 }
 
 static const wchar_t* kRequiredFields[] = {
-  L"schema", L"msi_path", L"target_version", L"expected_sha256",
+  L"schema", L"installer_path", L"target_version", L"expected_sha256",
   L"app_pid", L"app_exe_path", L"log_path", L"state",
   L"created_at", L"attempt", L"checksum"
 };
 
 bool ValidateStateFile(const std::map<std::wstring, std::wstring>& json) {
-  // Check required fields.
+  // Check required fields (with backward compatibility for msi_path).
   for (const auto* field : kRequiredFields) {
+    // installer_path can be msi_path in old state files.
+    if (wcscmp(field, L"installer_path") == 0) {
+      if (json.find(field) == json.end() && json.find(L"msi_path") == json.end()) return false;
+      auto it = json.find(field);
+      if (it != json.end() && it->second.empty()) {
+        auto alt = json.find(L"msi_path");
+        if (alt == json.end() || alt->second.empty()) return false;
+      }
+      continue;
+    }
     if (json.find(field) == json.end()) return false;
     if (json.at(field).empty()) return false;
   }
@@ -130,7 +140,7 @@ UpdateState ParseUpdateState(const std::map<std::wstring, std::wstring>& json) {
   UpdateState s;
   s.schema         = std::stoi(json.at(L"schema"));
   s.owner          = json.count(L"owner") ? json.at(L"owner") : L"app";
-  s.msiPath        = json.at(L"msi_path");
+  s.installerPath = json.count(L"installer_path") ? json.at(L"installer_path") : json.at(L"msi_path");
   s.targetVersion  = json.at(L"target_version");
   s.expectedSha256 = json.at(L"expected_sha256");
   s.appPid         = std::stoi(json.at(L"app_pid"));
@@ -151,7 +161,7 @@ bool WriteUpdateState(const std::wstring& path, const UpdateState& state) {
   json += L"{";
   json += L"\"schema\":" + std::to_wstring(state.schema) + L",";
   json += L"\"owner\":\"" + state.owner + L"\",";
-  json += L"\"msi_path\":\"" + state.msiPath + L"\",";
+  json += L"\"installer_path\":\"" + state.installerPath + L"\",";
   json += L"\"target_version\":\"" + state.targetVersion + L"\",";
   json += L"\"expected_sha256\":\"" + state.expectedSha256 + L"\",";
   json += L"\"app_pid\":" + std::to_wstring(state.appPid) + L",";

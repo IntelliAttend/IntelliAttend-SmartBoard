@@ -26,17 +26,17 @@ enum UpdateState {
   /// No update in progress. This is the default / idle state.
   idle,
 
-  /// A new version was detected and the board is downloading the MSI.
+  /// A new version was detected and the board is downloading the installer.
   downloading,
 
   /// Download complete, verifying file integrity (SHA-256).
   verifying,
 
-  /// Verification passed, running msiexec to install.
+  /// Verification passed, running the update agent to install.
   installing,
 
-  /// Installation succeeded — app will exit momentarily (msiexec may request
-  /// a reboot or the board will relaunch itself).
+  /// Installation succeeded — app will exit momentarily (the installer may
+  /// request a reboot or the board will relaunch itself).
   completed,
 
   /// Something went wrong. [UpdateProgress.error] contains details.
@@ -93,11 +93,10 @@ class UpdateProgress {
 //   1. [checkForUpdate] compares the installed version (from PackageInfo)
 //      against the server-provided [UpdateManifest].
 //   2. If an update is needed and this board is in the rollout cohort,
-//      the MSI is stream-downloaded to a temp file with progress.
+//      the installer is stream-downloaded to a temp file with progress.
 //   3. The SHA-256 hash is verified against the manifest.
-//   4. msiexec is invoked silently to install the MSI.
-//   5. The process exits; the installer (or Windows auto-start) relaunches
-//      the app at the new version.
+//   4. The update agent is launched to install the update.
+//   5. The process exits; the installer relaunches the app at the new version.
 //
 // ── Thread model ────────────────────────────────────────────────────────────
 // All public methods are designed to be called from the main isolate (UI
@@ -320,12 +319,12 @@ class AutoUpdater {
     // ── 1. Download ──────────────────────────────────────────────────────────
 
     await InstallPaths.ensureDirectories();
-    final msiPath = '${InstallPaths.updateDir}\\IASB-$targetVersion.msi';
-    final msiFile = File(msiPath);
+    final installerPath = '${InstallPaths.updateDir}\\IASB-$targetVersion-Setup.exe';
+    final installerFile = File(installerPath);
 
     // Remove any partially-downloaded file from a previous attempt.
-    if (await msiFile.exists()) {
-      await msiFile.delete();
+    if (await installerFile.exists()) {
+      await installerFile.delete();
     }
 
     progress.value = UpdateProgress(
@@ -335,7 +334,7 @@ class AutoUpdater {
     );
 
     try {
-      await _downloadWithProgress(url, msiPath, manifest.force);
+      await _downloadWithProgress(url, installerPath, manifest.force);
     } catch (e) {
       Log.e('[AutoUpdater] Download failed: $e');
       if (!silent) {
@@ -347,8 +346,8 @@ class AutoUpdater {
         );
       }
       // Clean up partial file.
-      if (await msiFile.exists()) {
-        await msiFile.delete();
+      if (await installerFile.exists()) {
+        await installerFile.delete();
       }
       rethrow;
     }
@@ -364,7 +363,7 @@ class AutoUpdater {
 
     if (manifest.sha256 != null && manifest.sha256!.isNotEmpty) {
       try {
-        final ok = await _verifyHash(msiPath, manifest.sha256!);
+        final ok = await _verifyHash(installerPath, manifest.sha256!);
         if (!ok) {
           throw Exception(
               'SHA-256 mismatch. Expected ${manifest.sha256}, got computed hash');
@@ -378,7 +377,7 @@ class AutoUpdater {
           error: 'Integrity check failed. The downloaded file may be corrupted.',
           force: manifest.force,
         );
-        await msiFile.delete();
+        await installerFile.delete();
         rethrow;
       }
     } else {
@@ -390,7 +389,7 @@ class AutoUpdater {
         error: 'Update rejected: missing integrity hash. Contact IT.',
         force: manifest.force,
       );
-      await msiFile.delete();
+      await installerFile.delete();
       throw Exception('Update rejected: manifest has no SHA-256 hash');
     }
 
@@ -407,7 +406,7 @@ class AutoUpdater {
         '${InstallPaths.logDir}\\update_${DateTime.now().millisecondsSinceEpoch}.log';
 
     final launched = await UpdateAgentLauncher.launch(
-      msiPath: msiPath,
+      installerPath: installerPath,
       targetVersion: targetVersion,
       expectedSha256: manifest.sha256 ?? '',
       logPath: logPath,
@@ -444,7 +443,7 @@ class AutoUpdater {
 
   // ── Download with progress ────────────────────────────────────────────────
 
-  /// Stream the MSI from [url] to [destination], updating [progress] along
+  /// Stream the installer from [url] to [destination], updating [progress] along
   /// the way. Uses chunked transfer to avoid loading the entire file into
   /// memory — critical on low-RAM kiosk hardware.
   static Future<void> _downloadWithProgress(

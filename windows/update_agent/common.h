@@ -11,25 +11,24 @@ constexpr const wchar_t* kAgentVersion = L"1.0.0";
 
 // Timeouts (milliseconds).
 constexpr DWORD kWaitForAppExitMs     = 60000;   // 60s
-constexpr DWORD kMsiExecTimeoutMs     = 300000;  // 5 min
+constexpr DWORD kSetupExecTimeoutMs   = 600000;  // 10 min (Inno Setup can be slow on HDD)
 constexpr DWORD kExePollTimeoutMs     = 10000;   // 10s
 constexpr DWORD kLaunchWaitMs         = 5000;    // 5s
 constexpr DWORD kCleanupTimeoutMs     = 5000;    // 5s
 constexpr DWORD kAgentLifetimeMs      = 600000;  // 10 min
 
 // Retry limits.
-constexpr int kMsiMaxRetries = 3;
-constexpr DWORD kMsiRetryDelays[] = { 5000, 10000, 10000 };
+constexpr int kInstallMaxRetries = 3;
+constexpr DWORD kInstallRetryDelays[] = { 5000, 10000, 10000 };
 
-// MSI exit codes.
-constexpr DWORD kMsiSuccess       = 0;
-constexpr DWORD kMsiRebootRequired = 3010;
+// Installer exit codes.
+constexpr DWORD kInstallSuccess = 0;
 
 // Agent exit codes.
 enum ExitCode : int {
   Success         = 0,
   AppExitTimeout  = 1,
-  MsiInstallFail  = 2,
+  InstallFail     = 2,
   VerifyFailed    = 3,
   RestartFailed   = 4,
   InvalidState    = 5,
@@ -51,7 +50,7 @@ enum class State {
 struct UpdateState {
   int         schema        = 0;
   std::wstring owner;
-  std::wstring msiPath;
+  std::wstring installerPath;
   std::wstring targetVersion;
   std::wstring expectedSha256;
   int         appPid        = 0;

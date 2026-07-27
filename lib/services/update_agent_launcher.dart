@@ -8,7 +8,7 @@ import '../core/utils/logger.dart';
 /// Launches the detached update agent and exits the current process.
 ///
 /// This is the only code that launches `update_agent.exe`. The agent
-/// takes ownership of `update_state.json` and handles MSI installation,
+/// takes ownership of `update_state.json` and handles installation,
 /// verification, and app restart.
 class UpdateAgentLauncher {
   UpdateAgentLauncher._();
@@ -16,12 +16,12 @@ class UpdateAgentLauncher {
   /// Prepare the update state file and launch the update agent.
   ///
   /// After this call, the calling process MUST exit immediately.
-  /// The agent will wait for the app PID to exit, run msiexec, verify
+  /// The agent will wait for the app PID to exit, run the installer, verify
   /// the installed version, and relaunch the app.
   ///
   /// Returns `true` if the agent was launched successfully.
   static Future<bool> launch({
-    required String msiPath,
+    required String installerPath,
     required String targetVersion,
     required String expectedSha256,
     required String logPath,
@@ -32,7 +32,7 @@ class UpdateAgentLauncher {
 
       // Build the state file.
       final state = UpdateStateFile(
-        msiPath: msiPath,
+        installerPath: installerPath,
         targetVersion: targetVersion,
         expectedSha256: expectedSha256,
         appPid: appPid,

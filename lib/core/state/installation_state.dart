@@ -86,10 +86,10 @@ enum UpdateState {
   /// Agent is waiting for the application process to exit.
   waitingExit,
 
-  /// msiexec is running.
+  /// The installer is running.
   installing,
 
-  /// msiexec completed; new version is on disk.
+  /// Installation completed; new version is on disk.
   installed,
 
   /// Agent is launching the new application binary.
@@ -122,13 +122,13 @@ const int updateStateSchemaVersion = 1;
 /// corrupted (crash, power loss, disk error), the reader detects the
 /// mismatch and treats the state as stale/corrupt.
 class UpdateStateFile {
-  /// Absolute path to the downloaded MSI.
-  final String msiPath;
+  /// Absolute path to the downloaded installer.
+  final String installerPath;
 
   /// Target version string (e.g. "5.6.0+12").
   final String targetVersion;
 
-  /// Expected SHA-256 hex digest of the MSI.
+  /// Expected SHA-256 hex digest of the installer.
   final String expectedSha256;
 
   /// PID of the application process the agent should wait for.
@@ -156,7 +156,7 @@ class UpdateStateFile {
   final int attempt;
 
   const UpdateStateFile({
-    required this.msiPath,
+    required this.installerPath,
     required this.targetVersion,
     required this.expectedSha256,
     required this.appPid,
@@ -176,7 +176,7 @@ class UpdateStateFile {
     int? attempt,
   }) {
     return UpdateStateFile(
-      msiPath: msiPath,
+      installerPath: installerPath,
       targetVersion: targetVersion,
       expectedSha256: expectedSha256,
       appPid: appPid,
@@ -195,7 +195,7 @@ class UpdateStateFile {
   /// Serialize to a map WITHOUT checksum (used to compute the checksum).
   Map<String, dynamic> _toJsonForChecksum() => {
         'schema': updateStateSchemaVersion,
-        'msi_path': msiPath,
+        'installer_path': installerPath,
         'target_version': targetVersion,
         'expected_sha256': expectedSha256,
         'app_pid': appPid,
@@ -221,7 +221,7 @@ class UpdateStateFile {
 
   factory UpdateStateFile.fromJson(Map<String, dynamic> json) {
     return UpdateStateFile(
-      msiPath: json['msi_path'] as String? ?? '',
+      installerPath: json['installer_path'] as String? ?? json['msi_path'] as String? ?? '',
       targetVersion: json['target_version'] as String? ?? '',
       expectedSha256: json['expected_sha256'] as String? ?? '',
       appPid: json['app_pid'] as int? ?? 0,

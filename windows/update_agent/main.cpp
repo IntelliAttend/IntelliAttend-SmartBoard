@@ -115,25 +115,25 @@ static bool DoReading(const std::wstring& statePath, UpdateState& state) {
 
   state = ParseUpdateState(json);
 
-  // Verify MSI file exists.
-  if (!FileExists(state.msiPath)) {
-    UA_LOG_ERROR(StateName(State::Reading), L"MSI file not found");
+  // Verify installer file exists.
+  if (!FileExists(state.installerPath)) {
+    UA_LOG_ERROR(StateName(State::Reading), L"Installer file not found");
     return false;
   }
 
-  // Verify MSI size is reasonable (> 1MB).
-  uint64_t msiSize = FileSize(state.msiPath);
-  if (msiSize < 1024 * 1024) {
-    UA_LOG_ERROR(StateName(State::Reading), L"MSI file too small, likely corrupt");
+  // Verify installer size is reasonable (> 1MB).
+  uint64_t installerSize = FileSize(state.installerPath);
+  if (installerSize < 1024 * 1024) {
+    UA_LOG_ERROR(StateName(State::Reading), L"Installer file too small, likely corrupt");
     return false;
   }
 
-  // Verify Authenticode signature of MSI.
+  // Verify Authenticode signature of installer.
   UA_LOG_INFO(StateName(State::Reading), L"Verifying Authenticode signature");
-  if (!VerifyAuthenticode(state.msiPath)) {
-    UA_LOG_ERROR(StateName(State::Reading), L"MSI Authenticode signature invalid or unsigned");
-    InstallJournal::Record(L"authenticode_fail", false, state.msiPath);
-    EventLog::Error(L"Update MSI failed Authenticode verification");
+  if (!VerifyAuthenticode(state.installerPath)) {
+    UA_LOG_ERROR(StateName(State::Reading), L"Installer Authenticode signature invalid or unsigned");
+    InstallJournal::Record(L"authenticode_fail", false, state.installerPath);
+    EventLog::Error(L"Update installer failed Authenticode verification");
     return false;
   }
   UA_LOG_INFO(StateName(State::Reading), L"Authenticode signature valid");
@@ -144,7 +144,7 @@ static bool DoReading(const std::wstring& statePath, UpdateState& state) {
              state.targetVersion.c_str(), state.appPid);
   UA_LOG_INFO(StateName(State::Reading), buf);
 
-  UA_LOG_INFO(StateName(State::Reading), L"Checksum valid, MSI verified");
+  UA_LOG_INFO(StateName(State::Reading), L"Checksum valid, installer verified");
   InstallJournal::Record(L"read_complete", true, state.targetVersion);
   return true;
 }
@@ -206,27 +206,27 @@ static bool DoInstalling(const std::wstring& statePath, UpdateState& state) {
 
   InstallJournal::Record(L"install_start");
 
-  for (int attempt = 1; attempt <= kMsiMaxRetries; attempt++) {
+  for (int attempt = 1; attempt <= kInstallMaxRetries; attempt++) {
     state.attempt = attempt;
     SaveState(statePath, state, L"installing");
     Heartbeat::Pulse();
 
     wchar_t buf[256];
-    swprintf_s(buf, L"Attempt %d/%d, msiexec /i \"%s\" /qn /norestart /log \"%s\"",
-               attempt, kMsiMaxRetries, state.msiPath.c_str(), state.logPath.c_str());
+    swprintf_s(buf, L"Attempt %d/%d, setup.exe /SILENT \"%s\" /LOG \"%s\"",
+               attempt, kInstallMaxRetries, state.installerPath.c_str(), state.logPath.c_str());
     UA_LOG_INFO(StateName(State::Installing), buf);
 
-    DWORD exitCode = RunMsiExec(state.msiPath, state.logPath);
+    DWORD exitCode = RunSetupExe(state.installerPath, state.logPath);
     Heartbeat::Pulse();
 
     wchar_t exitBuf[64];
-    swprintf_s(exitBuf, L"msiexec exited with code %lu", exitCode);
+    swprintf_s(exitBuf, L"setup.exe exited with code %lu", exitCode);
     UA_LOG_INFO(StateName(State::Installing), exitBuf);
 
-    if (IsMsiSuccess(exitCode)) {
+    if (IsInstallSuccess(exitCode)) {
       InstallJournal::Record(L"install_complete", true,
                              L"exit_code=" + std::to_wstring(exitCode));
-      EventLog::Info(L"MSI installation completed successfully");
+      EventLog::Info(L"Installation completed successfully");
       Heartbeat::Stop();
       return true;
     }
@@ -234,12 +234,12 @@ static bool DoInstalling(const std::wstring& statePath, UpdateState& state) {
     InstallJournal::Record(L"install_attempt_failed", false,
                            L"exit_code=" + std::to_wstring(exitCode));
 
-    if (attempt < kMsiMaxRetries && IsMsiRetryable(exitCode)) {
+    if (attempt < kInstallMaxRetries && IsInstallRetryable(exitCode)) {
       wchar_t retryBuf[128];
       swprintf_s(retryBuf, L"Retry %d/%d in %lu seconds",
-                 attempt + 1, kMsiMaxRetries, kMsiRetryDelays[attempt] / 1000);
+                 attempt + 1, kInstallMaxRetries, kInstallRetryDelays[attempt] / 1000);
       UA_LOG_WARN(StateName(State::Installing), retryBuf);
-      Sleep(kMsiRetryDelays[attempt]);
+      Sleep(kInstallRetryDelays[attempt]);
       Heartbeat::Pulse();
       continue;
     }
@@ -249,7 +249,7 @@ static bool DoInstalling(const std::wstring& statePath, UpdateState& state) {
     swprintf_s(errBuf, L"All retries exhausted, last exit code=%lu", exitCode);
     UA_LOG_ERROR(StateName(State::Installing), errBuf);
     InstallJournal::Record(L"install_failed", false, errBuf);
-    EventLog::Error(L"MSI installation failed after all retries");
+    EventLog::Error(L"Installation failed after all retries");
     Heartbeat::Stop();
     return false;
   }
@@ -263,7 +263,7 @@ static bool DoInstalling(const std::wstring& statePath, UpdateState& state) {
 static bool DoVerifying(UpdateState& state) {
   UA_LOG_INFO(StateName(State::Verifying), L"Checking installed executable");
 
-  // Wait for exe to appear (MSI may still be flushing).
+  // Wait for exe to appear (installer may still be flushing).
   DWORD waited = 0;
   while (!FileExists(state.appExePath) && waited < kExePollTimeoutMs) {
     Sleep(500);
@@ -271,7 +271,7 @@ static bool DoVerifying(UpdateState& state) {
   }
 
   if (!FileExists(state.appExePath)) {
-    UA_LOG_ERROR(StateName(State::Verifying), L"New exe not found after MSI install");
+    UA_LOG_ERROR(StateName(State::Verifying), L"New exe not found after install");
     return false;
   }
 
@@ -326,10 +326,10 @@ static bool DoRestarting(const std::wstring& statePath, UpdateState& state) {
 // ── State: Cleanup ───────────────────────────────────────────────────────
 
 static bool DoCleanup(const std::wstring& statePath, UpdateState& state) {
-  UA_LOG_INFO(StateName(State::Cleanup), L"Deleting MSI and updating state");
+  UA_LOG_INFO(StateName(State::Cleanup), L"Deleting installer and updating state");
 
-  if (!DeleteFileSafe(state.msiPath)) {
-    UA_LOG_WARN(StateName(State::Cleanup), L"Failed to delete MSI (non-fatal)");
+  if (!DeleteFileSafe(state.installerPath)) {
+    UA_LOG_WARN(StateName(State::Cleanup), L"Failed to delete installer (non-fatal)");
   }
 
   SaveState(statePath, state, L"installed");
@@ -411,12 +411,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
 
   currentState = State::Installing;
   if (!DoInstalling(statePath, state)) {
-    SaveState(statePath, state, L"failed", L"MSI install failed");
+    SaveState(statePath, state, L"failed", L"Install failed");
     Logger::Instance().Error(StateName(currentState), L"Exiting with code 2");
-    EventLog::Error(L"Update agent: MSI installation failed");
+    EventLog::Error(L"Update agent: installation failed");
     Logger::Instance().Close();
     SingletonGuard::Release();
-    return ExitCode::MsiInstallFail;
+    return ExitCode::InstallFail;
   }
 
   // ── VERIFYING ──────────────────────────────────────────────────────

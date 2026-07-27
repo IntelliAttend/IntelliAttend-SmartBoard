@@ -5,11 +5,12 @@
 
 namespace ua {
 
-DWORD RunMsiExec(const std::wstring& msiPath, const std::wstring& logPath) {
-  // Build msiexec command line:
-  // msiexec.exe /i "<msi>" /qn /norestart /log "<log>"
-  std::wstring cmdLine = L"msiexec.exe /i \"" + msiPath +
-                         L"\" /qn /norestart /log \"" + logPath + L"\"";
+DWORD RunSetupExe(const std::wstring& setupPath, const std::wstring& logPath) {
+  // Build command line:
+  // setup.exe /SILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG="<log>"
+  std::wstring cmdLine = L"\"" + setupPath +
+                         L"\" /SILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=\"" +
+                         logPath + L"\"";
 
   STARTUPINFOW si = {};
   si.cb = sizeof(si);
@@ -33,17 +34,17 @@ DWORD RunMsiExec(const std::wstring& msiPath, const std::wstring& logPath) {
     return (DWORD)-1;
   }
 
-  UA_LOG_INFO(L"INSTALLING", L"msiexec started, waiting for completion...");
+  UA_LOG_INFO(L"INSTALLING", L"setup.exe started, waiting for completion...");
 
-  // Wait for msiexec to finish.
-  DWORD waitResult = WaitForSingleObject(pi.hProcess, 300000); // 5 min
+  // Wait for setup to finish (10 min timeout — Inno Setup can be slow on HDD).
+  DWORD waitResult = WaitForSingleObject(pi.hProcess, 600000);
 
   DWORD exitCode = 0;
   if (waitResult == WAIT_OBJECT_0) {
     GetExitCodeProcess(pi.hProcess, &exitCode);
   } else {
-    // Timeout — kill msiexec.
-    UA_LOG_ERROR(L"INSTALLING", L"msiexec timed out after 300s, terminating...");
+    // Timeout — kill the process.
+    UA_LOG_ERROR(L"INSTALLING", L"setup.exe timed out after 600s, terminating...");
     TerminateProcess(pi.hProcess, 1);
     WaitForSingleObject(pi.hProcess, 5000);
     GetExitCodeProcess(pi.hProcess, &exitCode);
@@ -55,15 +56,15 @@ DWORD RunMsiExec(const std::wstring& msiPath, const std::wstring& logPath) {
   return exitCode;
 }
 
-bool IsMsiSuccess(DWORD exitCode) {
-  return exitCode == 0 || exitCode == 3010;
+bool IsInstallSuccess(DWORD exitCode) {
+  // Inno Setup returns 0 on success.
+  return exitCode == 0;
 }
 
-bool IsMsiRetryable(DWORD exitCode) {
-  // Non-retryable: 1602 (cancelled), 1604 (suspended), 5 (access denied).
-  if (exitCode == 1602 || exitCode == 1604 || exitCode == 5) return false;
-  // Everything else is retryable.
-  return !IsMsiSuccess(exitCode);
+bool IsInstallRetryable(DWORD exitCode) {
+  // Non-retryable: user cancelled (1 or 2), access denied (5).
+  if (exitCode == 1 || exitCode == 2 || exitCode == 5) return false;
+  return !IsInstallSuccess(exitCode);
 }
 
 } // namespace ua
