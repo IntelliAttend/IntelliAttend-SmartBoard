@@ -45,7 +45,7 @@ dependencies:
   # by their widget regardless of OS brightness.
   
   # Notifications
-  flutter_local_notifications: ^21.0.0
+  flutter_local_notifications: ">=21.0.0 <23.0.0"
   url_launcher: ^6.3.1
 
   # Windows Registry (for Startup)
