@@ -133,7 +133,10 @@ jobs:
           $dispatchVersion = "${{ inputs.version }}"
           # On workflow_dispatch the tag may not be the version; use the input instead.
           if ($dispatchVersion -ne '') {
-            $tag = "v$($dispatchVersion)"
+            $tag = $dispatchVersion
+            if (-not ($tag -match '^v\d+\.\d+\.\d+')) {
+              $tag = "v$($dispatchVersion)"
+            }
           }
           if (-not ($tag -match '^v\d+\.\d+\.\d+')) {
             Write-Host "Tag '$tag' does not match vX.Y.Z — aborting"
