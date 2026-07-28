@@ -155,12 +155,6 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Run analyzer
-        run: dart analyze lib/
-
-      - name: Run tests
-        run: flutter test
-
       - name: Create .env file from secrets
         run: |
           echo "API_BASE_URL=${{ vars.API_BASE_URL }}" > .env
@@ -172,6 +166,12 @@ jobs:
           echo "SSL_PIN_FINGERPRINT=${{ secrets.SSL_PIN_FINGERPRINT }}" >> .env
           echo "ENABLE_DOCUMENTS=true" >> .env
           echo "DEBUG=false" >> .env
+
+      - name: Run analyzer
+        run: dart analyze lib/
+
+      - name: Run tests
+        run: flutter test
 
       - name: Build Windows release
         run: >
