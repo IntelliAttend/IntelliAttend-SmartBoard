@@ -7,10 +7,12 @@ import '../../core/security/secure_storage_service.dart';
 import '../../core/config/app_config.dart';
 import '../../core/utils/logger.dart';
 import '../../models/isar_schemas.dart';
+import '../../models/remote_config.dart';
 import '../../services/hydration_service.dart';
 import '../../services/timetable_cache.dart';
 import '../../services/network_info_service.dart';
 import '../../services/hotspot_service.dart';
+import '../../services/auto_updater.dart';
 import 'package:number_flow/number_flow.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -256,6 +258,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ],
                     ),
+
+                    _buildUpdateSection(),
                   ],
                 ),
               ),
@@ -833,6 +837,79 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildUpdateSection() {
+    return ValueListenableBuilder<UpdateManifest?>(
+      valueListenable: AutoUpdater.availableUpdate,
+      builder: (context, available, _) {
+        if (available == null) return const SizedBox.shrink();
+
+        final progress = AutoUpdater.progress.value;
+
+        String label;
+        IconData icon;
+        VoidCallback? onTap;
+        bool isLoading = false;
+
+        if (progress == null || progress.state == UpdateState.idle) {
+          label = 'UPDATE AVAILABLE — v${available.minimumVersion}';
+          icon = Icons.system_update_alt_rounded;
+          onTap = () {
+            AutoUpdater.resetCircuitBreaker();
+            AutoUpdater.checkForUpdate(available);
+          };
+        } else {
+          switch (progress.state) {
+            case UpdateState.downloading:
+              final pct = (progress.fraction * 100).toStringAsFixed(0);
+              label = 'DOWNLOADING... $pct%';
+              icon = Icons.download_rounded;
+              onTap = null;
+              isLoading = true;
+            case UpdateState.verifying:
+              label = 'VERIFYING...';
+              icon = Icons.verified_rounded;
+              onTap = null;
+              isLoading = true;
+            case UpdateState.installing:
+              label = 'INSTALLING...';
+              icon = Icons.install_mobile_rounded;
+              onTap = null;
+              isLoading = true;
+            case UpdateState.failed:
+              label = 'RETRY UPDATE — v${available.minimumVersion}';
+              icon = Icons.refresh_rounded;
+              onTap = () {
+                AutoUpdater.resetCircuitBreaker();
+                AutoUpdater.checkForUpdate(available);
+              };
+            case UpdateState.completed:
+            case UpdateState.idle:
+              return const SizedBox.shrink();
+          }
+        }
+
+        return Padding(
+          padding: const EdgeInsets.only(top: 48),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildSectionHeader('UPDATE'),
+              const SizedBox(height: 24),
+              _buildActionButton(
+                icon: icon,
+                label: label,
+                onTap: onTap,
+                color: onTap != null ? null : AppColors.textSecondaryLight,
+                isLoading: isLoading,
+                height: 80,
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 

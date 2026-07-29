@@ -3,22 +3,6 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../services/auto_updater.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// UpdateOverlay
-//
-// Full-screen overlay that displays during a binary update. It is mounted in
-// the widget tree via the [IntelliAttendApp] builder (see main.dart) and
-// listens to [AutoUpdater.progress] via a [ValueListenableBuilder].
-//
-// When [AutoUpdater.progress] is `null` the overlay is invisible and passes
-// through its child widget. When non-null it renders a blurred backdrop with
-// a progress indicator, version info, and status text.
-//
-// ── Visual design ───────────────────────────────────────────────────────────
-// Matches the dark, professional aesthetic of the existing overlays
-// (shutdown_countdown_overlay, emergency_overlay) — blurred background, grid
-// pattern, teal accent color.
-// ─────────────────────────────────────────────────────────────────────────────
 class UpdateOverlay extends StatelessWidget {
   final Widget child;
   const UpdateOverlay({super.key, required this.child});
@@ -39,6 +23,7 @@ class UpdateOverlay extends StatelessWidget {
   Widget _buildOverlay(BuildContext context, UpdateProgress progress) {
     final isError = progress.state == UpdateState.failed;
     final isComplete = progress.state == UpdateState.completed;
+    final isDownloading = progress.state == UpdateState.downloading;
 
     return Stack(
       children: [
@@ -82,7 +67,19 @@ class UpdateOverlay extends StatelessWidget {
                         const SizedBox(height: 32),
                         if (!isError && !isComplete)
                           _buildProgressIndicator(progress),
-                        if (isError) _buildErrorFooter(context, progress),
+                        if (isError && progress.error != null) ...[
+                          const SizedBox(height: 12),
+                          _buildErrorText(progress.error!),
+                        ],
+                        const SizedBox(height: 32),
+                        if (!isComplete) ...[
+                          _buildDismissButton(
+                            context,
+                            label: isDownloading ? 'Cancel' : 'Dismiss',
+                          ),
+                          if (isError && progress.force)
+                            _buildForceNotice(),
+                        ],
                       ],
                     ),
                   ),
@@ -94,8 +91,6 @@ class UpdateOverlay extends StatelessWidget {
       ],
     );
   }
-
-  // ── Icon (varies by state) ────────────────────────────────────────────────
 
   Widget _buildIcon(UpdateProgress progress) {
     switch (progress.state) {
@@ -152,8 +147,6 @@ class UpdateOverlay extends StatelessWidget {
     }
   }
 
-  // ── Title ──────────────────────────────────────────────────────────────────
-
   Widget _buildTitle(UpdateProgress progress) {
     String title;
     Color color;
@@ -184,8 +177,6 @@ class UpdateOverlay extends StatelessWidget {
     );
   }
 
-  // ── Status text ────────────────────────────────────────────────────────────
-
   Widget _buildStatusText(UpdateProgress progress) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 48),
@@ -201,11 +192,8 @@ class UpdateOverlay extends StatelessWidget {
     );
   }
 
-  // ── Progress bar (determinate during download, indeterminate during verify) ─
-
   Widget _buildProgressIndicator(UpdateProgress progress) {
     if (progress.state == UpdateState.downloading) {
-      // fraction > 0 = determinate, fraction == -1 = indeterminate (unknown size)
       final isDeterminate = progress.fraction > 0;
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 80),
@@ -221,7 +209,6 @@ class UpdateOverlay extends StatelessWidget {
       );
     }
 
-    // Indeterminate state (verifying / installing).
     return const SizedBox(
       width: 200,
       child: LinearProgressIndicator(
@@ -232,53 +219,58 @@ class UpdateOverlay extends StatelessWidget {
     );
   }
 
-  // ── Error footer (shown when state == UpdateState.failed) ──────────────────
+  Widget _buildErrorText(String error) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 48),
+      child: Text(
+        error,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          fontSize: 13,
+          color: AppColors.error.withValues(alpha: 0.8),
+        ),
+      ),
+    );
+  }
 
-  Widget _buildErrorFooter(BuildContext context, UpdateProgress progress) {
-    final isForced = progress.force;
-
-    return Column(
-      children: [
-        if (progress.error != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 48),
-            child: Text(
-              progress.error!,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                color: AppColors.error.withValues(alpha: 0.8),
-              ),
-            ),
-          ),
-        const SizedBox(height: 32),
-        TextButton(
-          onPressed: () {
-            AutoUpdater.progress.value = null; // dismiss overlay
-          },
-          child: const Text(
-            'Dismiss',
-            style: TextStyle(color: AppColors.primaryTeal),
+  Widget _buildDismissButton(BuildContext context, {required String label}) {
+    return TextButton(
+      onPressed: () => AutoUpdater.dismiss(),
+      style: TextButton.styleFrom(
+        foregroundColor: AppColors.primaryTeal,
+        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(
+            color: AppColors.primaryTeal.withValues(alpha: 0.3),
           ),
         ),
-        if (isForced)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Text(
-              'This update is required. The board will retry automatically.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.white.withValues(alpha: 0.4),
-              ),
-            ),
-          ),
-      ],
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.5,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildForceNotice() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Text(
+        'This update is required. The board will retry automatically.',
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          fontSize: 12,
+          color: Colors.white.withValues(alpha: 0.4),
+        ),
+      ),
     );
   }
 }
-
-// ── Grid pattern (matches shutdown_countdown_overlay) ───────────────────────
 
 class _GridPainter extends CustomPainter {
   @override

@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
+import 'package:isar/isar.dart';
 import 'package:win32_registry/win32_registry.dart';
 
 import '../security/integrity_verifier.dart';
@@ -10,6 +12,7 @@ import '../security/secure_storage_service.dart';
 import '../config/app_config.dart';
 import '../config/install_paths.dart';
 import '../utils/logger.dart';
+import '../../models/isar_schemas.dart';
 import '../../services/session_manager.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
@@ -154,6 +157,65 @@ class LifecyclePhases {
   static Future<void> initLocalVault() async {
     await SessionManager.init();
     Log.i('[Lifecycle] Local vault initialized');
+  }
+
+  /// Detect reinstall (uninstall + reinstall) and clear stale persisted data.
+  ///
+  /// Uses a marker file in the App\ directory as a sentinel. The MSI deletes
+  /// App\ on uninstall (`RemoveFolder` in product.wxs), so on a reinstall the
+  /// marker won't exist. On a normal update (MajorUpgrade in-place) the marker
+  /// survives. When a missing marker coincides with stale credentials or a
+  /// DeviceRegistration in Isar, we know a reinstall happened and wipe all
+  /// persisted state so the user starts fresh.
+  static Future<void> clearStaleDataIfReinstall() async {
+    try {
+      final markerFile = File('${InstallPaths.appDir}\\.initialized');
+
+      if (markerFile.existsSync()) return;
+
+      Log.i('[Lifecycle] No initialization marker found — checking for stale data...');
+
+      final hasSecureData =
+          await SecureStorageService.getBoardEmail() != null ||
+          await SecureStorageService.getRefreshToken() != null;
+
+      DeviceRegistration? registration;
+      try {
+        registration = await SessionManager
+            .isar.deviceRegistrations.where().findFirst();
+      } catch (_) {}
+
+      final hasStaleData = hasSecureData || registration != null;
+
+      if (hasStaleData) {
+        Log.w('[Lifecycle] Reinstall detected. Clearing stale persisted data...');
+        await SecureStorageService.clearAll();
+
+        try {
+          await SessionManager.isar.writeTxn(() async {
+            await SessionManager.isar.deviceRegistrations.clear();
+            await SessionManager.isar.timetableEntrys.clear();
+            await SessionManager.isar.activeSessions.clear();
+            await SessionManager.isar.completedSessions.clear();
+            await SessionManager.isar.hydrationProfiles.clear();
+            await SessionManager.isar.hydrationRosters.clear();
+            await SessionManager.isar.storedNotifications.clear();
+          });
+        } catch (e) {
+          Log.w('[Lifecycle] Failed to clear Isar data: $e');
+        }
+
+        Log.i('[Lifecycle] Stale data cleared.');
+      }
+
+      await markerFile.parent.create(recursive: true);
+      await markerFile.writeAsString(jsonEncode({
+        'initialized_at': DateTime.now().toIso8601String(),
+      }));
+      Log.i('[Lifecycle] Initialization marker written.');
+    } catch (e) {
+      Log.w('[Lifecycle] Failed to check/clear stale data: $e');
+    }
   }
 
   // ── WINDOW ────────────────────────────────────────────────────────────────

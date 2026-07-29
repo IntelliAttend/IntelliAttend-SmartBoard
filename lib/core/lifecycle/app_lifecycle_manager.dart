@@ -142,6 +142,9 @@ class AppLifecycleManager {
 
       await LifecyclePhases.initLocalVault();
       _trace('database: local vault initialized');
+
+      await LifecyclePhases.clearStaleDataIfReinstall();
+      _trace('database: reinstall check complete');
       return const PhaseResult.ok();
     });
     if (!dbResult.success) {
