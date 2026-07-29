@@ -1,1 +1,5 @@
-* @BalaSeethaRamanjaneyulu
+# Installer pipeline owners — changes require approval from these users
+/windows/                                   @BalaSeethaRamanjaneyulu
+/scripts/                                   @BalaSeethaRamanjaneyulu
+/.github/workflows/release*                 @BalaSeethaRamanjaneyulu
+/.github/workflows/build*                   @BalaSeethaRamanjaneyulu
