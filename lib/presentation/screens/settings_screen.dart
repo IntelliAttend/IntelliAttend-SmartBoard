@@ -9,10 +9,12 @@ import '../../core/network/api_client.dart';
 import '../../core/utils/logger.dart';
 import '../../data/repositories/auth_repository.dart';
 import '../../models/isar_schemas.dart';
+import '../../models/remote_config.dart';
 import '../../services/hydration_service.dart';
 import '../../services/timetable_cache.dart';
 import '../../services/network_info_service.dart';
 import '../../services/hotspot_service.dart';
+import '../../services/auto_updater.dart';
 import 'package:number_flow/number_flow.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -261,6 +263,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ],
                     ),
+
+                    _buildUpdateSection(),
                   ],
                 ),
               ),
@@ -950,6 +954,129 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _idleTheme = theme);
   }
 
+  Widget _buildActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onTap,
+    Color? color,
+    bool isLoading = false,
+    double height = 120,
+  }) {
+    final primaryColor = color ?? AppColors.primaryTeal;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        height: height,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: primaryColor.withValues(alpha: 0.1)),
+          boxShadow: [
+            BoxShadow(
+              color: primaryColor.withValues(alpha: 0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (isLoading)
+              const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primaryTeal))
+            else
+              Icon(icon, size: 22, color: primaryColor),
+            const SizedBox(width: 12),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: color ?? AppColors.textPrimaryLight,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUpdateSection() {
+    return ValueListenableBuilder<UpdateManifest?>(
+      valueListenable: AutoUpdater.availableUpdate,
+      builder: (context, available, _) {
+        if (available == null) return const SizedBox.shrink();
+
+        final progress = AutoUpdater.progress.value;
+
+        String label;
+        IconData icon;
+        VoidCallback? onTap;
+        bool isLoading = false;
+
+        if (progress == null || progress.state == UpdateState.idle) {
+          label = 'UPDATE AVAILABLE — v${available.minimumVersion}';
+          icon = Icons.system_update_alt_rounded;
+          onTap = () {
+            AutoUpdater.resetCircuitBreaker();
+            AutoUpdater.checkForUpdate(available);
+          };
+        } else {
+          switch (progress.state) {
+            case UpdateState.downloading:
+              final pct = (progress.fraction * 100).toStringAsFixed(0);
+              label = 'DOWNLOADING... $pct%';
+              icon = Icons.download_rounded;
+              onTap = null;
+              isLoading = true;
+            case UpdateState.verifying:
+              label = 'VERIFYING...';
+              icon = Icons.verified_rounded;
+              onTap = null;
+              isLoading = true;
+            case UpdateState.installing:
+              label = 'INSTALLING...';
+              icon = Icons.install_mobile_rounded;
+              onTap = null;
+              isLoading = true;
+            case UpdateState.failed:
+              label = 'RETRY UPDATE — v${available.minimumVersion}';
+              icon = Icons.refresh_rounded;
+              onTap = () {
+                AutoUpdater.resetCircuitBreaker();
+                AutoUpdater.checkForUpdate(available);
+              };
+            case UpdateState.completed:
+            case UpdateState.idle:
+              return const SizedBox.shrink();
+          }
+        }
+
+        return Padding(
+          padding: const EdgeInsets.only(top: 48),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildSectionHeader('UPDATE'),
+              const SizedBox(height: 24),
+              _buildActionButton(
+                icon: icon,
+                label: label,
+                onTap: onTap,
+                color: onTap != null ? null : AppColors.textSecondaryLight,
+                isLoading: isLoading,
+                height: 80,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
   void _startHold(String action) {
     _holdTimer?.cancel();
     _holdProgress = 0.0;

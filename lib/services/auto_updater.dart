@@ -137,6 +137,36 @@ class AutoUpdater {
   /// The parsed installed version, available after [init] is called.
   static Version get installedVersion => _installedVersion;
 
+  // ── Available update (for Settings button) ────────────────────────────────
+
+  /// Notifies UI when a newer version is available but not yet applied.
+  /// The Settings screen listens to this to show an "Update Available" button.
+  /// Cleared on successful install; survives dismiss so user can retry later.
+  static final ValueNotifier<UpdateManifest?> availableUpdate =
+      ValueNotifier<UpdateManifest?>(null);
+
+  // ── Dismiss support (user-initiated cancel) ───────────────────────────────
+
+  /// Set to `true` when the user taps Dismiss.
+  static bool _dismissRequested = false;
+
+  /// Active HTTP client during download — closed on dismiss to abort the stream.
+  static http.Client? _activeDownloadClient;
+
+  /// Path of the file being downloaded — deleted on dismiss.
+  static String? _activeDownloadPath;
+
+  // ── Circuit Breaker ───────────────────────────────────────────────────────
+
+  /// Consecutive failures for the current version fingerprint.
+  static int _consecutiveFailures = 0;
+
+  /// Version fingerprint for which consecutive failures are counted.
+  static String? _failedVersionFingerprint;
+
+  /// Maximum consecutive failures before the circuit opens (auto-retry stops).
+  static const int _maxConsecutiveFailures = 3;
+
   // ── Thresholds ────────────────────────────────────────────────────────────
 
   /// HTTP client timeout for downloads.
@@ -237,16 +267,50 @@ class AutoUpdater {
       return false;
     }
 
-    // Guard: don't start a second update while one is running.
-    // BUT: if force is true OR progress is stuck (>5 min), allow override.
-    if (progress.value != null && progress.value!.state != UpdateState.failed) {
+    // ── Guard: circuit breaker ────────────────────────────────────────────
+    //
+    // After [maxConsecutiveFailures] consecutive failures for the same version
+    // fingerprint, auto-retry is blocked. The user can still retry from the
+    // Settings screen, or an admin can re-push via WebSocket.
+    if (_consecutiveFailures >= _maxConsecutiveFailures &&
+        fingerprint == _failedVersionFingerprint) {
+      Log.w('[AutoUpdater] Circuit breaker open for $fingerprint — skipping auto-retry');
+      availableUpdate.value = manifest;
+      return false;
+    }
+
+    // ── Guard: in-progress / failed state ──────────────────────────────────
+    //
+    // Don't start a second update while one is running.
+    // - Non-terminal states (downloading/verifying/installing): block unless
+    //   force=true AND stuck >5 min.
+    // - Failed state: block unless force=true (admin intent).
+    if (progress.value != null) {
+      final ps = progress.value!.state;
       final elapsed = DateTime.now().difference(progress.value!.startedAt);
-      if (forceUpdate && elapsed > const Duration(minutes: 5)) {
-        Log.w('[AutoUpdater] Force update with stuck progress (${elapsed.inMinutes}min) — resetting');
+
+      if (ps == UpdateState.downloading ||
+          ps == UpdateState.verifying ||
+          ps == UpdateState.installing) {
+        if (forceUpdate && elapsed > const Duration(minutes: 5)) {
+          Log.w('[AutoUpdater] Force update with stuck progress '
+              '(${elapsed.inMinutes}min) — resetting');
+          progress.value = null;
+        } else if (!forceUpdate) {
+          Log.d('[AutoUpdater] Update already in progress — ignoring');
+          return false;
+        }
+      }
+
+      if (ps == UpdateState.failed) {
+        if (!forceUpdate) {
+          Log.d('[AutoUpdater] Previous update failed — waiting for user action');
+          availableUpdate.value = manifest;
+          return false;
+        }
+        // Force update overrides failure; reset circuit breaker for retry.
+        resetCircuitBreaker();
         progress.value = null;
-      } else if (!forceUpdate) {
-        Log.d('[AutoUpdater] Update already in progress — ignoring');
-        return false;
       }
     }
 
@@ -275,6 +339,9 @@ class AutoUpdater {
       return false;
     }
 
+    // Notify UI that an update is available (for Settings button).
+    availableUpdate.value = manifest;
+
     // Start the update.
     Log.i('[AutoUpdater] Update available: v$installed → v${manifest.minimumVersion} '
         '(${manifest.force ? "forced" : "optional"})');
@@ -288,13 +355,16 @@ class AutoUpdater {
   static Future<void> _startUpdate(
       UpdateManifest manifest, Version currentVersion, {bool silent = false}) async {
 
-    // Wrap the entire pipeline so that any failure clears
-    // [_lastCheckedManifestFingerprint], allowing future heartbeat checks to retry.
     try {
       await _startUpdatePipeline(manifest, currentVersion, silent: silent);
+      // Pipeline succeeded — reset circuit breaker and allow re-check.
+      _consecutiveFailures = 0;
+      _failedVersionFingerprint = null;
+      _lastCheckedManifestFingerprint = null;
     } catch (e) {
       Log.e('[AutoUpdater] Update pipeline failed unexpectedly: $e');
       _lastCheckedManifestFingerprint = null;
+      _incrementCircuitBreaker(manifest);
     }
   }
 
@@ -336,6 +406,10 @@ class AutoUpdater {
     try {
       await _downloadWithProgress(url, installerPath, manifest.force);
     } catch (e) {
+      if (_dismissRequested) {
+        _dismissRequested = false;
+        return;
+      }
       Log.e('[AutoUpdater] Download failed: $e');
       if (!silent) {
         progress.value = UpdateProgress(
@@ -370,6 +444,10 @@ class AutoUpdater {
         }
         Log.i('[AutoUpdater] Hash verification passed');
       } catch (e) {
+        if (_dismissRequested) {
+          _dismissRequested = false;
+          return;
+        }
         Log.e('[AutoUpdater] Hash verification failed: $e');
         progress.value = UpdateProgress(
           state: UpdateState.failed,
@@ -449,6 +527,8 @@ class AutoUpdater {
   static Future<void> _downloadWithProgress(
       String url, String destination, bool force) async {
     final client = http.Client();
+    _activeDownloadClient = client;
+    _activeDownloadPath = destination;
     try {
       final request = http.Request('GET', Uri.parse(url));
       // Suggest a reasonable timeout — the download may be large.
@@ -493,6 +573,8 @@ class AutoUpdater {
 
       Log.i('[AutoUpdater] Downloaded $bytesReceived bytes to $destination');
     } finally {
+      _activeDownloadClient = null;
+      _activeDownloadPath = null;
       client.close();
     }
   }
@@ -506,6 +588,91 @@ class AutoUpdater {
     final hash = sha256.convert(bytes).toString();
     return hash.toLowerCase() == expected.toLowerCase();
   }
+
+  // ── Dismiss (user-initiated cancel) ───────────────────────────────────────
+
+  /// Called when the user taps Dismiss on the update overlay.
+  ///
+  /// - Aborts any in-flight HTTP download stream.
+  /// - Cleans up the partial MSI file.
+  /// - Clears the progress overlay.
+  /// - Resets the dedup fingerprint so the next manifest delivery re-evaluates.
+  /// - Does NOT clear [availableUpdate] — the Settings button persists.
+  static void dismiss() {
+    Log.i('[AutoUpdater] User dismissed the update overlay');
+
+    // Signal in-flight operations to bail out.
+    _dismissRequested = true;
+
+    // Abort active HTTP download if in progress.
+    if (_activeDownloadClient != null) {
+      try {
+        _activeDownloadClient!.close();
+      } catch (_) {
+        // Best-effort — client may already be closed.
+      }
+      _activeDownloadClient = null;
+    }
+
+    // Delete partially-downloaded file.
+    if (_activeDownloadPath != null) {
+      try {
+        final f = File(_activeDownloadPath!);
+        if (f.existsSync()) f.deleteSync();
+      } catch (_) {}
+      _activeDownloadPath = null;
+    }
+
+    // Clear the overlay.
+    progress.value = null;
+
+    // Reset fingerprint so next heartbeat re-evaluates (circuit breaker still
+    // applies, so it won't loop infinitely).
+    _lastCheckedManifestFingerprint = null;
+  }
+
+  // ── Circuit Breaker ──────────────────────────────────────────────────────
+
+  /// Called after each pipeline failure to increment the failure counter.
+  /// When the counter hits [maxConsecutiveFailures], auto-retry is blocked.
+  static void _incrementCircuitBreaker(UpdateManifest manifest) {
+    final fp =
+        '${manifest.minimumVersion}|${manifest.force}|${manifest.rolloutPercentage}';
+
+    if (_failedVersionFingerprint != fp) {
+      // New version / different params — reset counter.
+      _consecutiveFailures = 0;
+      _failedVersionFingerprint = fp;
+    }
+
+    _consecutiveFailures++;
+
+    Log.w('[AutoUpdater] Circuit breaker: $_consecutiveFailures'
+        '/$_maxConsecutiveFailures failures for $fp');
+
+    if (_consecutiveFailures >= _maxConsecutiveFailures) {
+      Log.e('[AutoUpdater] Circuit breaker OPEN — '
+          'auto-retry disabled for $fp');
+      // [availableUpdate] stays set so Settings shows the retry button.
+    }
+  }
+
+  /// Reset the circuit breaker, allowing auto-retry again.
+  /// Called when:
+  ///   - Admin sends a fresh WebSocket `update_available` push.
+  ///   - User taps "Retry Update" in Settings.
+  ///   - A force-update overrides a failed state.
+  static void resetCircuitBreaker() {
+    if (_consecutiveFailures > 0 || _failedVersionFingerprint != null) {
+      Log.i('[AutoUpdater] Circuit breaker reset by user or admin action');
+    }
+    _consecutiveFailures = 0;
+    _failedVersionFingerprint = null;
+  }
+
+  /// Whether the circuit breaker is currently open for the latest failed version.
+  static bool get isCircuitBreakerOpen =>
+      _consecutiveFailures >= _maxConsecutiveFailures;
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
