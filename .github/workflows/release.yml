@@ -188,7 +188,7 @@ jobs:
       - name: Verify build output
         shell: pwsh
         run: |
-          $exe = "build\windows\x64\runner\Release\${{ env.APP_NAME }}.exe"
+          $exe = "build\windows\x64\runner\Release\intelliattend_smartboard.exe"
           if (-not (Test-Path $exe)) {
             Write-Host "ERROR: Build output not found at $exe" -Foreground Red
             exit 1
@@ -377,7 +377,8 @@ jobs:
             HTTP_CODE=$(curl -s -o /tmp/upload_response.json -w "%{http_code}" \
               -X POST "${SERVER_URL}/api/v1/board/ci-upload" \
               -H "X-Deploy-Key: ${{ secrets.DEPLOY_KEY }}" \
-              -F "version=${FLUTTER_VERSION}" \
+              -F "version=${SETUP_VERSION}" \
+              -F "flutter_version=${FLUTTER_VERSION}" \
               -F "release_notes=Auto-deploy from commit ${{ github.sha }}" \
               -F "commit_hash=${{ github.sha }}" \
               -F "force=true" \
