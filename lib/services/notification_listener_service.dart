@@ -54,6 +54,9 @@ class NotificationListenerService {
   /// Tracks dismissed notification IDs so they are not re-shown on reconnect.
   final Set<String> _dismissedNotificationIds = {};
 
+  Timer? _pollTimer;
+  static const Duration _pollInterval = Duration(seconds: 30);
+
   // ── Priority filter helpers ────────────────────────────────────
 
   List<BoardNotification> get emergencyNotifications =>
@@ -87,9 +90,13 @@ class NotificationListenerService {
     if (value is String) {
       switch (value.toLowerCase()) {
         case 'emergency': return NotificationPriority.emergency;
+        case 'p0': return NotificationPriority.emergency;
         case 'high': return NotificationPriority.high;
+        case 'p1': return NotificationPriority.high;
         case 'normal': return NotificationPriority.normal;
+        case 'p2': return NotificationPriority.normal;
         case 'low': return NotificationPriority.low;
+        case 'p3': return NotificationPriority.low;
       }
     }
     return NotificationPriority.low;
@@ -203,6 +210,10 @@ class NotificationListenerService {
 
     // Restore any notifications persisted from previous sessions
     await loadFromLocalVault();
+
+    // Fetch pending notifications from server (REST fallback)
+    await forceSync();
+    _startPolling();
 
     // Allow real-time notifications to trigger overlays after startup settles.
     Future.delayed(const Duration(seconds: 5), () {
@@ -419,7 +430,14 @@ class NotificationListenerService {
     return drained;
   }
 
+  void _startPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(_pollInterval, (_) => forceSync());
+  }
+
   void stop() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
     _currentBoardId = null;
   }
 

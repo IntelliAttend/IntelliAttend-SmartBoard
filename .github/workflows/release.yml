@@ -12,10 +12,12 @@
 #   - SSL_PIN_FINGERPRINT            SHA-256 hash of production TLS certificate
 #   - SIGN_CERT_BASE64              Base64-encoded Authenticode signing certificate (optional)
 #   - SIGN_PASSWORD                 Certificate password (optional)
+#   - DEPLOY_KEY                    Server deploy key (POST /api/v1/board/ci-upload)
 #
 # Required repository variables:
 #   - API_BASE_URL         Production API base URL (e.g. https://api.intelliattend.com)
 #   - FIREBASE_PROJECT_ID  Firebase project ID
+#   - SERVER_URL           IntelliAttend Server public URL (e.g. https://api.intelliattend.app)
 #
 # ── Workflow ────────────────────────────────────────────────────────────────
 #   1. Checkout + install Flutter
@@ -26,6 +28,8 @@
 #   6. Upload setup.exe + SHA-256 as release assets
 #   7. Publish version manifest (latest.json)
 #   8. Create GitHub Release
+#   9. Upload installer to IntelliAttend server (POST /api/v1/board/ci-upload) so
+#      the Admin Panel download and board auto-update serve the same canonical file.
 # ─────────────────────────────────────────────────────────────────────────────
 
 name: Release
@@ -126,11 +130,21 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
+          $dispatchVersion = "${{ inputs.version }}"
+          # On workflow_dispatch the tag may not be the version; use the input instead.
+          if ($dispatchVersion -ne '') {
+            $tag = $dispatchVersion
+            if (-not ($tag -match '^v\d+\.\d+\.\d+')) {
+              $tag = "v$($dispatchVersion)"
+            }
+          }
           if (-not ($tag -match '^v\d+\.\d+\.\d+')) {
             Write-Host "Tag '$tag' does not match vX.Y.Z — aborting"
             exit 1
           }
           Write-Host "Building version: $tag"
+          "resolved_tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        id: validate
 
       - name: Install Flutter
         uses: subosito/flutter-action@v2
@@ -140,12 +154,6 @@ jobs:
 
       - name: Get dependencies
         run: flutter pub get
-
-      - name: Run analyzer
-        run: dart analyze lib/
-
-      - name: Run tests
-        run: flutter test
 
       - name: Create .env file from secrets
         run: |
@@ -158,6 +166,12 @@ jobs:
           echo "SSL_PIN_FINGERPRINT=${{ secrets.SSL_PIN_FINGERPRINT }}" >> .env
           echo "ENABLE_DOCUMENTS=true" >> .env
           echo "DEBUG=false" >> .env
+
+      - name: Run analyzer
+        run: dart analyze lib/
+
+      - name: Run tests
+        run: flutter test
 
       - name: Build Windows release
         run: >
@@ -198,7 +212,7 @@ jobs:
       - name: Build Installer
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = "${{ steps.validate.outputs.resolved_tag }}"
           $version = $tag -replace '^v', ''
           $buildDir = "build\windows\x64\runner\Release"
 
@@ -228,7 +242,7 @@ jobs:
         if: ${{ env.HAS_SIGN_CERT == 'true' }}
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = "${{ steps.validate.outputs.resolved_tag }}"
           $version = $tag -replace '^v', ''
           $buildDir = "build\windows\x64\runner\Release"
           $setupExe = "$buildDir\${{ env.APP_NAME }}-$version-Setup.exe"
@@ -250,7 +264,7 @@ jobs:
       - name: Compute SHA-256
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = "${{ steps.validate.outputs.resolved_tag }}"
           $version = $tag -replace '^v', ''
           $buildDir = "build\windows\x64\runner\Release"
           $setupExe = "$buildDir\${{ env.APP_NAME }}-$version-Setup.exe"
@@ -268,7 +282,7 @@ jobs:
       - name: Create version manifest
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = "${{ steps.validate.outputs.resolved_tag }}"
           $version = $tag -replace '^v', ''
           $sha256 = "${{ steps.hash.outputs.sha256 }}"
 
@@ -290,7 +304,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-release-${{ github.ref_name }}
+          name: windows-release-${{ steps.validate.outputs.resolved_tag }}
           path: |
             build\windows\x64\runner\Release\*-Setup.exe
             build\windows\x64\runner\Release\*.sha256
@@ -299,12 +313,12 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Release ${{ github.ref_name }}
+          tag_name: ${{ steps.validate.outputs.resolved_tag }}
+          name: Release ${{ steps.validate.outputs.resolved_tag }}
           body: |
-            ## IntelliAttend SmartBoard ${{ github.ref_name }}
+            ## IntelliAttend SmartBoard ${{ steps.validate.outputs.resolved_tag }}
 
-            Download `IntelliAttendSmartBoard-${{ github.ref_name }}-Setup.exe` and double-click to install.
+            Download `IntelliAttendSmartBoard-${{ steps.validate.outputs.resolved_tag }}-Setup.exe` and double-click to install.
 
             ### Verification
             SHA-256: `${{ steps.hash.outputs.sha256 }}`

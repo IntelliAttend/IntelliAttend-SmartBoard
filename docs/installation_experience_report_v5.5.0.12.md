@@ -1,5 +1,10 @@
 # IntelliAttend SmartBoard — Installation Experience Report
 
+> **⚠️ SUPERSEDED — This report documents the MSI-era installer (2026-07-24).**
+> The SmartBoard now uses an Inno Setup `.exe` installer. See
+> [`INSTALLATION_GUIDE.md`](./INSTALLATION_GUIDE.md) for the current,
+> locked reference.
+
 **Version:** 5.5.0.12 (build 12)
 **Audit Date:** 2026-07-24
 **Environment:** Windows 10/11, Intel Iris Xe Graphics, x64, User: bbsra
