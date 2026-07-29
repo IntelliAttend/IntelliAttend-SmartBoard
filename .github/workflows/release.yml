@@ -174,7 +174,7 @@ jobs:
       - name: Verify build output
         shell: pwsh
         run: |
-          $exe = "build\windows\x64\runner\Release\${{ env.APP_NAME }}.exe"
+          $exe = "build\windows\x64\runner\Release\intelliattend_smartboard.exe"
           if (-not (Test-Path $exe)) {
             Write-Host "ERROR: Build output not found at $exe" -Foreground Red
             exit 1
@@ -314,3 +314,85 @@ jobs:
             build\windows\x64\runner\Release\latest.json
           draft: false
           prerelease: false
+
+      - name: Compute Flutter version
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.validate.outputs.resolved_tag }}"
+          $setupVersion = $tag -replace '^v', ''
+          $parts = $setupVersion.Split('.')
+          if ($parts.Count -eq 4) {
+            $flutterVersion = "$($parts[0]).$($parts[1]).$($parts[2])+$($parts[3])"
+          } else {
+            $flutterVersion = $setupVersion
+          }
+          "setup_version=$setupVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "flutter_version=$flutterVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Tag: $tag -> Setup: $setupVersion -> Flutter: $flutterVersion"
+        id: version
+
+      - name: Wait for server ready
+        if: ${{ vars.SERVER_URL != '' }}
+        shell: bash
+        run: |
+          SERVER_URL="${{ vars.SERVER_URL }}"
+          MAX_ATTEMPTS=30
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${SERVER_URL}/health" 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "000" ]; then
+              echo "Server ready (HTTP $HTTP_CODE)"
+              exit 0
+            fi
+            echo "Waiting for server... (attempt $i/$MAX_ATTEMPTS, HTTP $HTTP_CODE)"
+            sleep 10
+          done
+          echo "Warning: Server health check incomplete, proceeding with upload anyway"
+
+      - name: Upload installer to IntelliAttend server
+        if: ${{ vars.SERVER_URL != '' }}
+        shell: bash
+        run: |
+          SETUP_VERSION="${{ steps.version.outputs.setup_version }}"
+          FLUTTER_VERSION="${{ steps.version.outputs.flutter_version }}"
+          SETUP_PATH="build/windows/x64/runner/Release/${{ env.APP_NAME }}-${SETUP_VERSION}-Setup.exe"
+          SERVER_URL="${{ vars.SERVER_URL }}"
+          echo "Uploading v${FLUTTER_VERSION} (Setup: ${SETUP_VERSION}) to ${SERVER_URL}..."
+          MAX_RETRIES=10
+          RETRY_DELAY=30
+          for i in $(seq 1 $MAX_RETRIES); do
+            HTTP_CODE=$(curl -s -o /tmp/upload_response.json -w "%{http_code}" \
+              -X POST "${SERVER_URL}/api/v1/board/ci-upload" \
+              -H "X-Deploy-Key: ${{ secrets.DEPLOY_KEY }}" \
+              -F "version=${SETUP_VERSION}" \
+              -F "flutter_version=${FLUTTER_VERSION}" \
+              -F "release_notes=Auto-deploy from commit ${{ github.sha }}" \
+              -F "commit_hash=${{ github.sha }}" \
+              -F "force=true" \
+              -F "rollout_percentage=100" \
+              -F "file=@${SETUP_PATH}")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Successfully uploaded v${FLUTTER_VERSION}"
+              cat /tmp/upload_response.json
+              exit 0
+            fi
+            RESPONSE=$(cat /tmp/upload_response.json 2>/dev/null || echo "No response body")
+            echo "Attempt $i/$MAX_RETRIES failed (HTTP $HTTP_CODE): $RESPONSE"
+            if [ "$HTTP_CODE" = "401" ]; then
+              echo "ERROR: Invalid deploy key"
+              exit 1
+            fi
+            if [ "$HTTP_CODE" = "413" ]; then
+              echo "ERROR: File too large"
+              exit 1
+            fi
+            if [ "$HTTP_CODE" = "422" ]; then
+              echo "ERROR: Invalid request parameters"
+              exit 1
+            fi
+            if [ $i -lt $MAX_RETRIES ]; then
+              echo "Retrying in ${RETRY_DELAY}s..."
+              sleep $RETRY_DELAY
+            fi
+          done
+          echo "ERROR: Upload failed after $MAX_RETRIES attempts"
+          exit 1
