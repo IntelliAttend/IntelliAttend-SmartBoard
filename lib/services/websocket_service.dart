@@ -262,7 +262,7 @@ class AttendanceSubmittedEvent {
 
 class WebsocketService {
   static const Duration connectTimeout = Duration(seconds: 5);
-  static const Duration pingInterval = Duration(seconds: 30);
+  static const Duration pingInterval = Duration(seconds: 15);
 
   final String _host;
   WebSocketChannel? _channel;
