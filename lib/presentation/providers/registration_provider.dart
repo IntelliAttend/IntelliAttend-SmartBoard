@@ -119,56 +119,12 @@ class RegistrationProvider extends ChangeNotifier {
           if (initResult != null) {
             Log.i('[RegistrationProvider] initiateRegistration: $initResult');
 
-            if (initResult['is_registered'] == true ||
-                initResult['status'] == 'already_registered') {
-              Log.i('[RegistrationProvider] Board already registered. '
-                  'Binding hardware to obtain custom_token + profile.');
-
-              final hardwareId = await HardwareFingerprintService.getDeviceId();
-              final metadata =
-                  await HardwareFingerprintService.getHardwareMetadata();
-
-              Map<String, dynamic>? completeResult;
-              try {
-                completeResult = await _authRepository.completeRegistration(
-                    boardId, hardwareId, '',
-                    metadata: metadata);
-              } catch (e) {
-                Log.w('[RegistrationProvider] completeRegistration for existing '
-                    'board failed (non-fatal): $e');
-              }
-
-              final profile = <String, dynamic>{
-                ...initResult,
-                if (completeResult != null) ...completeResult,
-              };
-              profile['smart_board_id'] =
-                  initResult['smart_board_id'] ?? boardId;
-              profile['room_id'] =
-                  profile['room_id'] ?? profile['classroom_id'];
-
-              await _authRepository.saveRegistration(
-                profile,
-                SessionManager.isar,
-                hardwareId: hardwareId,
-              );
-              Log.i('[RegistrationProvider] Registration saved for existing board.');
-
-              await _hydrateAndWait();
-              _step = RegistrationStep.completed;
-              unawaited(StartupService.register());
-              unawaited(startBackgroundProtocols());
-              Log.i('[RegistrationProvider] Board already registered. '
-                  'Hardware bound. Entering Idle state.');
-              return;
-            }
-
             final verificationToken =
                 initResult['verification_token'] as String?;
 
             if (verificationToken != null && verificationToken.isNotEmpty) {
-              Log.i('[RegistrationProvider] New server flow: verification_token '
-                  'received — completing registration without OTP.');
+              Log.i('[RegistrationProvider] verification_token received — '
+                  'completing registration (hardware binding).');
 
               _verificationToken = verificationToken;
               await SecureStorageService.storeRegistrationToken(verificationToken);
@@ -213,7 +169,34 @@ class RegistrationProvider extends ChangeNotifier {
               _step = RegistrationStep.completed;
               unawaited(StartupService.register());
               unawaited(startBackgroundProtocols());
-              Log.i('[RegistrationProvider] Board registered successfully (no OTP).');
+              Log.i('[RegistrationProvider] Board registered successfully (hardware bound).');
+              return;
+            }
+
+            if (initResult['is_registered'] == true ||
+                initResult['status'] == 'already_registered') {
+              Log.i('[RegistrationProvider] Board already fully bound — '
+                  'saving profile from login response.');
+
+              final profile = <String, dynamic>{
+                ...initResult,
+              };
+              profile['smart_board_id'] =
+                  initResult['smart_board_id'] ?? boardId;
+              profile['room_id'] =
+                  profile['room_id'] ?? profile['classroom_id'];
+
+              await _authRepository.saveRegistration(
+                profile,
+                SessionManager.isar,
+              );
+              Log.i('[RegistrationProvider] Registration saved for existing board.');
+
+              await _hydrateAndWait();
+              _step = RegistrationStep.completed;
+              unawaited(StartupService.register());
+              unawaited(startBackgroundProtocols());
+              Log.i('[RegistrationProvider] Board already registered. Entering Idle state.');
               return;
             }
 
