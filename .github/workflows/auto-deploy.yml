@@ -310,7 +310,10 @@ jobs:
           # update agent" and self-update can never complete.
           $agentDir = "build\windows\x64\update_agent"
           New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
-          cmake -S windows\update_agent -B $agentDir -G "Visual Studio 17 2022" -A x64
+          # No -G flag: GitHub runners ship the latest Visual Studio (18+), not
+          # necessarily "Visual Studio 17 2022". Let CMake pick the default
+          # generator and just pin the architecture.
+          cmake -S windows\update_agent -B $agentDir -A x64
           if ($LASTEXITCODE -ne 0) {
             Write-Host "ERROR: CMake configure for update_agent failed" -ForegroundColor Red
             exit 1
