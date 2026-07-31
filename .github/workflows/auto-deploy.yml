@@ -14,8 +14,8 @@
 #   - FIREBASE_APP_ID               Firebase App ID
 #   - FIREBASE_MESSAGING_SENDER_ID  Firebase Cloud Messaging sender ID
 #   - SSL_PIN_FINGERPRINT            SHA-256 hash of production TLS certificate
-#   - SIGN_CERT_BASE64              Base64-encoded Authenticode signing certificate (optional)
-#   - SIGN_PASSWORD                 Certificate password (optional)
+#   - SIGN_CERT_BASE64              Base64-encoded Authenticode signing certificate (REQUIRED — the update agent rejects unsigned binaries)
+#   - SIGN_PASSWORD                 Certificate password (REQUIRED)
 #   - DEPLOY_KEY                    Server deploy key for CI upload
 #
 # Required repository variables:
@@ -63,6 +63,8 @@ jobs:
             "FIREBASE_APP_ID" = "${{ secrets.FIREBASE_APP_ID }}"
             "FIREBASE_MESSAGING_SENDER_ID" = "${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}"
             "SSL_PIN_FINGERPRINT" = "${{ secrets.SSL_PIN_FINGERPRINT }}"
+            "SIGN_CERT_BASE64" = "${{ secrets.SIGN_CERT_BASE64 }}"
+            "SIGN_PASSWORD" = "${{ secrets.SIGN_PASSWORD }}"
           }
           $missing = @()
           foreach ($kv in $required.GetEnumerator()) {
@@ -81,6 +83,10 @@ jobs:
           }
           if ($missing.Count -gt 0) {
             Write-Host "ERROR: Missing required variables/secrets: $($missing -join ', ')" -ForegroundColor Red
+            Write-Host ""
+            Write-Host "SIGN_CERT_BASE64 + SIGN_PASSWORD are REQUIRED: the C++ update agent" -ForegroundColor Yellow
+            Write-Host "(windows/update_agent/main.cpp) rejects unsigned installers and unsigned" -ForegroundColor Yellow
+            Write-Host "app binaries. An unsigned release fails self-update on every board." -ForegroundColor Yellow
             exit 1
           }
 
@@ -295,6 +301,31 @@ jobs:
           Write-Host "Found: $($exe.Name) ($([math]::Round($exe.Length / 1MB, 2)) MB)"
           "app_name=$($exe.BaseName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
+      - name: Build update_agent.exe
+        shell: pwsh
+        run: |
+          # flutter build windows does NOT compile the C++ update agent
+          # (windows/update_agent). It must be built separately and bundled
+          # with the app, otherwise every board fails with "Failed to launch
+          # update agent" and self-update can never complete.
+          $agentDir = "build\windows\x64\update_agent"
+          New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
+          cmake -S windows\update_agent -B $agentDir -G "Visual Studio 17 2022" -A x64
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: CMake configure for update_agent failed" -ForegroundColor Red
+            exit 1
+          }
+          cmake --build $agentDir --config Release
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: update_agent.exe build failed" -ForegroundColor Red
+            exit 1
+          }
+          if (-not (Test-Path "$agentDir\Release\update_agent.exe")) {
+            Write-Host "ERROR: update_agent.exe not produced" -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "Built update_agent.exe: $agentDir\Release\update_agent.exe" -ForegroundColor Green
+
       - name: Copy update_agent.exe to bundle
         shell: pwsh
         run: |
@@ -321,6 +352,52 @@ jobs:
           }
           Copy-Item $agentExe "$buildDir\update_agent.exe" -Force
           Write-Host "Copied update_agent.exe from $agentExe to $buildDir" -ForegroundColor Green
+
+      - name: Sign application binaries (required for self-update)
+        shell: pwsh
+        run: |
+          # The C++ update agent (windows/update_agent/main.cpp) STRICTLY
+          # requires Authenticode signatures on BOTH the downloaded installer
+          # AND the installed app exe (VerifyAuthenticode in DoReading /
+          # DoVerifying). Sign them BEFORE packaging so signed files ship
+          # inside the setup.exe.
+          if ("${{ secrets.SIGN_CERT_BASE64 }}" -eq "") {
+            Write-Host "Warning: No signing certificate configured — app exe and update_agent.exe will be UNSIGNED" -ForegroundColor Yellow
+            Write-Host "The update agent REJECTS unsigned binaries. Configure SIGN_CERT_BASE64 + SIGN_PASSWORD to enable self-update." -ForegroundColor Yellow
+            exit 0
+          }
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter "signtool.exe" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) {
+            Write-Host "ERROR: signtool.exe not found" -ForegroundColor Red
+            exit 1
+          }
+          $certBytes = [Convert]::FromBase64String("${{ secrets.SIGN_CERT_BASE64 }}")
+          $certPath = Join-Path $env:RUNNER_TEMP "signing_cert.pfx"
+          [IO.File]::WriteAllBytes($certPath, $certBytes)
+          $password = "${{ secrets.SIGN_PASSWORD }}"
+          $buildDir = "build\windows\x64\runner\Release"
+          $appName = "${{ steps.detect.outputs.app_name }}"
+          $files = @("$buildDir\$appName.exe", "$buildDir\update_agent.exe")
+          try {
+            foreach ($f in $files) {
+              & $signtool sign /fd sha256 /tr "http://timestamp.digicert.com" /td sha256 /f $certPath /p $password $f
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "ERROR: Failed to sign $f" -ForegroundColor Red
+                exit 1
+              }
+              Write-Host "Signed: $f" -ForegroundColor Green
+            }
+            # Export the public certificate so setup.iss can install it into
+            # each board's CurrentUser\Root trust store (the update agent
+            # verifies signatures with WinVerifyTrust, which requires the
+            # self-signed root to be trusted on the board).
+            $certObj = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certPath, $password)
+            $cerBytes = $certObj.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+            [IO.File]::WriteAllBytes("$buildDir\intelliattend_signing.cer", $cerBytes)
+            Write-Host "Exported intelliattend_signing.cer for trust-store install" -ForegroundColor Green
+          } finally {
+            if (Test-Path $certPath) { Remove-Item $certPath -Force }
+          }
 
       - name: Setup Inno Setup
         shell: pwsh
@@ -365,19 +442,30 @@ jobs:
 
           # Sign the setup.exe if certificate is available
           if ("${{ secrets.SIGN_CERT_BASE64 }}" -ne "") {
+            $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter "signtool.exe" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+            if (-not $signtool) {
+              Write-Host "ERROR: signtool.exe not found" -ForegroundColor Red
+              exit 1
+            }
             $certBytes = [Convert]::FromBase64String("${{ secrets.SIGN_CERT_BASE64 }}")
             $certPath = Join-Path $env:RUNNER_TEMP "signing_cert.pfx"
             [IO.File]::WriteAllBytes($certPath, $certBytes)
+            $password = "${{ secrets.SIGN_PASSWORD }}"
             try {
-              $password = ConvertTo-SecureString "${{ secrets.SIGN_PASSWORD }}" -AsPlainText -Force
-              $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certPath, $password)
-              Set-AuthenticodeSignature -FilePath $setupExe -Certificate $cert -TimestampServer "http://timestamp.digicert.com"
+              # RFC 3161 timestamping (/tr /td sha256) for durable signatures
+              # that survive certificate expiry.
+              & $signtool sign /fd sha256 /tr "http://timestamp.digicert.com" /td sha256 /f $certPath /p $password "$setupExe"
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "ERROR: Failed to sign installer" -ForegroundColor Red
+                exit 1
+              }
               Write-Host "Installer signed successfully" -ForegroundColor Green
             } finally {
               if (Test-Path $certPath) { Remove-Item $certPath -Force }
             }
           } else {
             Write-Host "Warning: No signing certificate — installer is unsigned" -ForegroundColor Yellow
+            Write-Host "NOTE: The C++ update agent REJECTS unsigned installers. Configure SIGN_CERT_BASE64 before relying on self-update." -ForegroundColor Yellow
           }
 
           $sha256 = (Get-FileHash -Path $setupExe -Algorithm SHA256).Hash.ToLower()
@@ -391,6 +479,50 @@ jobs:
 
           "setup_name=IntelliAttendSmartBoard-$version-Setup.exe" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Verify Authenticode signatures
+        shell: pwsh
+        run: |
+          # Fail the release if any shipped binary is unsigned/invalid — an
+          # unsigned artifact would be rejected by the update agent on every
+          # board and every board would retry in a loop.
+          if ("${{ secrets.SIGN_CERT_BASE64 }}" -eq "") {
+            Write-Host "SKIP: No signing certificate configured — skipping signature verification" -ForegroundColor Yellow
+            exit 0
+          }
+          $buildDir = "build\windows\x64\runner\Release"
+          $setupExe = Get-ChildItem $buildDir -Filter "*-Setup.exe" | Select-Object -First 1
+          if (-not $setupExe) {
+            Write-Host "ERROR: setup.exe not found" -ForegroundColor Red
+            exit 1
+          }
+          # Install the signing root into the runner's CurrentUser\Root store so
+          # Get-AuthenticodeSignature validates exactly like a board will after
+          # setup.iss installs it (a self-signed root otherwise reports NotTrusted).
+          $certBytes = [Convert]::FromBase64String("${{ secrets.SIGN_CERT_BASE64 }}")
+          $certPath = Join-Path $env:RUNNER_TEMP "signing_cert.pfx"
+          [IO.File]::WriteAllBytes($certPath, $certBytes)
+          try {
+            $password = "${{ secrets.SIGN_PASSWORD }}"
+            $certObj = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certPath, $password)
+            $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "CurrentUser")
+            $store.Open("ReadWrite")
+            $store.Add($certObj)
+            $store.Close()
+          } finally {
+            if (Test-Path $certPath) { Remove-Item $certPath -Force }
+          }
+          $appName = "${{ steps.detect.outputs.app_name }}"
+          $files = @($setupExe.FullName, "$buildDir\$appName.exe", "$buildDir\update_agent.exe")
+          foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature -FilePath $f
+            Write-Host "  $f : $($sig.Status)"
+            if ($sig.Status -ne "Valid") {
+              Write-Host "ERROR: $f signature is $($sig.Status). The update agent will REJECT this update." -ForegroundColor Red
+              exit 1
+            }
+          }
+          Write-Host "All release binaries Authenticode-signed and verified" -ForegroundColor Green
 
       - name: Create version manifest
         shell: pwsh

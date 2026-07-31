@@ -63,21 +63,28 @@ bool VerifyChecksum(const std::map<std::wstring, std::wstring>& json) {
 
   std::wstring storedChecksum = it->second;
 
-  // Rebuild JSON without checksum field.
+  // Canonical key order matching WriteUpdateState (deterministic).
+  static const wchar_t* kCanonicalOrder[] = {
+    L"schema", L"owner", L"installer_path", L"target_version",
+    L"expected_sha256", L"app_pid", L"app_exe_path", L"log_path",
+    L"state", L"error", L"created_at", L"completed_at", L"attempt"
+  };
+
+  // Rebuild JSON without checksum field, in canonical key order.
   std::wstring payload = L"{";
   bool first = true;
-  for (const auto& [key, value] : json) {
-    if (key == L"checksum") continue;
+  for (const auto* key : kCanonicalOrder) {
+    auto found = json.find(key);
+    if (found == json.end()) continue;
+    const std::wstring& value = found->second;
     if (!first) payload += L",";
     first = false;
 
     // Check if value is a number (schema, app_pid, attempt).
-    bool isNumber = false;
-    if (key == L"schema" || key == L"app_pid" || key == L"attempt") {
-      isNumber = true;
-    }
+    bool isNumber = (wcscmp(key, L"schema") == 0 || wcscmp(key, L"app_pid") == 0 ||
+                     wcscmp(key, L"attempt") == 0);
 
-    payload += L"\"" + key + L"\":";
+    payload += L"\"" + std::wstring(key) + L"\":";
     if (isNumber) {
       payload += value;
     } else {

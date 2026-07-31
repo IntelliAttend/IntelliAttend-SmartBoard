@@ -498,7 +498,10 @@ class AutoUpdater {
         error: 'Failed to launch update agent. Try again later.',
         force: manifest.force,
       );
-      return;
+      // Throw so `_startUpdate` increments the circuit breaker. Without this,
+      // a persistent launch failure (e.g. missing update_agent.exe) retried
+      // every heartbeat forever, hammering the server with re-downloads.
+      throw Exception('Failed to launch update agent');
     }
 
     // ── 4. Done ──────────────────────────────────────────────────────────────

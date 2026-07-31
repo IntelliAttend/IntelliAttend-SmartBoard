@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
 /// Result of a path validation check.
 class PathValidationResult {
   /// Writable directories (passed validation).
@@ -17,7 +19,9 @@ class PathValidationResult {
 ///
 /// The root directory remains `%LOCALAPPDATA%\IntelliAttendSmartBoard` for
 /// backward compatibility with existing deployments. Internal separation
-/// into App/Data/Config/Cache/Updates/Logs/Backup is new.
+/// into Data/Config/Cache/Updates/Logs/Backup is the current contract; the
+/// binary directory is resolved at runtime from the running executable (see
+/// [appDir]) because the MSI and Inno Setup installers use different layouts.
 ///
 /// Every file path in the codebase MUST go through this class. No hardcoded
 /// paths are allowed outside of this file.
@@ -40,20 +44,63 @@ class InstallPaths {
       '${Platform.environment['USERPROFILE']}\\AppData\\Local';
 
   /// Root: `%LOCALAPPDATA%\IntelliAttendSmartBoard`
-  static String get root => '$_localAppData\\IntelliAttendSmartBoard';
+  static String get root =>
+      testRootOverride ?? '$_localAppData\\IntelliAttendSmartBoard';
   static Directory get rootDirectory => Directory(root);
 
-  // ── Binary directory (MSI-managed) ──────────────────────────────────────
+  // ── Binary directory ─────────────────────────────────────────────────────
+  //
+  // IMPORTANT (2026-07-31): The binary directory is resolved at runtime from
+  // the running executable, NOT hardcoded to `$root\App`.
+  //
+  //   - The legacy MSI installer (v5.5.0.11 and earlier) placed binaries in
+  //     `%LOCALAPPDATA%\IntelliAttendSmartBoard\App\`.
+  //   - The current Inno Setup installer (v5.5.0.12+, windows/inno_setup/
+  //     setup.iss) places binaries directly in the install root.
+  //
+  // Hardcoding `App\` broke self-update on Inno-installed boards: the app
+  // looked for `App\update_agent.exe` while the installer shipped it to the
+  // root, so UpdateAgentLauncher failed to launch the agent. Resolving from
+  // `Platform.resolvedExecutable` is correct for BOTH layouts and self-heals
+  // existing boards. Data/Config/Cache/Updates/Logs/Backup stay under [root].
 
-  /// Application binaries. MSI copies files here; the app never writes here.
-  static String get appDir => '$root\\App';
+  /// Test override for the install root. When set, the canonical `App\`
+  /// subdirectory layout is used so unit tests stay hermetic.
+  @visibleForTesting
+  static String? testRootOverride;
+
+  /// Directory containing the running application binary.
+  static String get appDir {
+    final override = testRootOverride;
+    if (override != null && override.isNotEmpty) return '$override\\App';
+    if (!kIsWeb && Platform.isWindows) {
+      try {
+        final exeDir = File(Platform.resolvedExecutable).parent.path;
+        if (exeDir.isNotEmpty) return exeDir;
+      } catch (_) {}
+    }
+    return '$root\\App';
+  }
   static Directory get appDirectory => Directory(appDir);
 
-  /// Primary executable path.
-  static String get exePath => '$appDir\\intelliattend_smartboard.exe';
+  /// Primary executable path (the running process).
+  static String get exePath {
+    final override = testRootOverride;
+    if (override != null && override.isNotEmpty) {
+      return '$override\\App\\intelliattend_smartboard.exe';
+    }
+    if (!kIsWeb && Platform.isWindows) {
+      try {
+        final exe = Platform.resolvedExecutable;
+        if (exe.isNotEmpty) return exe;
+      } catch (_) {}
+    }
+    return '$appDir\\intelliattend_smartboard.exe';
+  }
   static File get exeFile => File(exePath);
 
-  /// Detached update agent executable (Phase 1).
+  /// Detached update agent executable (Phase 1). Always co-located with the
+  /// running application binary in both installer layouts.
   static String get updateAgentPath => '$appDir\\update_agent.exe';
   static File get updateAgentFile => File(updateAgentPath);
 

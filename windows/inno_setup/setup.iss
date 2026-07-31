@@ -89,3 +89,22 @@ begin
   ExePath := ExpandConstant('{localappdata}\IntelliAttendSmartBoard\{#MyAppExeName}');
   Exec(ExePath, '--exit', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
+
+// The update agent (update_agent.exe) verifies every installer and every
+// installed exe with WinVerifyTrust. Releases are signed with a self-signed
+// IntelliAttend root, so that root must be present in the user's Trusted
+// Root store or every self-update is rejected. Install it on first install
+// (and every update) — idempotent, and CurrentUser\Root needs no admin.
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+  CerPath: String;
+begin
+  if CurStep = ssPostInstall then begin
+    CerPath := ExpandConstant('{app}\intelliattend_signing.cer');
+    if FileExists(CerPath) then begin
+      Exec('certutil.exe', '-user -addstore Root "' + CerPath + '"', '',
+           SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    end;
+  end;
+end;
