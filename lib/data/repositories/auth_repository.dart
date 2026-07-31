@@ -41,12 +41,13 @@ class AuthRepository implements IAuthRepository {
 
   @override
   Future<Map<String, dynamic>?> login(String boardId, String password) async {
+    final normalizedBoardId = boardId.trim().toUpperCase();
     try {
-      Log.i('[AuthRepository] Attempting REST login for Board: $boardId');
+      Log.i('[AuthRepository] Attempting REST login for Board: $normalizedBoardId');
 
       // SmartBoard ID is mapped to a lowercase email format per the
       // Accountable Device spec.
-      final email = AppConfig.boardIdToEmail(boardId);
+      final email = AppConfig.boardIdToEmail(normalizedBoardId);
 
       final authData =
           await FirebaseRestAuth.signInWithPassword(email, password);
@@ -82,6 +83,7 @@ class AuthRepository implements IAuthRepository {
   @override
   Future<Map<String, dynamic>?> initiateRegistration(
       String boardId, String password) async {
+    final normalizedBoardId = boardId.trim().toUpperCase();
     try {
       final idToken = await FirebaseRestAuth.getIdToken();
       
@@ -91,7 +93,7 @@ class AuthRepository implements IAuthRepository {
           headers: idToken != null ? {'Authorization': 'Bearer $idToken'} : null,
         ),
         data: {
-          'smart_board_id': boardId,
+          'smart_board_id': normalizedBoardId,
           'password': password,
         },
       );
@@ -147,6 +149,7 @@ class AuthRepository implements IAuthRepository {
     String verificationToken, {
     Map<String, dynamic>? metadata,
   }) async {
+    final normalizedBoardId = boardId.trim().toUpperCase();
     try {
       final idToken = await FirebaseRestAuth.getIdToken();
 
@@ -156,7 +159,7 @@ class AuthRepository implements IAuthRepository {
           headers: idToken != null ? {'Authorization': 'Bearer $idToken'} : null,
         ),
         data: {
-          'smart_board_id': boardId,
+          'smart_board_id': normalizedBoardId,
           'hardware_id': hardwareId,
           'verification_token': verificationToken,
           if (metadata != null) 'metadata': metadata,
