@@ -29,6 +29,13 @@ name: Auto-Deploy
 on:
   push:
     branches: [school-main]
+    paths:
+      - "lib/**"
+      - "windows/**"
+      - "assets/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/auto-deploy.yml"
   workflow_dispatch:
 
 permissions:
@@ -122,28 +129,62 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Calculate version
+      - name: Reserve release version
         id: version
-        shell: pwsh
+        shell: bash
         run: |
-          # Read version from pubspec.yaml
-          $pubspec = Get-Content pubspec.yaml -Raw
-          if ($pubspec -match 'version:\s*(\d+)\.(\d+)\.(\d+)\+(\d+)') {
-            $major = $Matches[1]
-            $minor = $Matches[2]
-            $patch = $Matches[3]
-            $build = [int]$Matches[4] + 1
-            $version = "$major.$minor.$patch.$build"
-            $flutterVersion = "$major.$minor.$patch+$build"
-          } else {
-            Write-Host "ERROR: Could not parse version from pubspec.yaml" -ForegroundColor Red
+          set -euo pipefail
+          # Reserve a strictly-increasing, collision-proof version by pushing a
+          # git tag as a lock. If the tag already exists (concurrent run or a
+          # previously-bumped floor), re-fetch pubspec.yaml and try the next one.
+          for attempt in $(seq 1 30); do
+            PUBSPEC="$(cat pubspec.yaml)"
+            if [[ "$PUBSPEC" =~ version:[[:space:]]*([0-9]+)\.([0-9]+)\.([0-9]+)\+([0-9]+) ]]; then
+              MAJOR="${BASH_REMATCH[1]}"
+              MINOR="${BASH_REMATCH[2]}"
+              PATCH="${BASH_REMATCH[3]}"
+              BUILD="$(( ${BASH_REMATCH[4]} + 1 ))"
+            else
+              echo "ERROR: could not parse version from pubspec.yaml" >&2
+              exit 1
+            fi
+            VERSION="${MAJOR}.${MINOR}.${PATCH}.${BUILD}"
+            FLUTTER_VERSION="${MAJOR}.${MINOR}.${PATCH}+${BUILD}"
+            TAG="v${VERSION}"
+            echo "[$attempt] attempting $VERSION ($FLUTTER_VERSION, $TAG)"
+            if git tag "$TAG" 2>/dev/null && git push origin "$TAG" 2>/dev/null; then
+              echo "Reserved version $VERSION (tag $TAG)"
+              echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+              echo "flutter_version=$FLUTTER_VERSION" >> "$GITHUB_OUTPUT"
+              echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "[$attempt] tag $TAG already exists — re-fetching bumped version floor"
+            git fetch -q origin school-main
+            git show FETCH_HEAD:pubspec.yaml > pubspec.yaml
+          done
+          echo "ERROR: could not reserve a unique version after 30 attempts" >&2
+          exit 1
+
+      - name: Bump pubspec and commit back to repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.flutter_version }}"
+          sed -i "s/^version: .*/version: $VERSION/" pubspec.yaml
+          grep -q "^version: ${VERSION}$" pubspec.yaml || {
+            echo "ERROR: failed to write version $VERSION into pubspec.yaml" >&2
             exit 1
           }
-          $tag = "v$version"
-          Write-Host "Version: $version (Flutter: $flutterVersion)"
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "flutter_version=$flutterVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pubspec.yaml
+          git commit -m "chore(release): bump version to $VERSION [skip ci]"
+          # Keep the repo's version floor moving even if the build later fails.
+          # [skip ci] prevents this commit from re-triggering any workflow.
+          git pull --rebase origin school-main 2>/dev/null || true
+          git push origin HEAD:school-main
+          echo "Bumped pubspec to $VERSION and pushed to school-main"
 
       - name: Install Flutter
         uses: subosito/flutter-action@v2
@@ -176,15 +217,6 @@ jobs:
 
       - name: Run tests
         run: flutter test
-
-      - name: Update version in pubspec
-        shell: pwsh
-        run: |
-          $version = "${{ steps.version.outputs.flutter_version }}"
-          $pubspec = Get-Content pubspec.yaml -Raw
-          $pubspec = $pubspec -replace 'version: .*', "version: $version"
-          [System.IO.File]::WriteAllText("pubspec.yaml", $pubspec)
-          Write-Host "Updated pubspec.yaml to version $version"
 
       - name: Clean build artifacts
         shell: bash
