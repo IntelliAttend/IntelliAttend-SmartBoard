@@ -121,11 +121,12 @@ class AuthRepository implements IAuthRepository {
 
   @override
   Future<Map<String, dynamic>?> verifyOtp(String boardId, String otp) async {
+    final normalizedBoardId = boardId.trim().toUpperCase();
     try {
       final response = await apiClient.dio.post(
         '/api/v1/device/register/verify',
         data: {
-          'smart_board_id': boardId,
+          'smart_board_id': normalizedBoardId,
           'otp': otp,
         },
       );
