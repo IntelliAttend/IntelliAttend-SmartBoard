@@ -29,11 +29,10 @@ String? findIsarDll() {
 
 void main() {
   late Directory tempRoot;
-  late Directory tempAppDir;
   Isar? testIsar;
 
   /// The FlutterSecureStorage method channel name.
-  const _secureChannel =
+  const secureChannel =
       MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
 
   setUp(() async {
@@ -41,12 +40,12 @@ void main() {
 
     // ── Temp directory for InstallPaths ─────────────────────────────────
     tempRoot = Directory.systemTemp.createTempSync('reinstall_test_');
-    tempAppDir = Directory('${tempRoot.path}\\App')..createSync(recursive: true);
+    Directory('${tempRoot.path}\\App').createSync(recursive: true);
     InstallPaths.testRootOverride = tempRoot.path;
 
     // ── FlutterSecureStorage mock (all reads return null) ───────────────
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(_secureChannel, (MethodCall call) async {
+        .setMockMethodCallHandler(secureChannel, (MethodCall call) async {
       switch (call.method) {
         case 'read':
           return null;
@@ -99,7 +98,7 @@ void main() {
     }
     tempRoot.deleteSync(recursive: true);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(_secureChannel, null);
+        .setMockMethodCallHandler(secureChannel, null);
   });
 
   // ── Helpers ──────────────────────────────────────────────────────────
@@ -119,7 +118,7 @@ void main() {
     required bool hasRefreshToken,
   }) async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(_secureChannel, (MethodCall call) async {
+        .setMockMethodCallHandler(secureChannel, (MethodCall call) async {
       switch (call.method) {
         case 'read':
           final key = call.arguments['key'] as String;
@@ -147,7 +146,7 @@ void main() {
   /// Replace SecureStorage mock so all reads return null (post-clear).
   void simulateSecureStorageGetsCleared() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(_secureChannel, (MethodCall call) async {
+        .setMockMethodCallHandler(secureChannel, (MethodCall call) async {
       switch (call.method) {
         case 'read':
           return null;
@@ -360,7 +359,7 @@ void main() {
       'Resilience — SecureStorage throws is handled gracefully',
       () async {
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-            .setMockMethodCallHandler(_secureChannel, (MethodCall call) async {
+            .setMockMethodCallHandler(secureChannel, (MethodCall call) async {
           throw PlatformException(
               code: 'UNEXPECTED_ERROR', message: 'mock failure');
         });

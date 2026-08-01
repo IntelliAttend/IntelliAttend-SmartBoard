@@ -1578,7 +1578,7 @@ void main() {
     test('registration preserved across a failed update', () async {
       await _scenario('14 — Configuration Preservation',
           'Board registration survives a failed update attempt', '', (r) async {
-        final file = File('${InstallPaths.registrationFile}');
+        final file = File(InstallPaths.registrationFile);
         file.createSync(recursive: true);
         file.writeAsStringSync('{"boardId":"B-42","registered":true}');
         final bytes = installerBytes(64 * 1024);

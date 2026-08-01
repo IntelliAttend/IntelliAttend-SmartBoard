@@ -166,9 +166,6 @@ Map<String, dynamic> acceptanceMetrics() {
       ValidationSuite.results.where((r) => r.isExecuted).toList();
   final passed = executed.where((r) => r.pass == true).length;
 
-  String rate(String metricId, String value) =>
-      '${value} (${metricId})';
-
   return {
     'update_success_rate_ge_99.9':
         '${executed.isEmpty ? 'N/A' : '${(passed / executed.length * 100).toStringAsFixed(1)}%'} '

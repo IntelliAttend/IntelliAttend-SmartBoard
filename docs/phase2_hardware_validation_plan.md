@@ -13,6 +13,31 @@ This document turns the 40 PENDING scenarios from
 
 ---
 
+## 0. Document Control & Freeze Policy
+
+| Field | Value |
+|-------|-------|
+| Version | 1.1 |
+| Date | 2026-08-01 |
+| Status | **FROZEN** (spec changes require the change-control process below) |
+| Applicable to | Build tagged `validation-candidate-v2` |
+| Owner | QA / Validation (evidence standard + gate report authoring) |
+
+**Freeze rule:** do NOT modify this plan while a gate is executing unless a
+genuine defect is found in the test procedure itself (not in the product). If a
+test must change:
+
+1. Record *why* (open a defect/triage note).
+2. Bump the version below and keep the old version archived.
+3. Record which plan version every test run used (evidence field).
+
+| Rev | Date | Change | Reason |
+|-----|------|--------|--------|
+| 1.0 | 2026-08-01 | Initial plan (Gates A–F, evidence standard, RRR) | Approved by reviewer |
+| 1.1 | 2026-08-01 | Document control, Gate A staged execution order, operator directive | Operational readiness before Gate A |
+
+---
+
 ## 1. Charter & Operating Rules
 
 **Mission:** prove the 40 hardware/fleet scenarios in the Phase 1 gap matrix with
@@ -24,8 +49,9 @@ real, documented evidence — or fail them loudly.
 - Rationale: every code change resets confidence; the codebase under test must
   remain identical across the entire campaign (record the exact commit per run).
 
-**Version under test:** the merge commit, tagged `validation-candidate-v1`
-(Phase 1 final: v5.5.0+17 `fb27994` + Phase 1 fixes).
+**Version under test:** tagged `validation-candidate-v2` (Phase 1 stabilization
++ CI-green lint fixes). The exact commit hash is recorded per run in every
+scenario's evidence record.
 
 ---
 
@@ -91,8 +117,46 @@ installer-copy stages, additionally inject at ~50% and ~95%.
 5. Assert: **machine boots old OR new version — never a broken state.**
 6. If new version boots: run 3 stable boots before declaring clean.
 
+### Gate A execution order (staged — do not execute randomly)
+
+Confidence is built in three stages. Only proceed to the next stage after the
+previous stage's scenarios all close green.
+
+**Stage 1 — Confidence building** (recovery mechanism works):
+`SC-051 → SC-052 → SC-053 → SC-055 → SC-057 → then one post-cut recovery check.`
+Establishes that the board deterministically boots old-or-new after cuts in the
+low-risk window.
+
+**Stage 2 — Installation window** (highest corruption risk; inject at ~50% and
+~95% where marked):
+`SC-058 → SC-059 → SC-060 → SC-061 → SC-062.`
+These are where partial installs / orphaned state are most likely; treat every
+anomaly here as a STOP-and-triage, not a skip.
+
+**Stage 3 — Restart window** (installation → operational transition):
+`SC-063 → SC-064 → SC-065 → SC-054 → SC-056.`
+Validates the transition from install to operational state, then the remaining
+download-stage percentages (40% / 99%) for completeness.
+
 **Pass criteria:** 0 bricked boards; 0 unbootable states; every scenario has
-video + `update_state.json` + health log + boot log.
+video + `update_state.json` + health log + boot log. Every unexpected shutdown
+ends in **the previous version OR the fully updated version — never an
+intermediate or unusable state.** No orphaned installation state, no rollback
+corruption.
+
+### Operator directive (issued to the Hardware Lab lead)
+
+> **Objective:** Validate that `validation-candidate-v2` survives uncontrolled
+> power interruption at every defined stage of the update pipeline.
+>
+> **Scope:** Execute Gate A (SC-051–SC-065) exactly as documented, in the staged
+> order above. Do not modify the test plan during execution. Record complete
+> evidence for every scenario. Any anomaly — no matter how small — is logged and
+> investigated before continuing.
+>
+> **Exit criteria:** All scenarios executed with documented evidence, no
+> unrecoverable board state, and every failure path demonstrating deterministic
+> recovery or rollback.
 
 ---
 

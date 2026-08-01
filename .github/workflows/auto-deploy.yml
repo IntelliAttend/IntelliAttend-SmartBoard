@@ -4,8 +4,14 @@
 # Triggered on push to school-main. Automatically:
 #   1. Builds Windows app via Flutter
 #   2. Packages with Inno Setup → single setup.exe
-#   3. Creates GitHub Release with version tag
-#   4. Publishes latest.json manifest for auto-update
+#   3. Creates GitHub Release with version tag + full artifact set
+#   4. Archives validation evidence (checksums, build-info, agent, symbols)
+#
+# FLEET PROMOTION IS GATED (Phase 2 validation):
+#   Boards are updated via ci-upload (force=true, rollout 100%). This step runs
+#   ONLY on a manual workflow_dispatch with promote=true. Every other push builds
+#   + archives but never touches the fleet. During hardware validation the fleet
+#   must stay frozen until all 40 pending scenarios have evidence.
 #
 # SmartBoard devices poll latest.json and auto-download new versions.
 #
@@ -37,6 +43,12 @@ on:
       - "pubspec.lock"
       - ".github/workflows/auto-deploy.yml"
   workflow_dispatch:
+    inputs:
+      promote:
+        description: 'Promote build to fleet (ci-upload with force=true, rollout 100%). Default off — fleet deploys are gated during Phase 2 validation.'
+        required: false
+        default: 'false'
+        type: boolean
 
 permissions:
   contents: write
@@ -560,6 +572,61 @@ jobs:
           $manifest | ConvertTo-Json | Out-File -FilePath "build\windows\x64\runner\Release\latest.json" -Encoding UTF8
           Write-Host "Manifest created"
 
+      - name: Generate build info and checksums (validation evidence)
+        id: buildinfo
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $buildDir = "build\windows\x64\runner\Release"
+          $agentExe = "${{ steps.agent.outputs.agent_path }}"
+
+          $artifactFiles = @(
+            (Join-Path $buildDir "IntelliAttendSmartBoard-$version-Setup.exe"),
+            (Join-Path $buildDir "IntelliAttendSmartBoard-$version.sha256"),
+            (Join-Path $buildDir "latest.json"),
+            "$agentExe"
+          )
+          $cer = Join-Path $buildDir "intelliattend_signing.cer"
+          if (Test-Path $cer) { $artifactFiles += $cer }
+
+          $lines = foreach ($f in $artifactFiles) {
+            if (Test-Path $f) {
+              $h = (Get-FileHash -Path $f -Algorithm SHA256).Hash.ToLower()
+              "$h *$([IO.Path]::GetFileName($f))"
+            }
+          }
+          $lines | Set-Content -Path "SHA256SUMS" -Encoding UTF8
+
+          $buildInfo = [ordered]@{
+            build_version = "$version"
+            flutter_version = "${{ steps.version.outputs.flutter_version }}"
+            commit = "${{ github.sha }}"
+            tag = "${{ steps.version.outputs.tag }}"
+            run_id = "${{ github.run_id }}"
+            promoted = "${{ inputs.promote }}"
+            build_timestamp = (Get-Date).ToUniversalTime().ToString("o")
+            flutter_sdk = "3.44.6"
+          }
+          $buildInfo | ConvertTo-Json | Set-Content -Path "build-info.json" -Encoding UTF8
+          Get-Content SHA256SUMS
+          Write-Host "build-info.json + SHA256SUMS written" -ForegroundColor Green
+
+      - name: Upload build artifacts (validation evidence)
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-candidate-${{ steps.version.outputs.version }}
+          path: |
+            build\windows\x64\runner\Release\*-Setup.exe
+            build\windows\x64\runner\Release\*.sha256
+            build\windows\x64\runner\Release\latest.json
+            build\windows\x64\runner\Release\*.cer
+            build\windows\x64\runner\Release\*.pdb
+            build\windows\x64\update_agent\Release\update_agent.exe
+            build\windows\x64\update_agent\Release\*.pdb
+            SHA256SUMS
+            build-info.json
+          if-no-files-found: warn
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -574,6 +641,12 @@ jobs:
             build\windows\x64\runner\Release\*-Setup.exe
             build\windows\x64\runner\Release\*.sha256
             build\windows\x64\runner\Release\latest.json
+            build\windows\x64\runner\Release\*.cer
+            build\windows\x64\runner\Release\*.pdb
+            build\windows\x64\update_agent\Release\update_agent.exe
+            build\windows\x64\update_agent\Release\*.pdb
+            SHA256SUMS
+            build-info.json
           draft: false
           prerelease: false
 
@@ -599,8 +672,8 @@ jobs:
             echo "Warning: Server may not be fully ready, proceeding with upload anyway"
           fi
 
-      - name: Upload to server
-        if: ${{ vars.SERVER_URL != '' }}
+      - name: Upload to server (fleet promotion — GATED)
+        if: ${{ inputs.promote == 'true' && vars.SERVER_URL != '' }}
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"

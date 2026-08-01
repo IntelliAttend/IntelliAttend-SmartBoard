@@ -120,7 +120,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
             if (!mounted) return;
             final deviceRepo = context.read<IDeviceRepository>();
             final registration = await deviceRepo.getRegistration();
-            if (!mounted) return;
+            if (!mounted || !context.mounted) return;
             if (registration != null) {
               Log.i('[RegistrationScreen] Registration confirmed in Isar — navigating directly to IdleScreen.');
               Navigator.of(context).pushAndRemoveUntil(
