@@ -23,6 +23,12 @@
 #ifndef SourceDir
   #define SourceDir "..\..\build\windows\x64\runner\Release"
 #endif
+; Phase 1 isolation: update_agent.exe is built separately by CI and installed
+; OUTSIDE {app} (see [Files]). It must NOT live inside SourceDir or it would be
+; copied into {app} and overwritten while running during self-update.
+#ifndef AgentDir
+  #define AgentDir "..\..\build\windows\x64\update_agent\Release"
+#endif
 
 [Setup]
 AppId={{865FA9F9-CBE0-4650-8444-D3B4168B49C1}
@@ -60,7 +66,17 @@ MinVersion=10.0.17763
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+; update_agent.exe is EXCLUDED from the recursive {app} copy (Phase 1): the
+; running agent must never be overwritten by the app installer. It is installed
+; to a dedicated directory outside {app} below.
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "update_agent.exe"; Flags: recursesubdirs ignoreversion
+
+; The update agent is installed OUTSIDE the app directory
+; (%LOCALAPPDATA%\IntelliAttend\UpdateAgent\) so a self-update can never
+; overwrite the running agent (Windows locks running images). The Check skips
+; the copy while the agent is running (detected via its update_agent.running
+; marker) — a fresh install has no marker, so the agent IS installed there.
+Source: "{#AgentDir}\update_agent.exe"; DestDir: "{localappdata}\IntelliAttend\UpdateAgent"; Flags: ignoreversion uninsneveruninstall; Check: not AgentRunning
 
 [Dirs]
 Name: "{app}\data"; Flags: uninsalwaysuninstall
@@ -80,6 +96,17 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: no
 Type: filesandordirs; Name: "{app}"
 
 [Code]
+// Returns True if the update agent is currently running. The agent drops
+// update_agent.running in its home dir at boot and removes it on exit; while
+// the marker exists the installer must NOT overwrite the running exe.
+function AgentRunning(): Boolean;
+var
+  Marker: String;
+begin
+  Marker := ExpandConstant('{localappdata}\IntelliAttend\UpdateAgent\update_agent.running');
+  Result := FileExists(Marker);
+end;
+
 function InitializeSetup(): Boolean;
 var
   ResultCode: Integer;

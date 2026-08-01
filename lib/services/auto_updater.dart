@@ -134,6 +134,9 @@ class AutoUpdater {
   /// during the first 30s of startup (prevents overlay on boot).
   static DateTime? _initializedAt;
 
+  /// Effective initialization time — [debugInitializedAt] wins when set.
+  static DateTime? get _effectiveInitializedAt => debugInitializedAt ?? _initializedAt;
+
   /// The parsed installed version, available after [init] is called.
   static Version get installedVersion => _installedVersion;
 
@@ -171,6 +174,57 @@ class AutoUpdater {
 
   /// HTTP client timeout for downloads.
   static const Duration _downloadTimeout = Duration(minutes: 10);
+
+  // ── Test seams (used by the Phase 1 validation harness) ──────────────────
+  //
+  // These are `@visibleForTesting` injection points so the validation suite
+  // can drive the real pipeline deterministically without a device, a real
+  // update server, or a real detached update agent.
+
+  /// Overrides the installed version reported by [installedVersion].
+  @visibleForTesting
+  static String? testInstalledVersionOverride;
+
+  /// Overrides [_initializedAt] so the 30-second startup guard can be
+  /// satisfied immediately in validation scenarios.
+  @visibleForTesting
+  static DateTime? debugInitializedAt;
+
+  /// Overrides the disk-space probe so tests can simulate full/low/fail-open
+  /// disks deterministically (the real probe shells out to PowerShell).
+  @visibleForTesting
+  static Future<bool> Function()? diskSpaceProbeOverride;
+
+  /// Overrides the detached-agent launch so tests can capture launch
+  /// arguments and simulate success/failure without spawning a process.
+  @visibleForTesting
+  static Future<bool> Function({
+    required String installerPath,
+    required String targetVersion,
+    required String expectedSha256,
+    required String logPath,
+  })? agentLauncherOverride;
+
+  /// When false, the pipeline stops before `exit(0)` so the test process
+  /// survives a completed update.
+  @visibleForTesting
+  static bool debugExitOnCompletion = true;
+
+  /// Overrides the download timeout (default 10 minutes) so timeout
+  /// scenarios finish quickly.
+  @visibleForTesting
+  static Duration downloadTimeoutOverride = _downloadTimeout;
+
+  /// Whether an update pipeline is currently executing. Closes the TOCTOU
+  /// window between two near-simultaneous `checkForUpdate` calls: a
+  /// synchronous claim is taken immediately before [ _startUpdate] runs, so
+  /// interleaved calls can never both enter the pipeline even before
+  /// [progress] is populated.
+  static bool _updatePipelineInFlight = false;
+
+  /// True while a pipeline is executing (validation harness polls this).
+  @visibleForTesting
+  static bool get debugUpdateInFlight => _updatePipelineInFlight;
 
   // ── Initialisation ────────────────────────────────────────────────────────
 
@@ -213,14 +267,17 @@ class AutoUpdater {
   /// or the board is not in the rollout cohort.
   /// If [silent] is true, failures are logged but no overlay is shown.
   static Future<bool> checkForUpdate(UpdateManifest manifest, {bool silent = false}) async {
-    // Guard: AutoUpdater.init() must be called before checkForUpdate.
-    if (_packageInfo == null) {
+    // Guard: AutoUpdater.init() must be called before checkForUpdate
+    // (unless the validation harness injects an installed-version override).
+    if (_packageInfo == null && testInstalledVersionOverride == null) {
       Log.w('[AutoUpdater] checkForUpdate skipped — AutoUpdater not yet initialized');
       return false;
     }
 
     // Guard: skip updates during first 30s of startup to prevent overlay on boot.
-    if (_initializedAt != null && DateTime.now().difference(_initializedAt!) < const Duration(seconds: 30)) {
+    final initializedAt = _effectiveInitializedAt;
+    if (initializedAt != null &&
+        DateTime.now().difference(initializedAt) < const Duration(seconds: 30)) {
       Log.d('[AutoUpdater] Skipping update check — app still starting up');
       return false;
     }
@@ -285,6 +342,11 @@ class AutoUpdater {
     // - Non-terminal states (downloading/verifying/installing): block unless
     //   force=true AND stuck >5 min.
     // - Failed state: block unless force=true (admin intent).
+    if (_updatePipelineInFlight) {
+      Log.w('[AutoUpdater] Update pipeline already in flight — ignoring '
+          'concurrent update request');
+      return false;
+    }
     if (progress.value != null) {
       final ps = progress.value!.state;
       final elapsed = DateTime.now().difference(progress.value!.startedAt);
@@ -300,17 +362,6 @@ class AutoUpdater {
           Log.d('[AutoUpdater] Update already in progress — ignoring');
           return false;
         }
-      }
-
-      if (ps == UpdateState.failed) {
-        if (!forceUpdate) {
-          Log.d('[AutoUpdater] Previous update failed — waiting for user action');
-          availableUpdate.value = manifest;
-          return false;
-        }
-        // Force update overrides failure; reset circuit breaker for retry.
-        resetCircuitBreaker();
-        progress.value = null;
       }
     }
 
@@ -346,6 +397,15 @@ class AutoUpdater {
     Log.i('[AutoUpdater] Update available: v$installed → v${manifest.minimumVersion} '
         '(${manifest.force ? "forced" : "optional"})');
 
+    // Single-flight claim. Synchronous check+set with no await between, so
+    // two interleaved checkForUpdate calls can never both enter the pipeline
+    // (the TOCTOU window before [progress] is populated is now closed).
+    if (_updatePipelineInFlight) {
+      Log.w('[AutoUpdater] Update pipeline already in flight — ignoring');
+      return false;
+    }
+    _updatePipelineInFlight = true;
+
     _startUpdate(manifest, installed, silent: silent);
     return true;
   }
@@ -358,13 +418,18 @@ class AutoUpdater {
     try {
       await _startUpdatePipeline(manifest, currentVersion, silent: silent);
       // Pipeline succeeded — reset circuit breaker and allow re-check.
+      // Deliberately keep `_lastCheckedManifestFingerprint` so a replay of the
+      // same manifest is deduplicated (the "already up to date" version guard
+      // normally covers this after a real install; the fingerprint closes the
+      // same-process replay window).
       _consecutiveFailures = 0;
       _failedVersionFingerprint = null;
-      _lastCheckedManifestFingerprint = null;
     } catch (e) {
       Log.e('[AutoUpdater] Update pipeline failed unexpectedly: $e');
       _lastCheckedManifestFingerprint = null;
       _incrementCircuitBreaker(manifest);
+    } finally {
+      _updatePipelineInFlight = false;
     }
   }
 
@@ -379,12 +444,25 @@ class AutoUpdater {
     //
     // Before modifying the installed binaries, preserve the current version
     // so [UpdateHealthMonitor] can perform a clean rollback if the new
-    // version crashes.
-    await UpdateHealthMonitor.preserveCurrentInstall(
+    // version crashes. This is FAIL-CLOSED: if the backup cannot be created,
+    // the update is aborted rather than proceeding without rollback
+    // capability (a requirement of the Phase 1 validation matrix).
+    final backedUp = await UpdateHealthMonitor.preserveCurrentInstall(
       currentVersion,
       url,
       manifest.sha256,
     );
+    if (!backedUp) {
+      Log.e('[AutoUpdater] Backup failed — aborting update so rollback '
+          'capability is never silently lost');
+      progress.value = UpdateProgress(
+        state: UpdateState.failed,
+        targetVersion: targetVersion,
+        error: 'Could not back up the current version. Update aborted.',
+        force: manifest.force,
+      );
+      throw Exception('Backup failed; update aborted');
+    }
 
     // ── 1. Download ──────────────────────────────────────────────────────────
 
@@ -403,11 +481,32 @@ class AutoUpdater {
       force: manifest.force,
     );
 
+    // The SHA-256 of the downloaded bytes is computed incrementally during the
+    // stream (never loading the whole installer into memory), and returned for
+    // the verification step below — no post-download re-read of the file.
+    String downloadedHash = '';
+
     try {
-      await _downloadWithProgress(url, installerPath, manifest.force);
+      downloadedHash =
+          await _downloadWithProgress(url, installerPath, manifest.force);
+      if (_dismissRequested) {
+        _dismissRequested = false;
+        if (await installerFile.exists()) {
+          try {
+            await installerFile.delete();
+          } catch (_) {}
+        }
+        return;
+      }
+      Log.i('[AutoUpdater] Download complete. Computed SHA-256: $downloadedHash');
     } catch (e) {
       if (_dismissRequested) {
         _dismissRequested = false;
+        if (await installerFile.exists()) {
+          try {
+            await installerFile.delete();
+          } catch (_) {}
+        }
         return;
       }
       Log.e('[AutoUpdater] Download failed: $e');
@@ -437,10 +536,9 @@ class AutoUpdater {
 
     if (manifest.sha256 != null && manifest.sha256!.isNotEmpty) {
       try {
-        final ok = await _verifyHash(installerPath, manifest.sha256!);
-        if (!ok) {
+        if (!_matchesHash(downloadedHash, manifest.sha256!)) {
           throw Exception(
-              'SHA-256 mismatch. Expected ${manifest.sha256}, got computed hash');
+              'SHA-256 mismatch. Expected ${manifest.sha256}, got $downloadedHash');
         }
         Log.i('[AutoUpdater] Hash verification passed');
       } catch (e) {
@@ -483,12 +581,19 @@ class AutoUpdater {
     final logPath =
         '${InstallPaths.logDir}\\update_${DateTime.now().millisecondsSinceEpoch}.log';
 
-    final launched = await UpdateAgentLauncher.launch(
-      installerPath: installerPath,
-      targetVersion: targetVersion,
-      expectedSha256: manifest.sha256 ?? '',
-      logPath: logPath,
-    );
+    final launched = agentLauncherOverride != null
+        ? await agentLauncherOverride!(
+            installerPath: installerPath,
+            targetVersion: targetVersion,
+            expectedSha256: manifest.sha256 ?? '',
+            logPath: logPath,
+          )
+        : await UpdateAgentLauncher.launch(
+            installerPath: installerPath,
+            targetVersion: targetVersion,
+            expectedSha256: manifest.sha256 ?? '',
+            logPath: logPath,
+          );
 
     if (!launched) {
       Log.e('[AutoUpdater] Failed to launch update agent');
@@ -515,29 +620,41 @@ class AutoUpdater {
 
     Log.i('[AutoUpdater] Agent launched for v$targetVersion. Exiting.');
 
-    // Small delay so the UI overlay can show the "completed" state.
-    await Future.delayed(const Duration(seconds: 2));
+    if (debugExitOnCompletion) {
+      // Small delay so the UI overlay can show the "completed" state.
+      await Future.delayed(const Duration(seconds: 2));
 
-    // Exit the app. The agent owns the update process from here.
-    exit(0);
+      // Exit the app. The agent owns the update process from here.
+      exit(0);
+    }
   }
 
   // ── Download with progress ────────────────────────────────────────────────
 
-  /// Stream the installer from [url] to [destination], updating [progress] along
-  /// the way. Uses chunked transfer to avoid loading the entire file into
-  /// memory — critical on low-RAM kiosk hardware.
-  static Future<void> _downloadWithProgress(
+  /// Stream the installer from [url] to [destination], updating [progress]
+  /// along the way. Uses chunked transfer to avoid loading the entire file
+  /// into memory — critical on low-RAM kiosk hardware.
+  ///
+  /// SHA-256 is computed incrementally on the same bytes (via a chunked
+  /// conversion) and the hex digest is returned. This replaces the old
+  /// "download then read the whole file back into RAM to hash" approach.
+  static Future<String> _downloadWithProgress(
       String url, String destination, bool force) async {
     final client = http.Client();
     _activeDownloadClient = client;
     _activeDownloadPath = destination;
+
+    // Streaming SHA-256: feeds every chunk through the hasher so no
+    // post-download re-read of the installer is ever needed.
+    final digest = _DigestCapture();
+    final hasher = sha256.startChunkedConversion(digest);
+
     try {
       final request = http.Request('GET', Uri.parse(url));
       // Suggest a reasonable timeout — the download may be large.
       final response = await client
           .send(request)
-          .timeout(_downloadTimeout);
+          .timeout(downloadTimeoutOverride);
 
       if (response.statusCode != 200) {
         throw HttpException(
@@ -547,50 +664,76 @@ class AutoUpdater {
       final contentLength = response.contentLength ?? 0;
       final file = File(destination);
       final sink = file.openWrite();
+      var sinkClosed = false;
 
       int bytesReceived = 0;
-      await for (final chunk in response.stream) {
-        sink.add(chunk);
-        bytesReceived += chunk.length;
+      try {
+        await for (final chunk in response.stream) {
+          // Abort promptly when the user dismisses the overlay. [dismiss] has
+          // already closed the active client; this makes the stream error out
+          // immediately instead of draining the remaining body.
+          if (_dismissRequested) {
+            throw const _DownloadCancelled();
+          }
+          sink.add(chunk);
+          hasher.add(chunk);
+          bytesReceived += chunk.length;
 
-        if (contentLength > 0) {
-          progress.value = UpdateProgress(
-            state: UpdateState.downloading,
-            targetVersion: progress.value?.targetVersion ?? '?',
-            fraction: bytesReceived / contentLength,
-            force: force,
-          );
-        } else if (bytesReceived > 0 && bytesReceived % (512 * 1024) == 0) {
-          // Unknown total size — show indeterminate progress every 512KB
-          progress.value = UpdateProgress(
-            state: UpdateState.downloading,
-            targetVersion: progress.value?.targetVersion ?? '?',
-            fraction: -1,
-            force: force,
-          );
+          if (contentLength > 0) {
+            progress.value = UpdateProgress(
+              state: UpdateState.downloading,
+              targetVersion: progress.value?.targetVersion ?? '?',
+              fraction: bytesReceived / contentLength,
+              force: force,
+            );
+          } else if (bytesReceived > 0 && bytesReceived % (512 * 1024) == 0) {
+            // Unknown total size — show indeterminate progress every 512KB
+            progress.value = UpdateProgress(
+              state: UpdateState.downloading,
+              targetVersion: progress.value?.targetVersion ?? '?',
+              fraction: -1,
+              force: force,
+            );
+          }
+        }
+
+        await sink.flush();
+        await sink.close();
+        sinkClosed = true;
+        hasher.close();
+      } finally {
+        // Ensure a mid-stream error cannot leak the file handle.
+        if (!sinkClosed) {
+          try {
+            await sink.close();
+          } catch (_) {}
         }
       }
 
-      await sink.flush();
-      await sink.close();
-
       Log.i('[AutoUpdater] Downloaded $bytesReceived bytes to $destination');
+      return digest.value?.toString() ?? '';
     } finally {
       _activeDownloadClient = null;
       _activeDownloadPath = null;
       client.close();
+      // On Windows an open file handle cannot be deleted, so [dismiss]'s
+      // synchronous delete fails silently while the stream is still open.
+      // Delete the partial file here, after the sink has been closed.
+      if (_dismissRequested) {
+        try {
+          final f = File(destination);
+          if (f.existsSync()) f.deleteSync();
+        } catch (_) {}
+      }
     }
   }
 
   // ── Hash verification ─────────────────────────────────────────────────────
 
-  /// Compute SHA-256 of the file at [path] and compare it (hex) to [expected].
-  static Future<bool> _verifyHash(String path, String expected) async {
-    final file = File(path);
-    final bytes = await file.readAsBytes();
-    final hash = sha256.convert(bytes).toString();
-    return hash.toLowerCase() == expected.toLowerCase();
-  }
+  /// Case-insensitive hex comparison of the streamed SHA-256 digest against
+  /// the manifest's expected hash.
+  static bool _matchesHash(String computedHex, String expectedHex) =>
+      computedHex.toLowerCase() == expectedHex.toLowerCase();
 
   // ── Dismiss (user-initiated cancel) ───────────────────────────────────────
 
@@ -681,6 +824,12 @@ class AutoUpdater {
 
   /// Current installed version, parsed from [PackageInfo].
   static Version get _installedVersion {
+    final override = testInstalledVersionOverride;
+    if (override != null && override.isNotEmpty) {
+      try {
+        return Version.parse(override);
+      } catch (_) {}
+    }
     if (_packageInfo == null) return Version.zero;
     try {
       // PackageInfo.version already contains the build number (e.g. "5.5.0+6").
@@ -691,11 +840,58 @@ class AutoUpdater {
     }
   }
 
-  /// Best-effort disk space check. Currently returns true (assumes enough
-  /// space). On Windows a future implementation can use `GetDiskFreeSpaceExW`
-  /// via `dart:ffi` for accurate reporting.
+  /// Minimum free bytes required on the staging drive before an update is
+  /// accepted. The installer can be a few hundred MB (Inno Setup compresses
+  /// heavily but the unpacked app is larger), and the rollback backup adds
+  /// headroom on top.
+  static const int _minFreeDiskBytes = 200 * 1024 * 1024; // 200 MB
+
+  /// Best-effort disk space check on the update staging drive.
+  ///
+  /// On Windows queries `Get-PSDrive` (avoids adding a native `ffi`/win32
+  /// dependency). Returns `true` (allow) if the probe cannot be performed so
+  /// updates are never blocked by a check failure, only by a genuine shortage.
   static Future<bool> _hasEnoughDiskSpace() async {
+    try {
+      if (diskSpaceProbeOverride != null) {
+        return await diskSpaceProbeOverride!();
+      }
+      if (Platform.isWindows) {
+        final drive = _driveLetter(InstallPaths.updateDir);
+        final result = await Process.run(
+          'powershell.exe',
+          [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            "(Get-PSDrive -Name '$drive' -ErrorAction SilentlyContinue).Free",
+          ],
+        ).timeout(const Duration(seconds: 10));
+
+        final stdout = result.stdout.toString().trim();
+        final lastLine = stdout.isEmpty ? '' : stdout.split('\n').last.trim();
+        final freeBytes = int.tryParse(lastLine);
+        if (freeBytes != null) {
+          final ok = freeBytes >= _minFreeDiskBytes;
+          Log.i('[AutoUpdater] Disk space: '
+              '${(freeBytes / (1024 * 1024)).toStringAsFixed(0)} MB free on '
+              'drive $drive (need ${_minFreeDiskBytes ~/ (1024 * 1024)} MB) '
+              '→ ${ok ? "ok" : "INSUFFICIENT"}');
+          return ok;
+        }
+        Log.w('[AutoUpdater] Could not parse free space output: '
+            '"$stdout" — assuming OK');
+      }
+    } catch (e) {
+      Log.w('[AutoUpdater] Disk space check failed (non-fatal): $e');
+    }
     return true;
+  }
+
+  /// Extract the drive letter (e.g. `C`) from a Windows path.
+  static String _driveLetter(String path) {
+    if (path.length >= 2 && path[1] == ':') return path[0];
+    return 'C';
   }
 
   static String _userFriendlyError(Object error) {
@@ -711,4 +907,70 @@ class AutoUpdater {
     }
     return 'An unexpected error occurred.';
   }
+
+  // ── Validation-harness helpers ────────────────────────────────────────────
+
+  /// Reset all mutable state so a validation scenario starts clean.
+  @visibleForTesting
+  static void debugReset() {
+    progress.value = null;
+    availableUpdate.value = null;
+    _dismissRequested = false;
+    try {
+      _activeDownloadClient?.close();
+    } catch (_) {}
+    _activeDownloadClient = null;
+    _activeDownloadPath = null;
+    _lastCheckedManifestFingerprint = null;
+    _consecutiveFailures = 0;
+    _failedVersionFingerprint = null;
+    _updatePipelineInFlight = false;
+    _packageInfo = null;
+    _boardId = null;
+    _boardChannel = 'stable';
+    _hmacSecretKey = null;
+    _initializedAt = null;
+    testInstalledVersionOverride = null;
+    debugInitializedAt = null;
+    diskSpaceProbeOverride = null;
+    agentLauncherOverride = null;
+    debugExitOnCompletion = true;
+    downloadTimeoutOverride = _downloadTimeout;
+  }
+
+  /// Wait until the in-flight pipeline completes (or [timeout] elapses).
+  /// Returns false on timeout so validation scenarios can fail loudly.
+  @visibleForTesting
+  static Future<bool> debugWaitForPipeline({
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (_updatePipelineInFlight) {
+      if (DateTime.now().isAfter(deadline)) return false;
+      await Future.delayed(const Duration(milliseconds: 20));
+    }
+    return true;
+  }
+}
+
+/// Thrown when the user dismisses the overlay while the installer is still
+/// streaming, so `_downloadWithProgress` aborts promptly and the pipeline can
+/// clean up the partial file.
+class _DownloadCancelled implements Exception {
+  const _DownloadCancelled();
+}
+
+/// Captures the final [Digest] produced by a chunked hash conversion.
+///
+/// Used to compute SHA-256 incrementally during download without loading the
+/// whole installer into memory (crypto's `DigestSink` is not part of the
+/// public `crypto` 3.x API, so we provide our own `Sink<Digest>`).
+class _DigestCapture implements Sink<Digest> {
+  Digest? value;
+
+  @override
+  void add(Digest data) => value = data;
+
+  @override
+  void close() {}
 }

@@ -23,6 +23,11 @@ class PathValidationResult {
 /// binary directory is resolved at runtime from the running executable (see
 /// [appDir]) because the MSI and Inno Setup installers use different layouts.
 ///
+/// Update infrastructure (the update agent, downloaded-installer staging, and
+/// rollback backups) lives under [infraRoot]
+/// (`%LOCALAPPDATA%\IntelliAttend`, outside the app install directory) so the
+/// app installer can never overwrite a running update binary.
+///
 /// Every file path in the codebase MUST go through this class. No hardcoded
 /// paths are allowed outside of this file.
 ///
@@ -47,6 +52,26 @@ class InstallPaths {
   static String get root =>
       testRootOverride ?? '$_localAppData\\IntelliAttendSmartBoard';
   static Directory get rootDirectory => Directory(root);
+
+  /// Update infrastructure root — OUTSIDE the application install directory.
+  ///
+  /// Phase 1 isolation: everything the self-update pipeline owns (the native
+  /// update agent, the downloaded-installer staging area, and rollback
+  /// backups) lives here so the app installer (recursively copying `{app}`)
+  /// can never overwrite a running binary. Windows locks running images, so an
+  /// installer that tries to replace `update_agent.exe` while the agent is
+  /// executing fails the install — this tree is simply never touched by it.
+  ///
+  /// In tests, [testRootOverride] keeps the layout hermetic under the temp
+  /// root.
+  static String get infraRoot {
+    final override = testRootOverride;
+    if (override != null && override.isNotEmpty) {
+      return '$override\\Infra';
+    }
+    return '$_localAppData\\IntelliAttend';
+  }
+  static Directory get infraRootDirectory => Directory(infraRoot);
 
   // ── Binary directory ─────────────────────────────────────────────────────
   //
@@ -99,10 +124,32 @@ class InstallPaths {
   }
   static File get exeFile => File(exePath);
 
-  /// Detached update agent executable (Phase 1). Always co-located with the
-  /// running application binary in both installer layouts.
-  static String get updateAgentPath => '$appDir\\update_agent.exe';
+  /// Detached update agent executable (Phase 1 isolation).
+  ///
+  /// Lives OUTSIDE the application install directory
+  /// (`%LOCALAPPDATA%\IntelliAttend\UpdateAgent\`) so a self-update can never
+  /// overwrite the running agent. Installed by the Inno Setup installer's
+  /// explicit `[Files]` entry (guarded by the `update_agent.running` marker
+  /// written by the agent at boot). See [legacyUpdateAgentPath] for the
+  /// pre-isolation location used as a one-time migration fallback.
+  static String get updateAgentDir => '$infraRoot\\UpdateAgent';
+  static Directory get updateAgentDirectory => Directory(updateAgentDir);
+  static String get updateAgentPath => '$updateAgentDir\\update_agent.exe';
   static File get updateAgentFile => File(updateAgentPath);
+
+  /// Running marker dropped by the agent at boot and removed at exit. The
+  /// installer skips overwriting the agent while this file exists.
+  static String get updateAgentMarkerFile =>
+      '$updateAgentDir\\update_agent.running';
+  static File get updateAgentMarkerFileInstance =>
+      File(updateAgentMarkerFile);
+
+  /// Legacy agent location (`{app}\update_agent.exe`) for boards installed
+  /// before Phase 1 isolation. [UpdateAgentLauncher] falls back to it while
+  /// the first post-isolation installer has not yet placed the agent in
+  /// [updateAgentDir].
+  static String get legacyUpdateAgentPath => '$appDir\\update_agent.exe';
+  static File get legacyUpdateAgentFile => File(legacyUpdateAgentPath);
 
   // ── Application state (app-managed) ──────────────────────────────────────
 
@@ -118,16 +165,21 @@ class InstallPaths {
   static String get cacheDir => '$root\\Cache';
   static Directory get cacheDirectory => Directory(cacheDir);
 
-  /// Downloaded MSI update packages.
-  static String get updateDir => '$root\\Updates';
+  /// Downloaded update packages (staging area). OUTSIDE `{app}` so a rollback
+  /// (which moves/rewrites the app directory) can never destroy an in-flight
+  /// or staged download.
+  static String get updateDir => '$infraRoot\\Updates';
   static Directory get updateDirectory => Directory(updateDir);
 
   /// Structured log files (install, update, rollback, crash, etc.).
   static String get logDir => '$root\\Logs';
   static Directory get logDirectory => Directory(logDir);
 
-  /// Rollback backups of previous versions.
-  static String get backupDir => '$root\\Backup';
+  /// Rollback backups of previous versions. OUTSIDE `{app}` so a rollback
+  /// (`appDir` move + backup restore) can never delete the backup it is about
+  /// to restore (previously the backup lived under the install root, breaking
+  /// the restore step).
+  static String get backupDir => '$infraRoot\\Backup';
   static Directory get backupDirectory => Directory(backupDir);
 
   // ── Specific files ──────────────────────────────────────────────────────
@@ -195,6 +247,8 @@ class InstallPaths {
       dataDirectory,
       configDirectory,
       cacheDirectory,
+      infraRootDirectory,
+      updateAgentDirectory,
       updateDirectory,
       logDirectory,
       backupDirectory,
@@ -214,6 +268,7 @@ class InstallPaths {
     dataDir,
     configDir,
     cacheDir,
+    updateAgentDir,
     updateDir,
     logDir,
     backupDir,

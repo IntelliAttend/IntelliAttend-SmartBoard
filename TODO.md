@@ -1,6 +1,27 @@
 # SmartBoard — Master Task List
 
-> Auto-generated from codebase audit. Last updated: 2026-06-28.
+> Auto-generated from codebase audit. Last updated: 2026-08-01.
+
+---
+
+## 🟣 Phase 2 — Hardware & Operational Validation (updater)
+
+> **Updater feature freeze in effect.** Only bug fixes allowed; no features, no
+> refactors. Phase 1 approved as **Validation Candidate** (not production-ready).
+> Full plan: `docs/phase2_hardware_validation_plan.md`. 40 scenarios pending.
+
+| # | Gate | Owner | Status | Details |
+|---|------|-------|--------|---------|
+| 27 | **A — Power Failure** (SC-051…SC-065, 15) | HW Lab | ❌ Open | PDU power cuts at every pipeline stage; Machine C |
+| 28 | **B — Recovery** (SC-066/067/070/071/041/042/050/086/087, 9) | HW Lab | ❌ Open | Crash/reboot/integrity injection; Machine C |
+| 29 | **C — Persistence & Integrity** (SC-038/039/074/075 + data matrix) | HW Lab | ❌ Open | ACL/backup/locks + config/data byte-identical checks |
+| 30 | **D — Performance & Capacity** (SC-079/080) | HW Lab | ❌ Open | RAM 95/99%, CPU 100%; baseline vs loaded times |
+| 31 | **E — Soak** (SC-102 500 cycles; SC-107/108/109) | Soak Eng | ❌ Open | Machine D real update/rollback/restart; fleet 7/14/30-day |
+| 32 | **F — Pilot Fleet Ramp** (SC-110…SC-115) | Fleet Ops | ❌ Open | 1→5→20→100→500→1000 boards, staged observe |
+| 33 | **Gate 4 — Operations** | Ops | ❌ Open | Dashboard, telemetry, rollback metrics, alerts |
+| 34 | **Gate 5 — Disaster Recovery Drill** | Ops | ❌ Open | v5.6 critical bug → safe revert of every board to v5.5 |
+| 35 | **Release Readiness Review (RRR)** | All 4 roles | ❌ Open | Dev/QA/Ops/Product sign-off; one NO holds release |
+| 36 | **Tag `validation-candidate-v1`** | Dev | ✅ Done | Committed Phase 1 work + annotated tag (2026-08-01). Release notebook: `docs/release/validation-candidate-v1/` |
 
 ---
 

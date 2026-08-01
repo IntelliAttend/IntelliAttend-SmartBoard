@@ -329,10 +329,16 @@ jobs:
           }
           Write-Host "Built update_agent.exe: $agentDir\Release\update_agent.exe" -ForegroundColor Green
 
-      - name: Copy update_agent.exe to bundle
+      - name: Stage update_agent.exe (kept OUT of app bundle)
+        id: agent
         shell: pwsh
         run: |
-          $buildDir = "build\windows\x64\runner\Release"
+          # Phase 1 isolation: update_agent.exe must NOT be copied into the
+          # app bundle ({app}\*). If it shipped inside the app dir, the
+          # installer's recursive {app} copy would overwrite the RUNNING agent
+          # during self-update (Windows locks running exes) and the install
+          # would fail. The agent lives in a dedicated dir outside {app} and is
+          # installed there explicitly by setup.iss via /DAgentDir.
           $agentCandidates = @(
             "build\windows\x64\update_agent\Release\update_agent.exe",
             "build\windows\x64\update_agent\update_agent.exe",
@@ -344,17 +350,16 @@ jobs:
           }
           if (-not $agentExe) {
             Write-Host "ERROR: update_agent.exe not found in build output" -ForegroundColor Red
-            Write-Host "Searching..." -ForegroundColor Yellow
             Get-ChildItem -Path "build\windows\x64" -Filter "update_agent.exe" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
               Write-Host "  Found: $($_.FullName)"
               $agentExe = $_.FullName
             }
-            if (-not $agentExe) {
-              exit 1
-            }
+            if (-not $agentExe) { exit 1 }
           }
-          Copy-Item $agentExe "$buildDir\update_agent.exe" -Force
-          Write-Host "Copied update_agent.exe from $agentExe to $buildDir" -ForegroundColor Green
+          $agentDir = Split-Path -Parent $agentExe
+          Write-Host "Staged update_agent.exe (kept out of app bundle): $agentExe" -ForegroundColor Green
+          "agent_path=$env:GITHUB_WORKSPACE\$agentExe" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "agent_dir=$env:GITHUB_WORKSPACE\$agentDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Sign application binaries (required for self-update)
         shell: pwsh
@@ -380,7 +385,8 @@ jobs:
           $password = "${{ secrets.SIGN_PASSWORD }}"
           $buildDir = "build\windows\x64\runner\Release"
           $appName = "${{ steps.detect.outputs.app_name }}"
-          $files = @("$buildDir\$appName.exe", "$buildDir\update_agent.exe")
+          $agentExe = "${{ steps.agent.outputs.agent_path }}"
+          $files = @("$buildDir\$appName.exe", $agentExe)
           try {
             foreach ($f in $files) {
               & $signtool sign /fd sha256 /tr "http://timestamp.digicert.com" /td sha256 /f $certPath /p $password $f
@@ -429,7 +435,7 @@ jobs:
             $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
           }
 
-          & $iscc /DAppVersion="$version" /DSourceDir="$env:GITHUB_WORKSPACE\$buildDir" "$env:GITHUB_WORKSPACE\windows\inno_setup\setup.iss"
+          & $iscc /DAppVersion="$version" /DSourceDir="$env:GITHUB_WORKSPACE\$buildDir" /DAgentDir="${{ steps.agent.outputs.agent_dir }}" "$env:GITHUB_WORKSPACE\windows\inno_setup\setup.iss"
           if ($LASTEXITCODE -ne 0) {
             Write-Host "ERROR: Inno Setup compilation failed" -ForegroundColor Red
             exit 1
@@ -516,7 +522,8 @@ jobs:
             if (Test-Path $certPath) { Remove-Item $certPath -Force }
           }
           $appName = "${{ steps.detect.outputs.app_name }}"
-          $files = @($setupExe.FullName, "$buildDir\$appName.exe", "$buildDir\update_agent.exe")
+          $agentExe = "${{ steps.agent.outputs.agent_path }}"
+          $files = @($setupExe.FullName, "$buildDir\$appName.exe", $agentExe)
           foreach ($f in $files) {
             $sig = Get-AuthenticodeSignature -FilePath $f
             Write-Host "  $f : $($sig.Status)"

@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../core/config/install_paths.dart';
@@ -48,7 +50,11 @@ import 'api_service.dart';
 //   Before [AutoUpdater] installs a new MSI, [preserveCurrentInstall] is
 //   called to copy the current application directory to a backup location:
 //
-//     %LOCALAPPDATA%\IntelliAttendSmartBoard_backup_v{previousVersion}/
+//     %LOCALAPPDATA%\IntelliAttend\Backup\v{previousVersion}/
+//
+//   The backup lives OUTSIDE the application install directory (Phase 1
+//   isolation, via [InstallPaths.backupDir]) so a rollback that moves/rewrites
+//   the app directory can never delete the backup it is about to restore.
 //
 //   If [UpdateHealthMonitor] detects a crash loop for the new version, it
 //   calls [rollbackToPrevious]. This:
@@ -94,6 +100,11 @@ class UpdateHealthMonitor {
 
   /// Whether we are mid-rollback (prevents re-entrance).
   static bool _isRollingBack = false;
+
+  /// Test seam: override the app directory resolved by [_getAppDirectory]
+  /// so backup scenarios are hermetic and fast in the validation harness.
+  @visibleForTesting
+  static Directory? testAppDirectoryOverride;
 
   // ── Initialisation (called early in main.dart) ───────────────────────────
 
@@ -190,13 +201,17 @@ class UpdateHealthMonitor {
   /// if the new version crashes.
   ///
   /// Called by [AutoUpdater] *before* downloading / installing the new MSI.
-  static Future<void> preserveCurrentInstall(
+  /// Returns `true` if a recoverable backup was created. Returns `false` if
+  /// the backup could not be produced — the caller MUST abort the update,
+  /// because proceeding without rollback capability is a Phase 1 validation
+  /// failure (never update without a recoverable backup).
+  static Future<bool> preserveCurrentInstall(
       Version currentVersion, String? downloadUrl, String? sha256) async {
     try {
       final appDir = await _getAppDirectory();
       if (appDir == null) {
-        Log.w('[UpdateHealth] Cannot backup — app directory unknown');
-        return;
+        Log.e('[UpdateHealth] Cannot backup — app directory unknown');
+        return false;
       }
 
       // Use InstallPaths.backupDir for consistent backup location.
@@ -220,9 +235,11 @@ class UpdateHealthMonitor {
 
       Log.i('[UpdateHealth] Backup created: ${backupDir.path} '
           '(v$currentVersion)');
+      return true;
     } catch (e) {
-      Log.e('[UpdateHealth] Backup failed: $e — update will proceed without '
-          'rollback capability');
+      Log.e('[UpdateHealth] Backup failed: $e — update will be ABORTED '
+          '(no rollback capability)');
+      return false;
     }
   }
 
@@ -368,6 +385,10 @@ class UpdateHealthMonitor {
         'rollback_count': _rollbackCount,
         if (_backupPath != null) 'backup_path': _backupPath,
       };
+      // Ensure the Data\ directory exists — on a fresh install it may not yet
+      // (the pipeline creates it later), and a missing parent would silently
+      // drop the persisted health state.
+      _prefsFile.parent.createSync(recursive: true);
       _prefsFile.writeAsStringSync(jsonEncode(data));
     } catch (e) {
       Log.w('[UpdateHealth] Failed to save state: $e');
@@ -380,6 +401,8 @@ class UpdateHealthMonitor {
 
   /// Find the current app installation directory.
   static Future<Directory?> _getAppDirectory() async {
+    final override = testAppDirectoryOverride;
+    if (override != null) return override;
     try {
       if (Platform.isWindows) {
         return File(Platform.resolvedExecutable).parent;

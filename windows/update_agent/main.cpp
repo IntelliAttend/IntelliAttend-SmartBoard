@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <string>
 #include <sstream>
+#include <fstream>
 
 #include "common.h"
 #include "json_reader.h"
@@ -339,6 +340,56 @@ static bool DoCleanup(const std::wstring& statePath, UpdateState& state) {
   return true;
 }
 
+// ── Running marker (Phase 1 isolation) ─────────────────────────────────────
+//
+// update_agent.exe lives OUTSIDE the application install directory
+// (%LOCALAPPDATA%\IntelliAttend\UpdateAgent\). The Inno Setup installer also
+// ships the agent, but must never overwrite it while it is executing (Windows
+// locks running images). At boot the agent drops a marker file
+// (update_agent.running) in its own home directory and removes it on every
+// exit path via the RAII guard below; the installer's [Files] entry skips the
+// copy while the marker exists, so a self-update can never fail trying to
+// replace a running agent.
+
+static std::wstring ModuleDirectory() {
+  wchar_t buf[MAX_PATH];
+  DWORD len = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+  if (len == 0) return L"";
+  std::wstring path(buf, len);
+  size_t slash = path.find_last_of(L"\\/");
+  if (slash != std::wstring::npos) path = path.substr(0, slash);
+  return path;
+}
+
+static std::wstring RunningMarkerPath() {
+  std::wstring dir = ModuleDirectory();
+  if (dir.empty()) return L"";
+  return dir + L"\\update_agent.running";
+}
+
+static bool WriteRunningMarker() {
+  std::wstring path = RunningMarkerPath();
+  if (path.empty()) return false;
+  std::wofstream f(path);
+  if (!f.is_open()) return false;
+  f << GetCurrentProcessId();
+  f.close();
+  return true;
+}
+
+static void RemoveRunningMarker() {
+  std::wstring path = RunningMarkerPath();
+  if (!path.empty()) DeleteFileW(path.c_str());
+}
+
+// RAII: guarantees the marker is removed on EVERY exit path (success or
+// failure) via the local destructor, so a stale marker can never permanently
+// block future agent updates.
+struct RunningMarkerGuard {
+  RunningMarkerGuard() { WriteRunningMarker(); }
+  ~RunningMarkerGuard() { RemoveRunningMarker(); }
+};
+
 } // namespace ua
 
 // ── Entry Point ──────────────────────────────────────────────────────────
@@ -365,6 +416,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
       return ExitCode::InvalidState;
     }
   }
+
+  // Drop the running marker for the whole lifetime of this process so the
+  // installer never tries to overwrite a running agent. Removed on every exit
+  // path by the guard's destructor.
+  RunningMarkerGuard runningMarker;
 
   // ── BOOT ─────────────────────────────────────────────────────────────
 
