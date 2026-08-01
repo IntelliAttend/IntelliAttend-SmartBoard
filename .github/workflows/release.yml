@@ -37,7 +37,10 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'  # e.g. v5.5.0, v5.5.1
+      # Version tags ONLY (v5.5.0.18, v5.5.1, ...). The broad 'v*' glob also
+      # matched validation-candidate-v* and release-candidate-* tags, wasting
+      # runner minutes before the Validate-version-tag guard aborted them.
+      - 'v[0-9]*.[0-9]*.[0-9]*'
 
   # Allow manual trigger from the Actions tab for emergency hotfixes.
   workflow_dispatch:
