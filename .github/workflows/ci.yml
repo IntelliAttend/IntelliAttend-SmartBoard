@@ -22,7 +22,10 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # The product is a Windows-only kiosk (see windows/). The validation and
+    # regression suites exercise Windows paths (InstallPaths, %LOCALAPPDATA%,
+    # file locks) and fail on Linux runners, so tests MUST run on Windows.
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
