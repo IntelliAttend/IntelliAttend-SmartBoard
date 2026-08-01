@@ -124,7 +124,7 @@ jobs:
           Write-Host "FIREBASE_PROJECT_ID: $projectId"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate version tag
         shell: pwsh
