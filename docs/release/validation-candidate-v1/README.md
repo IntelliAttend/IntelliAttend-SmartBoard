@@ -1,5 +1,11 @@
 # Release Notebook — validation-candidate-v1
 
+> **SUPERSEDED by `validation-candidate-v2`** (2026-08-01) — see
+> `docs/release/validation-candidate-v2/README.md`. v1 had RED CI (analyzer
+> warnings, zero hardware evidence); v2 carries identical product code plus
+> 7 lint-only fixes and green CI. This notebook is kept as the historical
+> record of the first candidate.
+
 > The permanent audit trail for the Phase 1 Validation Candidate.
 > **This is NOT a production-ready release.** It is the frozen implementation
 > entering controlled Phase 2 hardware validation.

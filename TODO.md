@@ -21,7 +21,9 @@
 | 33 | **Gate 4 — Operations** | Ops | ❌ Open | Dashboard, telemetry, rollback metrics, alerts |
 | 34 | **Gate 5 — Disaster Recovery Drill** | Ops | ❌ Open | v5.6 critical bug → safe revert of every board to v5.5 |
 | 35 | **Release Readiness Review (RRR)** | All 4 roles | ❌ Open | Dev/QA/Ops/Product sign-off; one NO holds release |
-| 36 | **Tag `validation-candidate-v1`** | Dev | ✅ Done | Committed Phase 1 work + annotated tag (2026-08-01). Release notebook: `docs/release/validation-candidate-v1/` |
+| 36 | **Tag `validation-candidate-v2`** | Dev | ✅ Done | CI-green candidate (commit `82d43d9`, v5.5.0+19). v1 (`5e89dc0`) superseded — red CI. Notebook: `docs/release/validation-candidate-v2/` |
+| 37 | **Fleet deploy gate** | Dev | ✅ Done | Auto-Deploy `ci-upload` gated behind manual `promote=true`; artifacts archived (setup, agent, symbols, SHA256SUMS, build-info) |
+| 38 | **Branch protection** | Dev | ⏸ Deferred | PR-review flow off the table for now; revisit when a PR-based version bump is acceptable |
 
 ---
 
