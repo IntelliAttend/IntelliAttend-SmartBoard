@@ -311,7 +311,7 @@ jobs:
             build\windows\x64\runner\Release\latest.json
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.validate.outputs.resolved_tag }}
           name: Release ${{ steps.validate.outputs.resolved_tag }}
