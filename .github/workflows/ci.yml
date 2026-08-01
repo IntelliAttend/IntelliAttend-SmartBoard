@@ -45,6 +45,7 @@ jobs:
           echo "DEBUG=false" >> .env
 
       - name: Dependency audit (Flutter)
+        shell: bash
         run: dart pub audit || echo "::warning::dart pub audit found issues"
 
       - name: Set up Python
@@ -54,6 +55,7 @@ jobs:
 
       - name: Dependency audit (Python)
         working-directory: backend/python
+        shell: bash
         run: |
           pip install pip-audit
           pip-audit --requirement requirements.txt 2>&1 || echo "::warning::pip-audit found issues"
