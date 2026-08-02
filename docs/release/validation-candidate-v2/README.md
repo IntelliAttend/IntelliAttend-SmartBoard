@@ -10,19 +10,22 @@
 | Field | Value |
 |-------|-------|
 | Tag | `validation-candidate-v2` |
-| Build | v5.5.0+19 |
+| Build | v5.5.0+22 (release `v5.5.0.22`, 2026-08-02) |
 | Branch | `school-main` |
-| Commit | `82d43d9` |
-| Date | 2026-08-01 |
+| Product-code commit | `82d43d9` |
+| Date | 2026-08-01 (tag) / 2026-08-02 (release) |
 | CI Validation | **PASS** (179 tests on windows-latest; GATE 75/75 executed) |
+| Authenticode | All 3 binaries signed `CN=IntelliAttend SmartBoard` and chained to signing root (offline verify, run 30730843811 step 22) |
 | Hardware Validation | Pending (Gates A–F) |
 | Fleet Validation | Pending (SC-110…SC-115) |
 | Release Readiness Review | Pending (Dev / QA / Ops / Product sign-off) |
 
-> Note: commits `82d43d9..5e98839` (workflow-only: CI test job on
-> windows-latest, bash-shell audits, Release-tag filter) post-date the tag but
-> do not change product code. The tagged tree is product-identical to the
-> current `school-main` HEAD.
+> Note: commits `82d43d9..24af384` post-date the tag and are workflow/version
+> only (CI test job on windows-latest, bash-shell audits, Release-tag filter,
+> offline Authenticode verification). Builds +19/+20/+21 were version bumps
+> from cancelled Auto-Deploy runs that produced no artifacts; the canonical
+> validated artifact is **v5.5.0.22**. The tagged tree is product-identical to
+> the current `school-main` HEAD.
 
 ## Why v2 (relationship to v1)
 
@@ -43,7 +46,10 @@
 - **Fleet deployment is gated:** Auto-Deploy builds + archives artifacts on
   every `lib/**` push, but the fleet `ci-upload` (force=true, rollout 100%) runs
   ONLY on a manual `workflow_dispatch` with `promote=true`. No fleet updates
-  during Phase 2.
+  during Phase 2. (Verified: run 30730843811 archived artifacts and **skipped**
+  the fleet upload.)
+- **Release workflow triggers on version tags only** — candidate/audit tags
+  never start a release build.
 
 ## Artifacts (audit trail)
 

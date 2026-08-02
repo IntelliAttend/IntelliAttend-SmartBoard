@@ -21,9 +21,11 @@
 | 33 | **Gate 4 — Operations** | Ops | ❌ Open | Dashboard, telemetry, rollback metrics, alerts |
 | 34 | **Gate 5 — Disaster Recovery Drill** | Ops | ❌ Open | v5.6 critical bug → safe revert of every board to v5.5 |
 | 35 | **Release Readiness Review (RRR)** | All 4 roles | ❌ Open | Dev/QA/Ops/Product sign-off; one NO holds release |
-| 36 | **Tag `validation-candidate-v2`** | Dev | ✅ Done | CI-green candidate (commit `82d43d9`, v5.5.0+19). v1 (`5e89dc0`) superseded — red CI. Notebook: `docs/release/validation-candidate-v2/` |
-| 37 | **Fleet deploy gate** | Dev | ✅ Done | Auto-Deploy `ci-upload` gated behind manual `promote=true`; artifacts archived (setup, agent, symbols, SHA256SUMS, build-info) |
+| 36 | **Tag `validation-candidate-v2`** | Dev | ✅ Done | CI-green candidate (product commit `82d43d9`). v1 (`5e89dc0`) superseded — red CI. Notebook: `docs/release/validation-candidate-v2/` |
+| 37 | **Fleet deploy gate** | Dev | ✅ Done | Auto-Deploy `ci-upload` gated behind manual `promote=true`; artifacts archived (setup, agent, cert, SHA256SUMS, build-info) |
 | 38 | **Branch protection** | Dev | ⏸ Deferred | PR-review flow off the table for now; revisit when a PR-based version bump is acceptable |
+| 39 | **Canonical validated artifact** | Dev | ✅ Done | Release `v5.5.0.22` (2026-08-02) with all evidence artifacts. +19/+20/+21 were version bumps with no release. Notebook updated |
+| 40 | **Auto-Deploy Authenticode hang** | Dev | ✅ Done | Offline verification (PE cert table + SignedCms + chain-to-root, zero network). Verified on runner: 3 binaries in 1s (run 30730843811); fleet step skipped |
 
 ---
 
