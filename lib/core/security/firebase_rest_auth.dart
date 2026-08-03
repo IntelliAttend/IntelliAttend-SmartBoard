@@ -83,10 +83,10 @@ class FirebaseRestAuth {
     return data;
   }
 
-  /// Signs in with email + password. If the account does not exist
-  /// (INVALID_LOGIN_CREDENTIALS / EMAIL_NOT_FOUND), auto-provisions it
-  /// via [signUpWithPassword] so first-time setup works without manual
-  /// account creation in the Firebase Console.
+  /// Signs in with email + password. All SmartBoard Firebase accounts are
+  /// created by the admin panel's provision_board(). If sign-in fails, the
+  /// original error is surfaced (auto-provisioning is disabled to prevent
+  /// UID mismatches with PostgreSQL).
   static Future<Map<String, dynamic>> signInWithPassword(
     String email,
     String password,
@@ -117,35 +117,12 @@ class FirebaseRestAuth {
       return _handleSignInResponse(response);
     }
 
-    // Check if failure is due to missing account — auto-provision
-    final errorBody = _tryParseError(response);
-    if (errorBody == 'EMAIL_NOT_FOUND' || errorBody == 'INVALID_LOGIN_CREDENTIALS') {
-      Log.i('[FirebaseRestAuth] Account not found; attempting auto-provision via signUp.');
-      try {
-        return await signUpWithPassword(email, password);
-      } on FirebaseRestAuthException catch (e) {
-        if (e.code == 'EMAIL_EXISTS') {
-          Log.w('[FirebaseRestAuth] Race: account appeared between signIn and signUp; retrying signIn.');
-          final retryResponse = await _client
-              .post(
-                uri,
-                headers: {'Content-Type': 'application/json'},
-                body: jsonEncode({
-                  'email': email,
-                  'password': password,
-                  'returnSecureToken': true,
-                }),
-              )
-              .timeout(const Duration(seconds: 15));
-          if (retryResponse.statusCode == 200) {
-            return _handleSignInResponse(retryResponse);
-          }
-          throw _toRestAuthException(retryResponse, 'signInWithPassword');
-        }
-        // signUp itself failed for a different reason — surface original error
-        Log.w('[FirebaseRestAuth] signUp also failed (${e.code}); throwing original signIn error.');
-      }
-    }
+    // NOTE: Auto-provisioning via signUp is DISABLED for SmartBoard accounts.
+    // Board Firebase users are created by the admin panel's provision_board()
+    // which also creates the matching PostgreSQL User record. If signIn fails,
+    // auto-provisioning would create a NEW Firebase account with a DIFFERENT uid,
+    // causing the server's postgres lookup to fail with 401.
+    // The original error is surfaced directly to the user.
 
     throw _toRestAuthException(response, 'signInWithPassword');
   }

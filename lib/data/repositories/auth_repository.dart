@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:isar/isar.dart';
 
@@ -10,6 +12,22 @@ import '../../core/utils/logger.dart';
 import '../../core/auth/token_manager.dart';
 import '../../models/isar_schemas.dart';
 import '../../services/time_sync_service.dart';
+
+/// Thrown when a server call fails with a specific, user-facing reason.
+class ServerAuthException implements Exception {
+  final int statusCode;
+  final String message;
+  final String? errorCode;
+
+  ServerAuthException({
+    required this.statusCode,
+    required this.message,
+    this.errorCode,
+  });
+
+  @override
+  String toString() => 'ServerAuthException($statusCode: $message)';
+}
 
 abstract class IAuthRepository {
   Future<Map<String, dynamic>?> login(String boardId, String password);
@@ -45,8 +63,6 @@ class AuthRepository implements IAuthRepository {
     try {
       Log.i('[AuthRepository] Attempting REST login for Board: $normalizedBoardId');
 
-      // SmartBoard ID is mapped to a lowercase email format per the
-      // Accountable Device spec.
       final email = AppConfig.boardIdToEmail(normalizedBoardId);
 
       final authData =
@@ -56,13 +72,8 @@ class AuthRepository implements IAuthRepository {
 
       if (uid == null) return null;
 
-      // Persist board credentials for Firebase plugin authentication on boot.
-      // This enables .snapshots() streams (billed only on data changes).
       await SecureStorageService.storeBoardCredentials(email, password);
 
-      // Registration state is resolved server-side during
-      // `/api/v1/device/register/login` which returns `already_registered`
-      // if the board is already bound. RegistrationProvider handles this.
       return {
         'uid': uid,
         'email': returnedEmail,
@@ -72,9 +83,20 @@ class AuthRepository implements IAuthRepository {
     } on FirebaseRestAuthException catch (e) {
       Log.e('[AuthRepository] REST login failed: ${e.code}');
       rethrow;
+    } on TimeoutException {
+      Log.e('[AuthRepository] Login timed out');
+      throw ServerAuthException(
+        statusCode: 0,
+        message: 'Connection timed out. Check your network and try again.',
+        errorCode: 'TIMEOUT',
+      );
     } catch (e) {
       Log.e('[AuthRepository] Unexpected login error: $e');
-      return null;
+      throw ServerAuthException(
+        statusCode: 0,
+        message: 'Failed to connect to authentication server. Check your internet.',
+        errorCode: 'NETWORK_ERROR',
+      );
     }
   }
 
@@ -85,13 +107,8 @@ class AuthRepository implements IAuthRepository {
       String boardId, String password) async {
     final normalizedBoardId = boardId.trim().toUpperCase();
     try {
-      final idToken = await FirebaseRestAuth.getIdToken();
-      
       final response = await apiClient.dio.post(
         '/api/v1/device/register/login',
-        options: Options(
-          headers: idToken != null ? {'Authorization': 'Bearer $idToken'} : null,
-        ),
         data: {
           'smart_board_id': normalizedBoardId,
           'password': password,
@@ -104,17 +121,72 @@ class AuthRepository implements IAuthRepository {
       return null;
     } on DioException catch (e) {
       final status = e.response?.statusCode ?? 0;
-      if (status >= 500) {
-        Log.w(
-            '[AuthRepository] initiateRegistration got $status — OTP may have been sent. Re-throwing.');
-        rethrow;
+      final detail = _extractServerDetail(e);
+
+      if (status == 401) {
+        throw ServerAuthException(
+          statusCode: 401,
+          message: detail ?? 'Authentication failed. The server rejected your credentials.',
+          errorCode: 'AUTH_FAILED',
+        );
       }
-      Log.e('[AuthRepository] initiateRegistration failed ($status): $e');
-      return null;
+      if (status == 403) {
+        throw ServerAuthException(
+          statusCode: 403,
+          message: detail ?? 'Access denied. This board may be suspended.',
+          errorCode: 'ACCESS_DENIED',
+        );
+      }
+      if (status >= 500) {
+        throw ServerAuthException(
+          statusCode: status,
+          message: 'Server is temporarily unavailable. Please try again shortly.',
+          errorCode: 'SERVER_ERROR',
+        );
+      }
+      if (e.type == DioExceptionType.connectionTimeout ||
+          e.type == DioExceptionType.sendTimeout ||
+          e.type == DioExceptionType.receiveTimeout) {
+        throw ServerAuthException(
+          statusCode: 0,
+          message: 'Connection timed out. Check your network and try again.',
+          errorCode: 'TIMEOUT',
+        );
+      }
+      if (e.type == DioExceptionType.connectionError) {
+        throw ServerAuthException(
+          statusCode: 0,
+          message: 'Cannot reach the server. Check your internet connection.',
+          errorCode: 'NO_CONNECTION',
+        );
+      }
+      throw ServerAuthException(
+        statusCode: status,
+        message: detail ?? 'Registration failed (HTTP $status). Please try again.',
+        errorCode: 'HTTP_$status',
+      );
     } catch (e) {
+      if (e is ServerAuthException) rethrow;
       Log.e('[AuthRepository] initiateRegistration failed: $e');
-      return null;
+      throw ServerAuthException(
+        statusCode: 0,
+        message: 'An unexpected error occurred. Please try again.',
+        errorCode: 'UNKNOWN',
+      );
     }
+  }
+
+  String? _extractServerDetail(DioException e) {
+    try {
+      final data = e.response?.data;
+      if (data is Map) {
+        final detail = data['detail'];
+        if (detail is String) return detail;
+        if (detail is Map) return detail['message']?.toString();
+        return data['message']?.toString();
+      }
+    } catch (_) {}
+    return null;
   }
 
   // ─── Registration step 2: verify OTP ─────────────────────────────────────
@@ -152,13 +224,8 @@ class AuthRepository implements IAuthRepository {
   }) async {
     final normalizedBoardId = boardId.trim().toUpperCase();
     try {
-      final idToken = await FirebaseRestAuth.getIdToken();
-
       final response = await apiClient.dio.post(
         '/api/v1/device/register/complete',
-        options: Options(
-          headers: idToken != null ? {'Authorization': 'Bearer $idToken'} : null,
-        ),
         data: {
           'smart_board_id': normalizedBoardId,
           'hardware_id': hardwareId,
@@ -170,8 +237,6 @@ class AuthRepository implements IAuthRepository {
       if (response.statusCode == 200) {
         final data = response.data as Map<String, dynamic>;
 
-        // Server returns a Firebase custom token to bind the session to
-        // the registered hardware. Exchange it for a new ID token.
         final customToken = data['custom_token']?.toString();
         if (customToken != null && customToken.isNotEmpty) {
           try {
@@ -185,9 +250,44 @@ class AuthRepository implements IAuthRepository {
         return data;
       }
       return null;
+    } on DioException catch (e) {
+      final status = e.response?.statusCode ?? 0;
+      final detail = _extractServerDetail(e);
+
+      if (status == 401) {
+        throw ServerAuthException(
+          statusCode: 401,
+          message: detail ?? 'Verification token expired or invalid. Please re-login.',
+          errorCode: 'TOKEN_INVALID',
+        );
+      }
+      if (status == 403) {
+        throw ServerAuthException(
+          statusCode: 403,
+          message: detail ?? 'Board registration denied. Contact administration.',
+          errorCode: 'REGISTRATION_DENIED',
+        );
+      }
+      if (status >= 500) {
+        throw ServerAuthException(
+          statusCode: status,
+          message: 'Server error during hardware binding. The app will retry on next launch.',
+          errorCode: 'SERVER_ERROR',
+        );
+      }
+      throw ServerAuthException(
+        statusCode: status,
+        message: detail ?? 'Hardware binding failed (HTTP $status).',
+        errorCode: 'HTTP_$status',
+      );
     } catch (e) {
+      if (e is ServerAuthException) rethrow;
       Log.e('[AuthRepository] completeRegistration failed: $e');
-      return null;
+      throw ServerAuthException(
+        statusCode: 0,
+        message: 'Hardware binding failed due to a network error.',
+        errorCode: 'NETWORK_ERROR',
+      );
     }
   }
 

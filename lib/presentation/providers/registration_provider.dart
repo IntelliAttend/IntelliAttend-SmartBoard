@@ -9,6 +9,7 @@ import '../../core/security/firebase_rest_auth.dart';
 import '../../core/utils/logger.dart';
 import '../../services/session_manager.dart';
 import '../../core/platform/hardware_fingerprint_service.dart';
+import '../../core/auth/token_manager.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../core/startup_service.dart';
 import '../../main.dart' show startBackgroundProtocols;
@@ -66,6 +67,9 @@ class RegistrationProvider extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
+    // Clear any stale token cache before auto-recovery to ensure fresh auth.
+    TokenManager().invalidateCache();
+
     try {
       final hardwareId = await HardwareFingerprintService.getDeviceId();
       final metadata = await HardwareFingerprintService.getHardwareMetadata();
@@ -112,6 +116,11 @@ class RegistrationProvider extends ChangeNotifier {
       if (data != null) {
         _adminEmail = data['admin_email'];
 
+        // CRITICAL: Clear TokenManager's in-memory cache so the AuthInterceptor
+        // uses the FRESH token from this login, not a stale token from a
+        // previous session.
+        TokenManager().invalidateCache();
+
         try {
           final initResult =
               await _authRepository.initiateRegistration(boardId, password);
@@ -135,42 +144,48 @@ class RegistrationProvider extends ChangeNotifier {
               final metadata =
                   await HardwareFingerprintService.getHardwareMetadata();
 
-              final completeResult =
-                  await _authRepository.completeRegistration(
-                      boardId, hardwareId, verificationToken,
-                      metadata: metadata);
+              try {
+                final completeResult =
+                    await _authRepository.completeRegistration(
+                        boardId, hardwareId, verificationToken,
+                        metadata: metadata);
 
-              if (completeResult == null) {
-                _errorMessage =
-                    'Hardware binding failed. The app will retry on next launch.';
-                Log.e('[RegistrationProvider] completeRegistration returned null');
+                if (completeResult == null) {
+                  _errorMessage =
+                      'Hardware binding failed. The app will retry automatically on next launch.';
+                  Log.e('[RegistrationProvider] completeRegistration returned null');
+                  return;
+                }
+
+                final profile = <String, dynamic>{
+                  ...initResult,
+                  ...completeResult,
+                };
+                profile['smart_board_id'] =
+                    initResult['smart_board_id'] ?? boardId;
+                profile['room_id'] =
+                    profile['room_id'] ?? profile['classroom_id'];
+
+                await _authRepository.saveRegistration(
+                  profile,
+                  SessionManager.isar,
+                  hardwareId: hardwareId,
+                );
+
+                await SecureStorageService.clearRegistrationToken();
+                await SecureStorageService.delete('reg_board_id');
+
+                await _hydrateAndWait();
+                _step = RegistrationStep.completed;
+                unawaited(StartupService.register());
+                unawaited(startBackgroundProtocols());
+                Log.i('[RegistrationProvider] Board registered successfully (hardware bound).');
+                return;
+              } on ServerAuthException catch (e) {
+                _errorMessage = e.message;
+                Log.e('[RegistrationProvider] completeRegistration failed: ${e.errorCode} — ${e.message}');
                 return;
               }
-
-              final profile = <String, dynamic>{
-                ...initResult,
-                ...completeResult,
-              };
-              profile['smart_board_id'] =
-                  initResult['smart_board_id'] ?? boardId;
-              profile['room_id'] =
-                  profile['room_id'] ?? profile['classroom_id'];
-
-              await _authRepository.saveRegistration(
-                profile,
-                SessionManager.isar,
-                hardwareId: hardwareId,
-              );
-
-              await SecureStorageService.clearRegistrationToken();
-              await SecureStorageService.delete('reg_board_id');
-
-              await _hydrateAndWait();
-              _step = RegistrationStep.completed;
-              unawaited(StartupService.register());
-              unawaited(startBackgroundProtocols());
-              Log.i('[RegistrationProvider] Board registered successfully (hardware bound).');
-              return;
             }
 
             if (initResult['is_registered'] == true ||
@@ -201,31 +216,28 @@ class RegistrationProvider extends ChangeNotifier {
             }
 
             _errorMessage =
-                'Server response missing verification data. Please contact IT.';
-          } else {
-            _errorMessage =
-                'Failed to initiate registration. Please contact IT.';
+                'Server returned incomplete data. Please try again or contact IT.';
           }
+        } on ServerAuthException catch (e) {
+          _errorMessage = e.message;
+          Log.e('[RegistrationProvider] Server auth error: ${e.errorCode} — ${e.message}');
         } on DioException catch (e) {
-          final status = e.response?.statusCode ?? 0;
-          if (status >= 500) {
-            _errorMessage =
-                'Server temporarily unavailable. Please try again in a moment.';
-          } else {
-            _errorMessage =
-                'Failed to initiate registration. Please contact IT.';
-          }
-          Log.e('[RegistrationProvider] initiateRegistration DioException ($status): $e');
+          _errorMessage = _dioErrorMessage(e);
+          Log.e('[RegistrationProvider] DioException: ${e.type} — $e');
         }
       } else {
-        _errorMessage = 'Invalid Board ID or Password.';
+        _errorMessage = 'Invalid Board ID or Password. Please check and try again.';
       }
     } on FirebaseRestAuthException catch (e) {
       _errorMessage = _restAuthErrorMessage(e);
       Log.e('[RegistrationProvider] Auth Error: ${e.code}');
+    } on TimeoutException {
+      _errorMessage =
+          'Connection timed out. Check your network and try again.';
+      Log.e('[RegistrationProvider] Timeout during login');
     } catch (e) {
       _errorMessage =
-          'Connection error. Please check your internet and try again.';
+          'An unexpected error occurred. Please restart the app and try again.';
       Log.e('[RegistrationProvider] Unexpected Error: $e');
     } finally {
       _isLoading = false;
@@ -233,23 +245,46 @@ class RegistrationProvider extends ChangeNotifier {
     }
   }
 
+  String _dioErrorMessage(DioException e) {
+    switch (e.type) {
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.sendTimeout:
+      case DioExceptionType.receiveTimeout:
+        return 'Connection timed out. The server may be slow or your network is weak.';
+      case DioExceptionType.connectionError:
+        return 'Cannot reach the server. Check your internet connection.';
+      case DioExceptionType.badResponse:
+        final status = e.response?.statusCode ?? 0;
+        if (status >= 500) {
+          return 'Server is temporarily unavailable. Please try again in a moment.';
+        }
+        return 'Server returned an error (HTTP $status). Please try again.';
+      default:
+        return 'Network error. Check your connection and try again.';
+    }
+  }
+
   String _restAuthErrorMessage(FirebaseRestAuthException e) {
     final code = e.code;
-    if (code == 'EMAIL_NOT_FOUND' ||
-        code == 'INVALID_LOGIN_CREDENTIALS' ||
-        code == 'INVALID_EMAIL') {
-      return 'DEVICE NOT PROVISIONED\nThis SmartBoard ID is not recognized. Please contact IT Support.';
+    if (code == 'EMAIL_NOT_FOUND' || code == 'INVALID_LOGIN_CREDENTIALS') {
+      return 'Wrong Board ID or Password. Please check your credentials and try again.';
+    }
+    if (code == 'INVALID_EMAIL') {
+      return 'Invalid Board ID format. Please enter a valid SmartBoard ID.';
     }
     if (code == 'INVALID_PASSWORD' || code == 'MISSING_PASSWORD') {
-      return 'Invalid System Password. Please try again.';
+      return 'Wrong password. Please check the System Password and try again.';
     }
     if (code == 'USER_DISABLED') {
-      return 'SUSPENDED: This SmartBoard has been disabled by an administrator.';
+      return 'This SmartBoard has been disabled by an administrator. Contact IT Support.';
     }
     if (code.startsWith('TOO_MANY_ATTEMPTS_TRY_LATER')) {
-      return 'SECURITY LOCK: Too many failed attempts. Please try again later.';
+      return 'Too many failed attempts. The account is temporarily locked. Please wait and try again later.';
     }
-    return 'AUTHENTICATION ERROR: $code';
+    if (code == 'NETWORK_ERROR' || code.contains('timeout')) {
+      return 'Network error. Check your internet connection and try again.';
+    }
+    return 'Authentication failed ($code). Please try again or contact IT Support.';
   }
 
   void reset() {
