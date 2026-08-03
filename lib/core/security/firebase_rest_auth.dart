@@ -205,17 +205,6 @@ class FirebaseRestAuth {
     return data;
   }
 
-  static String? _tryParseError(http.Response response) {
-    try {
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final err = data['error'];
-      if (err is Map) {
-        return err['message']?.toString();
-      }
-    } catch (_) {}
-    return null;
-  }
-
   /// Quick check if auth tokens exist (cached access token or refresh token).
   /// Does NOT make network calls — a local read from SecureStorage only.
   static Future<bool> hasValidToken() async {
