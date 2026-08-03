@@ -136,6 +136,17 @@ class HydrationService {
         ..timezone = profile['timezone']?.toString()
         ..isRegistered = profile['is_registered'] == true;
       await isar.hydrationProfiles.put(entry);
+
+      // Update DeviceRegistration.capacity with the real roster/room capacity
+      // from the server so the settings screen shows the correct student count.
+      final capacity = profile['capacity'];
+      if (capacity is int && capacity > 0) {
+        final regs = await isar.deviceRegistrations.where().findAll();
+        for (final reg in regs) {
+          reg.capacity = capacity;
+          await isar.deviceRegistrations.put(reg);
+        }
+      }
     });
   }
 

@@ -223,6 +223,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _buildSectionHeader('DEVICE INFORMATION'),
                     const SizedBox(height: 24),
                     _buildInfoCard([
+                      _buildInfoRow('SmartBoard ID', _registration?.smartBoardId ?? 'Unknown'),
                       _buildInfoRow('Room', _profile?.roomNumber ?? _registration?.roomName ?? 'Unknown'),
                       _buildInfoRow('Building', _profile?.building ?? _registration?.building ?? 'Unknown'),
                       _buildInfoRow('Department', _registration?.department ?? 'Unknown'),
