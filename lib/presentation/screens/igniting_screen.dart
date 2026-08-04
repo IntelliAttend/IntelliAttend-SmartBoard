@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/utils/logger.dart';
 import '../../core/rate_limiter.dart';
 import '../../services/api_service.dart';
 import '../../services/session_state_service.dart';
