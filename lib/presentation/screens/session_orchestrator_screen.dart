@@ -1,12 +1,9 @@
 import 'dart:async';
-import 'dart:convert';
-import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import '../../core/utils/logger.dart';
 import '../../core/config/app_config.dart';
 import '../../core/state/board_state_machine.dart';
 import '../../core/platform/kiosk_service.dart';
-import '../../core/platform/hardware_fingerprint_service.dart';
 import '../../models/isar_schemas.dart';
 import '../../services/session_state_service.dart';
 import '../../services/websocket_service.dart';
@@ -102,20 +99,6 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
     }
   }
 
-  Future<String?> _deriveSecretFromHalf1(String half1) async {
-    try {
-      final deviceId = await HardwareFingerprintService.getDeviceId();
-      final half2 = Hmac(sha256, utf8.encode(deviceId))
-          .convert(utf8.encode(half1))
-          .toString()
-          .substring(0, 16);
-      return '$half1$half2';
-    } catch (e) {
-      Log.e('[Orchestrator] Secret derivation failed: $e');
-      return null;
-    }
-  }
-
   void _handleStateChange(SessionState state) {
     if (state.isActive) {
       _prepareActiveSession(state);
@@ -125,9 +108,6 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
   Future<void> _prepareActiveSession(SessionState state) async {
     String? secret = _sessionState.sessionSecret;
     secret ??= await SecureStorageService.getSessionSecret(state.sessionId);
-    if (secret == null && state.sessionSecretHalf1 != null) {
-      secret = await _deriveSecretFromHalf1(state.sessionSecretHalf1!);
-    }
     if (secret == null) {
       Log.w('[Orchestrator] Cannot prepare ACTIVE — no session secret');
       return;

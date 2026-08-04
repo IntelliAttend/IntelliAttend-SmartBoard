@@ -14,7 +14,6 @@ class SessionState {
   final String? sectionId;
   final String? roomName;
   final String? startTime;
-  final String? sessionSecretHalf1;
   final String? websocketToken;
 
   SessionState({
@@ -29,7 +28,6 @@ class SessionState {
     this.sectionId,
     this.roomName,
     this.startTime,
-    this.sessionSecretHalf1,
     this.websocketToken,
   });
 
@@ -46,7 +44,6 @@ class SessionState {
       sectionId: json['section_id'] as String?,
       roomName: json['room_name'] as String?,
       startTime: json['start_time'] as String?,
-      sessionSecretHalf1: json['session_secret_half1'] as String?,
       websocketToken: json['websocket_token'] as String?,
     );
   }
@@ -63,7 +60,6 @@ class SessionState {
     String? sectionId,
     String? roomName,
     String? startTime,
-    String? sessionSecretHalf1,
     String? websocketToken,
   }) {
     return SessionState(
@@ -78,7 +74,6 @@ class SessionState {
       sectionId: sectionId ?? this.sectionId,
       roomName: roomName ?? this.roomName,
       startTime: startTime ?? this.startTime,
-      sessionSecretHalf1: sessionSecretHalf1 ?? this.sessionSecretHalf1,
       websocketToken: websocketToken ?? this.websocketToken,
     );
   }

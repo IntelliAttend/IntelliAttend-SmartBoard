@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
-import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
@@ -10,7 +8,6 @@ import '../../services/api_service.dart';
 import '../../services/session_state_service.dart';
 import '../widgets/glass_container.dart';
 import '../widgets/pin_input.dart';
-import '../../core/platform/hardware_fingerprint_service.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../services/session_manager.dart';
 import '../../services/time_sync_service.dart';
@@ -73,10 +70,10 @@ class _IgnitingScreenState extends State<IgnitingScreen> {
 
       final data = result['data'] ?? result;
       final sessionId = data['session_id']?.toString();
-      final sessionSecretHalf1 = data['session_secret_half1']?.toString();
+      final sessionSecret = data['session_secret']?.toString();
       final accessToken = data['access_token']?.toString();
 
-      if (sessionId == null || sessionSecretHalf1 == null) {
+      if (sessionId == null || sessionSecret == null) {
         setState(() {
           _errorMessage = 'Invalid server response. Please try again.';
           _isLoading = false;
@@ -90,16 +87,6 @@ class _IgnitingScreenState extends State<IgnitingScreen> {
       final courseName = data['course_name']?.toString() ?? widget.courseName;
       final facultyName = data['faculty_name']?.toString() ?? widget.facultyName;
       final sectionId = data['section_id']?.toString() ?? '';
-
-      final sessionSecret = await _deriveSecret(sessionSecretHalf1);
-
-      if (sessionSecret == null) {
-        setState(() {
-          _errorMessage = 'Security initialization failed. Please try again.';
-          _isLoading = false;
-        });
-        return;
-      }
 
       await SessionManager.saveSession(
         sessionId: sessionId,
@@ -139,20 +126,6 @@ class _IgnitingScreenState extends State<IgnitingScreen> {
         _errorMessage = 'Verification failed. Please try again.';
         _isLoading = false;
       });
-    }
-  }
-
-  Future<String?> _deriveSecret(String half1) async {
-    try {
-      final deviceId = await HardwareFingerprintService.getDeviceId();
-      final half2 = Hmac(sha256, utf8.encode(deviceId))
-          .convert(utf8.encode(half1))
-          .toString()
-          .substring(0, 16);
-      return '$half1$half2';
-    } catch (e) {
-      Log.e('[Igniting] Secret derivation failed: $e');
-      return null;
     }
   }
 
