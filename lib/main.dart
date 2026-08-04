@@ -118,6 +118,16 @@ late final IDeviceRepository globalDeviceRepository;
 late final IAuthRepository globalAuthRepository;
 
 void main(List<String> args) {
+  // Handle --exit flag: allows external processes (installer, update agent)
+  // to gracefully shut down the app. This is a safety net — the primary
+  // shutdown mechanism is the update agent's WaitingAppExit state, but
+  // this flag covers manual installs and edge cases.
+  if (args.contains('--exit')) {
+    // Use print() not Log() since logger may not be initialized yet.
+    print('[Main] --exit flag received. Shutting down gracefully.');
+    exit(0);
+  }
+
   runZonedGuarded(() async {
     WidgetsFlutterBinding.ensureInitialized();
 

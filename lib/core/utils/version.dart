@@ -1,14 +1,15 @@
 /// Immutable semantic version value object.
 ///
-/// Parses strings in `major.minor.patch` or `major.minor.patch+build` format
-/// and supports comparison operators. Used by [AutoUpdater] to decide whether
-/// the installed version is older than the server's minimum version.
+/// Parses strings in `major.minor.patch`, `major.minor.patch+build`, or
+/// `major.minor.patch.revision` format and supports comparison operators.
+/// Used by [AutoUpdater] to decide whether the installed version is older
+/// than the server's minimum version.
 ///
 /// Grammar:
-///   version-string = digits "." digits "." digits ["+" digits]
+///   version-string = digits "." digits "." digits ["." digits | "+" digits]
 ///
-/// Examples: `5.4.0`, `5.4.0+1`, `2.0.0-beta` (pre-release tags are ignored
-/// for comparison — only major/minor/patch participate).
+/// Examples: `5.4.0`, `5.4.0+1`, `5.4.0.25`, `2.0.0-beta` (pre-release
+/// tags are ignored for comparison — only major/minor/patch participate).
 class Version implements Comparable<Version> {
   final int major;
   final int minor;
@@ -29,6 +30,7 @@ class Version implements Comparable<Version> {
   /// Acceptable inputs:
   ///   - `"5.4.0"`          → Version(5, 4, 0)
   ///   - `"5.4.0+1"`        → Version(5, 4, 0, buildNumber: "1")
+  ///   - `"5.4.0.25"`       → Version(5, 4, 0, buildNumber: "25")
   ///   - `"5.4.0-beta"`     → Version(5, 4, 0, preRelease: "beta")
   ///   - `"5.4.0-beta+1"`   → Version(5, 4, 0, preRelease: "beta", buildNumber: "1")
   ///
@@ -61,6 +63,12 @@ class Version implements Comparable<Version> {
     final parts = versionCore.split('.');
     if (parts.length < 3) {
       throw FormatException('Version must have at least major.minor.patch', raw);
+    }
+
+    // If no build number from '+' and there's a 4th dot segment, use it as build number.
+    // Handles Windows PE version format: "5.5.0.24" → buildNumber: "24"
+    if (buildNumber == null && parts.length >= 4) {
+      buildNumber = parts[3];
     }
 
     return Version(

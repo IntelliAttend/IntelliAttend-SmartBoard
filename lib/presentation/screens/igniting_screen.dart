@@ -108,7 +108,6 @@ class _IgnitingScreenState extends State<IgnitingScreen> {
       SessionStateService().applyState(SessionState(
         sessionId: sessionId,
         state: 'ACTIVE',
-        sessionSecretHalf1: sessionSecretHalf1,
         websocketToken: accessToken,
         courseName: courseName,
         facultyName: facultyName,

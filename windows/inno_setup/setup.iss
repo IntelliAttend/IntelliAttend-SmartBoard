@@ -107,15 +107,19 @@ begin
   Result := FileExists(Marker);
 end;
 
-function InitializeSetup(): Boolean;
-var
-  ResultCode: Integer;
-  ExePath: String;
-begin
-  Result := True;
-  ExePath := ExpandConstant('{localappdata}\IntelliAttendSmartBoard\{#MyAppExeName}');
-  Exec(ExePath, '--exit', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-end;
+// InitializeSetup intentionally removed.
+// The zombie process bug: when invoked by the update agent, the app has
+// already called exit(0). Exec(ExePath, '--exit') launched a NEW zombie
+// instance because the app doesn't handle --exit, and ewWaitUntilTerminated
+// blocked forever waiting for it.
+//
+// Inno Setup's CloseApplications=force (line 61) already handles closing
+// running apps during installation. It uses Windows Restart Manager APIs
+// to gracefully shut down processes that have files locked in the install
+// directory. This is the industry-standard approach — no custom code needed.
+//
+// For manual installs where the user runs the installer while the app is
+// open, CloseApplications=force will prompt to close it automatically.
 
 // The update agent (update_agent.exe) verifies every installer and every
 // installed exe with WinVerifyTrust. Releases are signed with a self-signed

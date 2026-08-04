@@ -578,7 +578,6 @@ class WebsocketService {
             sessionId: message['session_id'] as String,
             state: 'ACTIVE',
             version: message['version'] as int? ?? 0,
-            sessionSecretHalf1: message['session_secret_half1'] as String?,
             websocketToken: message['websocket_token'] as String?,
           ));
           break;
