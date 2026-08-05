@@ -167,8 +167,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     _wsService.connectAttendance(widget.sessionId);
 
     // Sync pending taps when WebSocket connects
-    _wsService.onConnected.listen((_) {
-      if (_pendingTaps.isNotEmpty) {
+    _wsService.onConnectionState.listen((connected) {
+      if (connected && _pendingTaps.isNotEmpty) {
         _syncPendingTaps();
       }
     });
