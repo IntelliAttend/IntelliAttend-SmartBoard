@@ -3,7 +3,6 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
@@ -15,7 +14,6 @@ import 'package:provider/provider.dart';
 import '../../services/session_manager.dart';
 import '../../main.dart';
 import '../../services/api_service.dart';
-import '../../core/platform/hardware_fingerprint_service.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../core/rate_limiter.dart';
 import '../../models/board_notification.dart';
@@ -646,20 +644,13 @@ class _IdleScreenState extends State<IdleScreen>
     }
   }
 
-  /// Helper to derive the final secret using the hardware fingerprint (Atomic Logic)
+  /// Helper to extract session secret from server response.
+  /// Server returns full session_secret directly (no split derivation needed).
   Future<String?> _deriveSecret(Map<String, dynamic> data) async {
     try {
-      final half1 = data['session_secret_half1']?.toString();
-      if (half1 == null) return null;
-
-      final deviceId = await HardwareFingerprintService.getDeviceId();
-      final half2 = Hmac(sha256, utf8.encode(deviceId))
-          .convert(utf8.encode(half1))
-          .toString()
-          .substring(0, 16);
-      return '$half1$half2';
+      return data['session_secret']?.toString();
     } catch (e) {
-      Log.e('[Idle] Secret derivation failed: $e');
+      Log.e('[Idle] Secret extraction failed: $e');
       return null;
     }
   }
