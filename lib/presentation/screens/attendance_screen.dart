@@ -102,8 +102,22 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     _startEndSessionCooldown();
     unawaited(_loadClassRoster());
     _restoreLocalSnapshot();
+    unawaited(_loadAndSyncPendingTaps());
 
     _connectWebSocket();
+  }
+
+  Future<void> _loadAndSyncPendingTaps() async {
+    // Load any pending taps from offline queue
+    final pending = await SessionManager.loadPendingTaps(widget.sessionId);
+    if (pending.isNotEmpty) {
+      _pendingTaps.addAll(pending);
+      Log.i('[Attendance] Loaded ${pending.length} pending taps from offline queue');
+      // Attempt to sync immediately if connected
+      if (_wsService.isConnected) {
+        await _syncPendingTaps();
+      }
+    }
   }
 
   Future<void> _loadClassRoster() async {
@@ -151,6 +165,13 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
   void _connectWebSocket() {
     _wsService.connectAttendance(widget.sessionId);
+
+    // Sync pending taps when WebSocket connects
+    _wsService.onConnected.listen((_) {
+      if (_pendingTaps.isNotEmpty) {
+        _syncPendingTaps();
+      }
+    });
 
     _wsSyncSubscription = _wsService.onFullStateSync.listen((sync) {
       if (!mounted) return;
@@ -301,14 +322,62 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     if (mounted) setState(() {});
   }
 
+  /// Queue for offline taps — synced when connectivity returns
+  final List<Map<String, dynamic>> _pendingTaps = [];
+
   void _sendTap(StudentInfo? student, String status, String boardId) {
-    if (student == null || boardId.isEmpty) return;
-    _wsService.sendTap(
-      sessionId: widget.sessionId,
-      studentId: student.email,
-      status: status,
-      boardId: boardId,
-    );
+    if (student == null) return;
+
+    // Fire-and-forget REST call with offline queue fallback
+    _sendTapViaRest(student.email, status).catchError((e) {
+      Log.w('[Attendance] REST tap failed, queuing locally: $e');
+      _pendingTaps.add({
+        'student_id': student.email,
+        'status': status,
+        'tapped_at_ms': DateTime.now().millisecondsSinceEpoch,
+      });
+      _savePendingTaps();
+    });
+  }
+
+  Future<void> _sendTapViaRest(String studentId, String status) async {
+    try {
+      await ApiService.tapAttendance(
+        sessionId: widget.sessionId,
+        studentId: studentId,
+        status: status,
+      );
+    } catch (e) {
+      // Re-throw to trigger offline queue in _sendTap
+      rethrow;
+    }
+  }
+
+  Future<void> _savePendingTaps() async {
+    try {
+      await SessionManager.savePendingTaps(
+        sessionId: widget.sessionId,
+        taps: _pendingTaps,
+      );
+    } catch (e) {
+      Log.e('[Attendance] Failed to save pending taps: $e');
+    }
+  }
+
+  Future<void> _syncPendingTaps() async {
+    if (_pendingTaps.isEmpty) return;
+    try {
+      final tapsToSend = List<Map<String, dynamic>>.from(_pendingTaps);
+      await ApiService.offlineSync(
+        sessionId: widget.sessionId,
+        entries: tapsToSend,
+      );
+      _pendingTaps.clear();
+      await SessionManager.clearPendingTaps(sessionId: widget.sessionId);
+      Log.i('[Attendance] Synced ${tapsToSend.length} pending taps');
+    } catch (e) {
+      Log.w('[Attendance] Failed to sync pending taps: $e');
+    }
   }
 
   void _handleSplitReviewTap(int index, bool isInPresent) {

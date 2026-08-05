@@ -378,6 +378,46 @@ class ApiService {
     if (response.statusCode != 200) throw _apiError('Attendance submit', response);
   }
 
+  /// REST-based individual tap — primary mechanism for marking attendance.
+  /// Returns true if record was created, false if already exists (idempotent).
+  static Future<bool> tapAttendance({
+    required String sessionId,
+    required String studentId,
+    required String status,
+  }) async {
+    final response = await _request(
+      'POST',
+      'api/v1/board/session/attendance/tap',
+      headers: await _authHeaders(),
+      body: jsonEncode({
+        'session_id': sessionId,
+        'student_id': studentId,
+        'status': status,
+      }),
+    );
+    if (response.statusCode != 200) throw _apiError('Attendance tap', response);
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    return data['record_id'] != null; // true = new record, false = already existed
+  }
+
+  /// Sync queued taps when connectivity returns (offline recovery).
+  static Future<Map<String, dynamic>> offlineSync({
+    required String sessionId,
+    required List<Map<String, dynamic>> entries,
+  }) async {
+    final response = await _request(
+      'POST',
+      'api/v1/board/session/attendance/offline-sync',
+      headers: await _authHeaders(),
+      body: jsonEncode({
+        'session_id': sessionId,
+        'entries': entries,
+      }),
+    );
+    if (response.statusCode != 200) throw _apiError('Offline sync', response);
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
   static Future<void> terminateSession(String sessionId) async {
     final response = await _request(
       'POST',

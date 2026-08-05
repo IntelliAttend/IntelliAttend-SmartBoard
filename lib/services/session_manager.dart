@@ -428,4 +428,56 @@ class SessionManager {
     if (session == null) return null;
     return (session.presentIndices, session.absentIndices);
   }
+
+  /// Save pending taps for offline recovery
+  static Future<void> savePendingTaps({
+    required String sessionId,
+    required List<Map<String, dynamic>> taps,
+  }) async {
+    final session = await _isar!.activeSessions
+        .filter()
+        .sessionIdEqualTo(sessionId)
+        .findFirst();
+    if (session == null) {
+      Log.w('[SessionManager] No active session $sessionId to save pending taps to.');
+      return;
+    }
+    await _isar!.writeTxn(() async {
+      // Store as JSON string in a field (assuming we have a pendingTapsJson field)
+      // For now, we'll use a simple approach with the existing fields
+      session.pendingTapsJson = taps.isNotEmpty ? jsonEncode(taps) : null;
+      await _isar!.activeSessions.put(session);
+    });
+    Log.i('[SessionManager] ${taps.length} pending taps saved for $sessionId');
+  }
+
+  /// Clear pending taps after successful sync
+  static Future<void> clearPendingTaps({required String sessionId}) async {
+    final session = await _isar!.activeSessions
+        .filter()
+        .sessionIdEqualTo(sessionId)
+        .findFirst();
+    if (session == null) return;
+    await _isar!.writeTxn(() async {
+      session.pendingTapsJson = null;
+      await _isar!.activeSessions.put(session);
+    });
+    Log.i('[SessionManager] Pending taps cleared for $sessionId');
+  }
+
+  /// Load pending taps for sync
+  static Future<List<Map<String, dynamic>>> loadPendingTaps(String sessionId) async {
+    final session = await _isar!.activeSessions
+        .filter()
+        .sessionIdEqualTo(sessionId)
+        .findFirst();
+    if (session?.pendingTapsJson == null) return [];
+    try {
+      final List<dynamic> decoded = jsonDecode(session!.pendingTapsJson!);
+      return decoded.cast<Map<String, dynamic>>();
+    } catch (e) {
+      Log.e('[SessionManager] Failed to decode pending taps: $e');
+      return [];
+    }
+  }
 }

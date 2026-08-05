@@ -23,6 +23,9 @@ class ActiveSession {
 
   List<int> presentIndices = [];
   List<int> absentIndices = [];
+
+  /// JSON-encoded list of pending taps for offline recovery
+  String? pendingTapsJson;
 }
 
 
