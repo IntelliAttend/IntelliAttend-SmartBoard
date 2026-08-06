@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:isar/isar.dart';
 import '../../core/theme/app_theme.dart';
 import '../../services/api_service.dart';
 import '../../services/session_manager.dart';
@@ -108,13 +109,13 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               : sectionId;
 
       final allRosters = await isar.hydrationRosters.where().findAll();
-      var rosterEntries = allRosters.where((r) => r.rosterKey == rosterKey).toList();
+      var matched = allRosters.where((r) => r.rosterKey == rosterKey).toList();
 
-      if (rosterEntries.isEmpty && courseCode != null && courseCode.isNotEmpty) {
-        rosterEntries = allRosters.where((r) => r.rosterKey.startsWith(sectionId)).toList();
+      if (matched.isEmpty && courseCode != null && courseCode.isNotEmpty) {
+        matched = allRosters.where((r) => r.rosterKey.startsWith(sectionId)).toList();
       }
 
-      _students = rosterEntries
+      _students = matched
           .map((r) => _StudentEntry(
                 studentId: r.studentId,
                 name: r.name,
