@@ -835,7 +835,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                     MaterialPageRoute(
                       builder: (context) => AttendanceScreen(
                         sessionId: widget.sessionId,
-                        websocketService: widget.websocketService ?? WebsocketService(AppConfig.baseUrl),
                         capacity: widget.totalCapacity,
                         courseName: widget.courseName,
                         facultyName: widget.facultyName,

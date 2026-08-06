@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../../core/theme/app_theme.dart';
 import '../../services/api_service.dart';
 import '../../services/session_manager.dart';
+import '../../services/student_service.dart';
 import '../../core/platform/kiosk_service.dart';
 import '../../core/utils/roll_number_utils.dart';
 import '../../core/utils/logger.dart';
@@ -73,9 +74,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
   List<_StudentEntry> _students = [];
 
-  Timer? _pulseTimer;
-  final Set<int> _pulsingSeatIndices = {};
-
   int _pendingRowTapIndex = -1;
   Timer? _tapTimer;
 
@@ -110,13 +108,13 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               : sectionId;
 
       final rosterEntries = await isar.hydrationRosters
-          .filter()
+          .where()
           .rosterKeyEqualTo(rosterKey)
           .findAll();
 
       if (rosterEntries.isEmpty && courseCode != null && courseCode.isNotEmpty) {
         final fallback = await isar.hydrationRosters
-            .filter()
+            .where()
             .rosterKeyStartsWith(sectionId)
             .findAll();
         _students = fallback
@@ -457,36 +455,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     await KioskService.executeAdministrativeShutdown();
   }
 
-  Future<void> _handleSessionEnd() async {
-    if (_isSessionEnding) return;
-    _isSessionEnding = true;
-    _endSessionCooldownTimer?.cancel();
-    KioskService.setMode(KioskMode.fullscreen);
-    if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (context) => SummaryScreen(
-          sessionId: widget.sessionId,
-          presentCount: _presentCount,
-          totalCapacity: widget.capacity,
-          courseName: widget.courseName,
-          facultyName: widget.facultyName,
-          slotId: widget.slotId,
-          students: _students.map((s) => StudentInfo(
-            rollNumber: s.rollNumber,
-            name: s.name,
-            email: s.studentId,
-            sectionId: widget.sectionId ?? '',
-            classId: '',
-          )).toList(),
-          presentIndices: _presentSeatIndices.toList(),
-          absentIndices: _absentSeatIndices.toList(),
-          isAttendanceSubmitted: _isAttendanceSubmitted,
-        ),
-      ),
-    );
-  }
-
   void _handlePhysicalTapEnd() {
     if (!_isAttendanceSubmitted) {
       _showSubmitFirstDialog();
@@ -688,7 +656,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
   @override
   void dispose() {
-    _pulseTimer?.cancel();
     _killSwitchJTimer?.cancel();
     _killSwitchFocusNode.dispose();
     _endSessionCooldownTimer?.cancel();
