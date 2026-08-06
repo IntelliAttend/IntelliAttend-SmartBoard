@@ -21,8 +21,6 @@ class AttendanceScreen extends StatefulWidget {
   final String courseName;
   final String facultyName;
   final String roomName;
-  final String? sectionId;
-  final String? courseCode;
   final String? slotId;
   final String? boardId;
 
@@ -37,8 +35,6 @@ class AttendanceScreen extends StatefulWidget {
     required this.facultyName,
     required this.roomName,
     this.initialPresentCount = 0,
-    this.sectionId,
-    this.courseCode,
     this.slotId,
     this.boardId,
     this.onNavigateBack,
@@ -93,37 +89,24 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   Future<void> _loadClassRoster() async {
-    final sectionId = widget.sectionId;
-    final courseCode = widget.courseCode;
-    if (sectionId == null || sectionId.isEmpty) {
-      _isRosterLoaded = true;
-      if (mounted) setState(() {});
-      return;
-    }
-
     try {
       final isar = SessionManager.isar;
-      final rosterKey =
-          courseCode != null && courseCode.isNotEmpty
-              ? '${sectionId}_$courseCode'
-              : sectionId;
-
       final allRosters = await isar.hydrationRosters.where().findAll();
-      var matched = allRosters.where((r) => r.rosterKey == rosterKey).toList();
 
-      if (matched.isEmpty && courseCode != null && courseCode.isNotEmpty) {
-        matched = allRosters.where((r) => r.rosterKey.startsWith(sectionId)).toList();
+      final seen = <String>{};
+      final unique = <_StudentEntry>[];
+      for (final r in allRosters) {
+        if (r.studentId.isNotEmpty && seen.add(r.studentId)) {
+          unique.add(_StudentEntry(
+            studentId: r.studentId,
+            name: r.name,
+            rollNumber: r.rollNumber ?? '',
+          ));
+        }
       }
+      _students = unique;
 
-      _students = matched
-          .map((r) => _StudentEntry(
-                studentId: r.studentId,
-                name: r.name,
-                rollNumber: r.rollNumber ?? '',
-              ))
-          .toList();
-
-      Log.i('[Attendance] Loaded ${_students.length} students from hydration roster (key=$rosterKey)');
+      Log.i('[Attendance] Loaded ${_students.length} unique students from hydration roster');
     } catch (e) {
       Log.w('[Attendance] Failed to load roster from hydration: $e');
     }
@@ -256,7 +239,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
             courseName: widget.courseName,
             facultyName: widget.facultyName,
             roomName: widget.roomName,
-            sectionId: widget.sectionId,
             slotId: widget.slotId,
             presentCount: _presentSeatIndices.length,
             totalCapacity: widget.capacity,
@@ -264,7 +246,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               rollNumber: s.rollNumber,
               name: s.name,
               email: s.studentId,
-              sectionId: widget.sectionId ?? '',
+              sectionId: '',
               classId: '',
             )).toList(),
             presentIndices: _presentSeatIndices.toList(),
@@ -683,7 +665,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
             rollNumber: s.rollNumber,
             name: s.name,
             email: s.studentId,
-            sectionId: widget.sectionId ?? '',
+            sectionId: '',
             classId: '',
           )).toList(),
           presentIndices: _presentSeatIndices.toList(),

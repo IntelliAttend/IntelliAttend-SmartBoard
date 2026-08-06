@@ -838,7 +838,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                         courseName: widget.courseName,
                         facultyName: widget.facultyName,
                         roomName: widget.roomName,
-                        sectionId: widget.sectionId,
                         slotId: widget.slotId,
                         initialPresentCount: widget.presentCount,
                         boardId: '',

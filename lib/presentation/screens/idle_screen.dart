@@ -2439,8 +2439,6 @@ class _IdleScreenState extends State<IdleScreen>
                             courseName: session.courseName,
                             facultyName: session.facultyName,
                             roomName: widget.registration.roomName,
-                            sectionId: session.sectionId,
-                            courseCode: '',
                             slotId: null,
                             initialPresentCount: session.presentIndices.length,
                             boardId: widget.registration.smartBoardId,
