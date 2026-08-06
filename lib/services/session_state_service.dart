@@ -12,6 +12,7 @@ class SessionState {
   final String? courseName;
   final String? facultyName;
   final String? sectionId;
+  final String? courseCode;
   final String? roomName;
   final String? startTime;
   final String? websocketToken;
@@ -26,6 +27,7 @@ class SessionState {
     this.courseName,
     this.facultyName,
     this.sectionId,
+    this.courseCode,
     this.roomName,
     this.startTime,
     this.websocketToken,
@@ -42,6 +44,7 @@ class SessionState {
       courseName: json['course_name'] as String?,
       facultyName: json['faculty_name'] as String?,
       sectionId: json['section_id'] as String?,
+      courseCode: json['course_code'] as String?,
       roomName: json['room_name'] as String?,
       startTime: json['start_time'] as String?,
       websocketToken: json['websocket_token'] as String?,
@@ -58,6 +61,7 @@ class SessionState {
     String? courseName,
     String? facultyName,
     String? sectionId,
+    String? courseCode,
     String? roomName,
     String? startTime,
     String? websocketToken,
@@ -72,6 +76,7 @@ class SessionState {
       courseName: courseName ?? this.courseName,
       facultyName: facultyName ?? this.facultyName,
       sectionId: sectionId ?? this.sectionId,
+      courseCode: courseCode ?? this.courseCode,
       roomName: roomName ?? this.roomName,
       startTime: startTime ?? this.startTime,
       websocketToken: websocketToken ?? this.websocketToken,
@@ -88,6 +93,7 @@ class SessionState {
     if (courseName != null) 'course_name': courseName,
     if (facultyName != null) 'faculty_name': facultyName,
     if (sectionId != null) 'section_id': sectionId,
+    if (courseCode != null) 'course_code': courseCode,
     if (roomName != null) 'room_name': roomName,
     if (startTime != null) 'start_time': startTime,
   };

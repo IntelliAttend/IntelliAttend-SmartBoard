@@ -5,12 +5,10 @@ import 'package:flutter/services.dart';
 import '../../core/theme/app_theme.dart';
 import '../../services/api_service.dart';
 import '../../services/session_manager.dart';
-import '../../services/student_service.dart';
-import '../../services/websocket_service.dart';
-import '../../services/heartbeat_service.dart';
 import '../../core/platform/kiosk_service.dart';
 import '../../core/utils/roll_number_utils.dart';
 import '../../core/utils/logger.dart';
+import '../../models/isar_schemas.dart';
 import 'summary_screen.dart';
 import 'workspace_screen.dart';
 import '../widgets/glass_container.dart';
@@ -22,10 +20,10 @@ class AttendanceScreen extends StatefulWidget {
   final String facultyName;
   final String roomName;
   final String? sectionId;
+  final String? courseCode;
   final String? slotId;
   final String? boardId;
 
-  final WebsocketService websocketService;
   final int initialPresentCount;
   final VoidCallback? onNavigateBack;
 
@@ -36,9 +34,9 @@ class AttendanceScreen extends StatefulWidget {
     required this.courseName,
     required this.facultyName,
     required this.roomName,
-    required this.websocketService,
     this.initialPresentCount = 0,
     this.sectionId,
+    this.courseCode,
     this.slotId,
     this.boardId,
     this.onNavigateBack,
@@ -52,7 +50,6 @@ enum _Stage { grid, splitReview }
 
 class _AttendanceScreenState extends State<AttendanceScreen>
     with TickerProviderStateMixin {
-  late WebsocketService _wsService;
   bool _isSessionEnding = false;
   int _presentCount = 0;
   int _totalStudents = 0;
@@ -74,17 +71,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   Timer? _killSwitchJTimer;
   final FocusNode _killSwitchFocusNode = FocusNode();
 
-  List<StudentInfo> _students = [];
-  final Map<String, int> _emailToSeatIndex = {};
+  List<_StudentEntry> _students = [];
 
-  StreamSubscription? _wsAttendanceSubscription;
-  StreamSubscription? _wsSyncSubscription;
-  StreamSubscription? _wsSessionEndedSubscription;
-  StreamSubscription? _wsStudentVerifiedSubscription;
-  StreamSubscription? _wsAttendanceUpdatedSubscription;
-
-  final Set<int> _pulsingSeatIndices = {};
   Timer? _pulseTimer;
+  final Set<int> _pulsingSeatIndices = {};
 
   int _pendingRowTapIndex = -1;
   Timer? _tapTimer;
@@ -96,42 +86,61 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     super.initState();
 
     KioskService.setMode(KioskMode.locked);
-    _wsService = widget.websocketService;
     _presentCount = widget.initialPresentCount;
 
     _startEndSessionCooldown();
     unawaited(_loadClassRoster());
     _restoreLocalSnapshot();
-    unawaited(_loadAndSyncPendingTaps());
-
-    _connectWebSocket();
-  }
-
-  Future<void> _loadAndSyncPendingTaps() async {
-    // Load any pending taps from offline queue
-    final pending = await SessionManager.loadPendingTaps(widget.sessionId);
-    if (pending.isNotEmpty) {
-      _pendingTaps.addAll(pending);
-      Log.i('[Attendance] Loaded ${pending.length} pending taps from offline queue');
-      // Attempt to sync immediately if connected
-      if (_wsService.isConnected) {
-        await _syncPendingTaps();
-      }
-    }
   }
 
   Future<void> _loadClassRoster() async {
     final sectionId = widget.sectionId;
+    final courseCode = widget.courseCode;
     if (sectionId == null || sectionId.isEmpty) {
       _isRosterLoaded = true;
+      if (mounted) setState(() {});
       return;
     }
+
     try {
-      final students = await StudentService().getStudentsBySection(sectionId);
-      _students = students;
+      final isar = SessionManager.isar;
+      final rosterKey =
+          courseCode != null && courseCode.isNotEmpty
+              ? '${sectionId}_$courseCode'
+              : sectionId;
+
+      final rosterEntries = await isar.hydrationRosters
+          .filter()
+          .rosterKeyEqualTo(rosterKey)
+          .findAll();
+
+      if (rosterEntries.isEmpty && courseCode != null && courseCode.isNotEmpty) {
+        final fallback = await isar.hydrationRosters
+            .filter()
+            .rosterKeyStartsWith(sectionId)
+            .findAll();
+        _students = fallback
+            .map((r) => _StudentEntry(
+                  studentId: r.studentId,
+                  name: r.name,
+                  rollNumber: r.rollNumber ?? '',
+                ))
+            .toList();
+      } else {
+        _students = rosterEntries
+            .map((r) => _StudentEntry(
+                  studentId: r.studentId,
+                  name: r.name,
+                  rollNumber: r.rollNumber ?? '',
+                ))
+            .toList();
+      }
+
+      Log.i('[Attendance] Loaded ${_students.length} students from hydration roster (key=$rosterKey)');
     } catch (e) {
-      Log.w('[Attendance] Failed to load roster for section $sectionId: $e');
+      Log.w('[Attendance] Failed to load roster from hydration: $e');
     }
+
     if (mounted) {
       setState(() {
         _totalStudents = _students.length;
@@ -163,176 +172,31 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     }
   }
 
-  void _connectWebSocket() {
-    _wsService.connectAttendance(widget.sessionId);
-
-    // Sync pending taps when WebSocket connects
-    _wsService.onConnectionState.listen((connected) {
-      if (connected && _pendingTaps.isNotEmpty) {
-        _syncPendingTaps();
-      }
-    });
-
-    _wsSyncSubscription = _wsService.onFullStateSync.listen((sync) {
-      if (!mounted) return;
-      setState(() {
-        _presentSeatIndices.clear();
-        int presentCount = 0;
-        for (final student in sync.presentStudents) {
-          if (student.status.toUpperCase() != 'PRESENT') continue;
-          final key =
-              (student.studentEmail ?? student.studentId).toLowerCase();
-          int? index = _emailToSeatIndex[key];
-          if (index == null) {
-            final idx = _students.indexWhere(
-                (s) => s.rollNumber == student.studentId);
-            if (idx < 0 || idx >= _students.length) continue;
-            index = idx;
-          }
-          final i = index;
-          _presentSeatIndices.add(i);
-          // Populate student name from sync data (§5)
-          if (student.studentName.isNotEmpty &&
-              _students[i].name.isEmpty) {
-            _students[i] = StudentInfo(
-              rollNumber: _students[i].rollNumber,
-              name: student.studentName,
-              email: student.studentEmail ?? student.studentId,
-              sectionId: _students[i].sectionId,
-              classId: _students[i].classId,
-            );
-          }
-          presentCount++;
-        }
-        _presentCount = presentCount;
-        _totalStudents = sync.totalStudents;
-      });
-      Log.i(
-          '[Attendance] Full state sync: $_presentCount present / ${sync.totalStudents} total.');
-    });
-
-    _wsAttendanceSubscription = _wsService.onAttendanceMarked.listen((event) {
-      if (!mounted) return;
-      setState(() {
-        final email = (event.studentEmail ?? event.studentId).toLowerCase();
-        final index = _emailToSeatIndex[email];
-        if (index != null) {
-          _presentSeatIndices.add(index);
-          _absentSeatIndices.remove(index);
-        }
-      });
-      Log.i('[Attendance] WebSocket: ${event.studentId} marked present.');
-    });
-
-    _wsStudentVerifiedSubscription =
-        _wsService.onStudentVerified.listen((event) {
-      if (!mounted) return;
-      final email = event.studentId.toLowerCase();
-      int? index = _emailToSeatIndex[email];
-      if (index == null) {
-        final idx = _students.indexWhere((s) => s.rollNumber == event.studentId);
-        if (idx < 0 || idx >= _students.length) {
-          Log.d('[Attendance] student_verified: no seat match for ${event.studentId}');
-          return;
-        }
-        index = idx;
-      }
-      final i = index;
-      if (event.isAbsent) {
-        setState(() {
-          _absentSeatIndices.add(i);
-          _presentSeatIndices.remove(i);
-        });
-      } else if (!_presentSeatIndices.contains(i)) {
-          setState(() {
-            _presentSeatIndices.add(i);
-            _absentSeatIndices.remove(i);
-            _pulsingSeatIndices.add(i);
-          });
-          _pulseTimer?.cancel();
-          _pulseTimer = Timer(const Duration(milliseconds: 1500), () {
-            if (mounted) {
-              setState(() => _pulsingSeatIndices.clear());
-            }
-          });
-        }
-        // Populate student name from verified event (§5)
-        if (event.studentName.isNotEmpty &&
-            _students[i].name.isEmpty) {
-          final student = _students[i];
-          setState(() {
-            _students[i] = StudentInfo(
-              rollNumber: student.rollNumber,
-              name: event.studentName,
-              email: event.studentId,
-              sectionId: student.sectionId,
-              classId: student.classId,
-            );
-          });
-        }
-      Log.i(
-          '[Attendance] student_verified: ${event.studentId} seat=${event.seat} status=${event.status}');
-    });
-
-    _wsAttendanceUpdatedSubscription =
-        _wsService.onAttendanceUpdated.listen((event) {
-      if (!mounted) return;
-      setState(() {
-        _presentCount = event.present;
-        _totalStudents =
-            _totalStudents > 0 ? _totalStudents : event.present + event.absent;
-      });
-      Log.i(
-          '[Attendance] Server update: ${event.present} present ${event.absent} absent');
-    });
-
-    _wsSessionEndedSubscription = _wsService.onSessionEnded.listen((event) {
-      if (!mounted) return;
-      Log.i('[Attendance] WebSocket: Session ended by server.');
-      _handleSessionEnd();
-    });
-  }
-
-  void _startEndSessionCooldown() {
-    _endSessionCooldownTimer =
-        Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_endSessionCountdown > 0) {
-        if (mounted) setState(() => _endSessionCountdown--);
-      } else {
-        timer.cancel();
-        if (mounted) setState(() => _canEndSession = true);
-      }
-    });
-  }
-
   void _handleCellTapDown(int index) {
     final student = index < _students.length ? _students[index] : null;
-    final boardId = widget.boardId ?? _wsService.boardId ?? '';
 
     if (_presentSeatIndices.contains(index)) {
       _presentSeatIndices.remove(index);
       _absentSeatIndices.add(index);
-      _sendTap(student, 'absent', boardId);
+      _sendTap(student, 'absent');
     } else if (_absentSeatIndices.contains(index)) {
       _absentSeatIndices.remove(index);
     } else {
       _presentSeatIndices.add(index);
-      _sendTap(student, 'present', boardId);
+      _sendTap(student, 'present');
     }
     if (mounted) setState(() {});
   }
 
-  /// Queue for offline taps — synced when connectivity returns
   final List<Map<String, dynamic>> _pendingTaps = [];
 
-  void _sendTap(StudentInfo? student, String status, String boardId) {
+  void _sendTap(_StudentEntry? student, String status) {
     if (student == null) return;
 
-    // Fire-and-forget REST call with offline queue fallback
-    _sendTapViaRest(student.email, status).catchError((e) {
+    _sendTapViaRest(student.studentId, status).catchError((e) {
       Log.w('[Attendance] REST tap failed, queuing locally: $e');
       _pendingTaps.add({
-        'student_id': student.email,
+        'student_id': student.studentId,
         'status': status,
         'tapped_at_ms': DateTime.now().millisecondsSinceEpoch,
       });
@@ -341,16 +205,11 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   Future<void> _sendTapViaRest(String studentId, String status) async {
-    try {
-      await ApiService.tapAttendance(
-        sessionId: widget.sessionId,
-        studentId: studentId,
-        status: status,
-      );
-    } catch (e) {
-      // Re-throw to trigger offline queue in _sendTap
-      rethrow;
-    }
+    await ApiService.tapAttendance(
+      sessionId: widget.sessionId,
+      studentId: studentId,
+      status: status,
+    );
   }
 
   Future<void> _savePendingTaps() async {
@@ -361,22 +220,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       );
     } catch (e) {
       Log.e('[Attendance] Failed to save pending taps: $e');
-    }
-  }
-
-  Future<void> _syncPendingTaps() async {
-    if (_pendingTaps.isEmpty) return;
-    try {
-      final tapsToSend = List<Map<String, dynamic>>.from(_pendingTaps);
-      await ApiService.offlineSync(
-        sessionId: widget.sessionId,
-        entries: tapsToSend,
-      );
-      _pendingTaps.clear();
-      await SessionManager.clearPendingTaps(sessionId: widget.sessionId);
-      Log.i('[Attendance] Synced ${tapsToSend.length} pending taps');
-    } catch (e) {
-      Log.w('[Attendance] Failed to sync pending taps: $e');
     }
   }
 
@@ -398,17 +241,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       presentIndices: _presentSeatIndices.toList(),
       absentIndices: _absentSeatIndices.toList(),
     );
-    if (_wsService.isConnected) {
-      final presentEmails =
-          _presentSeatIndices.map((i) => _students[i].email).toList();
-      final absentEmails =
-          _absentSeatIndices.map((i) => _students[i].email).toList();
-      _wsService.saveDraft(
-        sessionId: widget.sessionId,
-        presentEmails: presentEmails,
-        absentEmails: absentEmails,
-      );
-    }
     if (mounted) setState(() => _stage = _Stage.splitReview);
   }
 
@@ -416,24 +248,16 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     if (_isSubmitting) return;
     setState(() => _isSubmitting = true);
     try {
-      final presentEmails =
-          _presentSeatIndices.map((i) => _students[i].email).toList();
-      final absentEmails =
-          _absentSeatIndices.map((i) => _students[i].email).toList();
+      final presentIds =
+          _presentSeatIndices.map((i) => _students[i].studentId).toList();
+      final absentIds =
+          _absentSeatIndices.map((i) => _students[i].studentId).toList();
 
-      if (_wsService.isConnected) {
-        _wsService.submitAttendance(
-          sessionId: widget.sessionId,
-          presentEmails: presentEmails,
-          absentEmails: absentEmails,
-        );
-      } else {
-        await ApiService.submitAttendance(
-          sessionId: widget.sessionId,
-          presentEmails: presentEmails,
-          absentEmails: absentEmails,
-        );
-      }
+      await ApiService.submitAttendance(
+        sessionId: widget.sessionId,
+        presentEmails: presentIds,
+        absentEmails: absentIds,
+      );
 
       setState(() => _isAttendanceSubmitted = true);
       if (!mounted) return;
@@ -441,7 +265,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
           builder: (context) => WorkspaceScreen(
-            websocketService: widget.websocketService,
             sessionId: widget.sessionId,
             courseName: widget.courseName,
             facultyName: widget.facultyName,
@@ -450,7 +273,13 @@ class _AttendanceScreenState extends State<AttendanceScreen>
             slotId: widget.slotId,
             presentCount: _presentSeatIndices.length,
             totalCapacity: widget.capacity,
-            students: _students,
+            students: _students.map((s) => StudentInfo(
+              rollNumber: s.rollNumber,
+              name: s.name,
+              email: s.studentId,
+              sectionId: widget.sectionId ?? '',
+              classId: '',
+            )).toList(),
             presentIndices: _presentSeatIndices.toList(),
             absentIndices: _absentSeatIndices.toList(),
             isAttendanceSubmitted: true,
@@ -643,7 +472,13 @@ class _AttendanceScreenState extends State<AttendanceScreen>
           courseName: widget.courseName,
           facultyName: widget.facultyName,
           slotId: widget.slotId,
-          students: _students,
+          students: _students.map((s) => StudentInfo(
+            rollNumber: s.rollNumber,
+            name: s.name,
+            email: s.studentId,
+            sectionId: widget.sectionId ?? '',
+            classId: '',
+          )).toList(),
           presentIndices: _presentSeatIndices.toList(),
           absentIndices: _absentSeatIndices.toList(),
           isAttendanceSubmitted: _isAttendanceSubmitted,
@@ -853,14 +688,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
   @override
   void dispose() {
-    _wsAttendanceSubscription?.cancel();
-    _wsSyncSubscription?.cancel();
-    _wsSessionEndedSubscription?.cancel();
-    _wsStudentVerifiedSubscription?.cancel();
-    _wsAttendanceUpdatedSubscription?.cancel();
     _pulseTimer?.cancel();
-    _wsService.disconnect();
-
     _killSwitchJTimer?.cancel();
     _killSwitchFocusNode.dispose();
     _endSessionCooldownTimer?.cancel();
@@ -883,7 +711,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       await ApiService.terminateSession(widget.sessionId);
     } catch (e) {
       Log.e('[Attendance] Error ending session: $e');
-      HeartbeatService.enqueuePendingTermination(widget.sessionId);
     }
 
     if (!mounted) return;
@@ -896,13 +723,31 @@ class _AttendanceScreenState extends State<AttendanceScreen>
           courseName: widget.courseName,
           facultyName: widget.facultyName,
           slotId: widget.slotId,
-          students: _students,
+          students: _students.map((s) => StudentInfo(
+            rollNumber: s.rollNumber,
+            name: s.name,
+            email: s.studentId,
+            sectionId: widget.sectionId ?? '',
+            classId: '',
+          )).toList(),
           presentIndices: _presentSeatIndices.toList(),
           absentIndices: _absentSeatIndices.toList(),
           isAttendanceSubmitted: _isAttendanceSubmitted,
         ),
       ),
     );
+  }
+
+  void _startEndSessionCooldown() {
+    _endSessionCooldownTimer =
+        Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_endSessionCountdown > 0) {
+        if (mounted) setState(() => _endSessionCountdown--);
+      } else {
+        timer.cancel();
+        if (mounted) setState(() => _canEndSession = true);
+      }
+    });
   }
 
   @override
@@ -1445,8 +1290,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     final absentCount = _absentSeatIndices.length;
     final presentLocal = _presentSeatIndices.length;
     final unmarkedCount = total - presentLocal - absentCount;
-    final attendanceRate =
-        total > 0 ? (presentLocal / total * 100).toInt() : 0;
     final hasMarked = presentLocal > 0 || absentCount > 0;
 
     return Container(
@@ -1497,71 +1340,68 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               icon: _isSubmitting
                   ? const SizedBox(
                       width: 20, height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                    )
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.cloud_upload_rounded, size: 20),
-              label: Text(_isSubmitting ? 'SUBMITTING...' : 'SUBMIT ATTENDANCE',
-                  style: TextStyle(
+              label: Text(_isSubmitting ? 'SUBMITTING...' : 'SUBMIT TO SERVER',
+                  style: const TextStyle(
                       fontSize: 12, fontWeight: FontWeight.bold)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primaryTeal,
                 foregroundColor: Colors.white,
+                disabledBackgroundColor: Colors.grey.shade300,
+                disabledForegroundColor: Colors.grey.shade500,
                 minimumSize: const Size(200, 48),
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
               ),
             ),
-          if (_stage == _Stage.grid) const SizedBox(width: 24),
-          Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            decoration: BoxDecoration(
-              color: attendanceRate >= 80
-                  ? AppColors.successLime.withValues(alpha: 0.1)
-                  : AppColors.warningAmber.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(100),
-            ),
-            child: Text(
-              '$attendanceRate% ATTENDING',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1,
-                color: attendanceRate >= 80
-                    ? AppColors.successLime
-                    : AppColors.warningAmber,
-              ),
-            ),
-          ),
         ],
       ),
     );
   }
 
-  Widget _buildFooterBadge(String label, Color color, String count) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 10,
-          height: 10,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
+  Widget _buildFooterBadge(String label, Color color, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8, height: 8,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          '$label $count',
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
-        ),
-      ],
+          const SizedBox(width: 8),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1,
+                  color: color)),
+          const SizedBox(width: 6),
+          Text(value,
+              style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  color: color)),
+        ],
+      ),
     );
   }
 }
 
+class _StudentEntry {
+  final String studentId;
+  final String name;
+  final String rollNumber;
+
+  const _StudentEntry({
+    required this.studentId,
+    required this.name,
+    required this.rollNumber,
+  });
+}

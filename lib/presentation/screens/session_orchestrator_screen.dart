@@ -165,12 +165,12 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
         final state = _sessionState.currentState;
         return AttendanceScreen(
           sessionId: state.sessionId,
-          websocketService: _wsService ?? WebsocketService(AppConfig.baseUrl),
           initialPresentCount: state.presentCount,
           capacity: widget.registration.capacity,
           courseName: state.courseName ?? 'Class',
           facultyName: state.facultyName ?? 'Professor',
           sectionId: state.sectionId,
+          courseCode: state.courseCode ?? '',
           roomName: state.roomName ?? widget.registration.roomName,
           boardId: widget.registration.smartBoardId,
           onNavigateBack: _returnToIdle,

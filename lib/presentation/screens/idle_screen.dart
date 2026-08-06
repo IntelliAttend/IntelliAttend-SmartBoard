@@ -37,7 +37,6 @@ import '../../services/network_info_service.dart';
 import 'package:number_flow/number_flow.dart';
 import 'package:video_player/video_player.dart';
 import '../../services/pre_flight_service.dart';
-import '../../services/websocket_service.dart';
 import '../../core/platform/kiosk_service.dart';
 import '../../core/platform/window_orchestrator_service.dart';
 
@@ -1361,6 +1360,7 @@ class _IdleScreenState extends State<IdleScreen>
       final courseName = data['course_name']?.toString() ?? 'Active Class';
       final sectionId =
           data['section_id']?.toString() ?? data['context_ids']?['section_id']?.toString() ?? widget.registration.smartBoardId;
+      final courseCode = data['context_ids']?['subject_id']?.toString() ?? '';
       if (sessionId == null || sessionSecret == null) {
         setState(() => _errorMessage =
             'Invalid server response: missing session data. Please try again with a new PIN.');
@@ -2433,16 +2433,15 @@ class _IdleScreenState extends State<IdleScreen>
                       subtitle: 'Mark present/absent',
                       color: const Color(0xFF8B5CF6),
                       onTap: () {
-                        final wsService = WebsocketService(AppConfig.baseUrl);
                         Navigator.of(context).push(
                           MaterialPageRoute(builder: (_) => AttendanceScreen(
                             sessionId: session.sessionId,
-                            websocketService: wsService,
                             capacity: session.rosterCount,
                             courseName: session.courseName,
                             facultyName: session.facultyName,
                             roomName: widget.registration.roomName,
                             sectionId: session.sectionId,
+                            courseCode: '',
                             slotId: null,
                             initialPresentCount: session.presentIndices.length,
                             boardId: widget.registration.smartBoardId,

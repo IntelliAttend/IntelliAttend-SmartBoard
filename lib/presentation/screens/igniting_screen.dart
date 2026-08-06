@@ -86,6 +86,8 @@ class _IgnitingScreenState extends State<IgnitingScreen> {
       final courseName = data['course_name']?.toString() ?? widget.courseName;
       final facultyName = data['faculty_name']?.toString() ?? widget.facultyName;
       final sectionId = data['section_id']?.toString() ?? '';
+      final contextIds = data['context_ids'] as Map<String, dynamic>?;
+      final courseCode = contextIds?['subject_id']?.toString() ?? '';
 
       await SessionManager.saveSession(
         sessionId: sessionId,
@@ -111,6 +113,7 @@ class _IgnitingScreenState extends State<IgnitingScreen> {
         courseName: courseName,
         facultyName: facultyName,
         sectionId: sectionId,
+        courseCode: courseCode,
         roomName: widget.roomName,
         presentCount: 0,
       ));
