@@ -107,32 +107,20 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               ? '${sectionId}_$courseCode'
               : sectionId;
 
-      final rosterEntries = await isar.hydrationRosters
-          .where()
-          .rosterKeyEqualTo(rosterKey)
-          .findAll();
+      final allRosters = await isar.hydrationRosters.where().findAll();
+      var rosterEntries = allRosters.where((r) => r.rosterKey == rosterKey).toList();
 
       if (rosterEntries.isEmpty && courseCode != null && courseCode.isNotEmpty) {
-        final fallback = await isar.hydrationRosters
-            .where()
-            .rosterKeyStartsWith(sectionId)
-            .findAll();
-        _students = fallback
-            .map((r) => _StudentEntry(
-                  studentId: r.studentId,
-                  name: r.name,
-                  rollNumber: r.rollNumber ?? '',
-                ))
-            .toList();
-      } else {
-        _students = rosterEntries
-            .map((r) => _StudentEntry(
-                  studentId: r.studentId,
-                  name: r.name,
-                  rollNumber: r.rollNumber ?? '',
-                ))
-            .toList();
+        rosterEntries = allRosters.where((r) => r.rosterKey.startsWith(sectionId)).toList();
       }
+
+      _students = rosterEntries
+          .map((r) => _StudentEntry(
+                studentId: r.studentId,
+                name: r.name,
+                rollNumber: r.rollNumber ?? '',
+              ))
+          .toList();
 
       Log.i('[Attendance] Loaded ${_students.length} students from hydration roster (key=$rosterKey)');
     } catch (e) {

@@ -16,7 +16,6 @@ import 'attendance_screen.dart';
 import '../../services/time_sync_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/student_service.dart';
-import '../../core/config/app_config.dart';
 
 
 enum _WorkspaceTab { resources, calendar, settings }
