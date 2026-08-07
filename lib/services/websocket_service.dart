@@ -554,7 +554,7 @@ class WebsocketService {
           Log.i('[WS] session_preparing: ${message['session_id']}');
           _sessionState.applyState(SessionState(
             sessionId: message['session_id'] as String,
-            state: 'PREPARING',
+            state: 'IGNITING',
             courseName: message['course_name'] as String?,
             facultyName: message['faculty_name'] as String?,
             sectionId: message['section_id'] as String?,

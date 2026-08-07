@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../core/config/app_config.dart';
 import '../core/utils/logger.dart';
 import 'auto_updater.dart';
 import 'remote_config_service.dart';
@@ -70,6 +71,10 @@ class UpdateChecker {
 
   /// Check for updates using the heartbeat manifest (no HTTP).
   static Future<void> checkNow() async {
+    if (!AppConfig.enableAutoUpdate) {
+      Log.d('[UpdateChecker] Auto-update disabled via config — skipping');
+      return;
+    }
     final manifest = RemoteConfigService.updateManifest;
     if (manifest != null) {
       Log.d('[UpdateChecker] Heartbeat manifest: v${manifest.minimumVersion}');

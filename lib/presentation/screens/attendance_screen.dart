@@ -75,7 +75,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   final FocusNode _killSwitchFocusNode = FocusNode();
 
   List<StudentInfo> _students = [];
-  final Map<String, int> _emailToSeatIndex = {};
 
   StreamSubscription? _wsAttendanceSubscription;
   StreamSubscription? _wsSyncSubscription;
@@ -159,16 +158,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         int presentCount = 0;
         for (final student in sync.presentStudents) {
           if (student.status.toUpperCase() != 'PRESENT') continue;
-          final key =
-              (student.studentEmail ?? student.studentId).toLowerCase();
-          int? index = _emailToSeatIndex[key];
-          if (index == null) {
-            final idx = _students.indexWhere(
-                (s) => s.rollNumber == student.studentId);
-            if (idx < 0 || idx >= _students.length) continue;
-            index = idx;
-          }
-          final i = index;
+          final idx = _students.indexWhere(
+              (s) => s.rollNumber == student.studentId);
+          if (idx < 0 || idx >= _students.length) continue;
+          final i = idx;
           _presentSeatIndices.add(i);
           // Populate student name from sync data (§5)
           if (student.studentName.isNotEmpty &&
@@ -193,11 +186,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     _wsAttendanceSubscription = _wsService.onAttendanceMarked.listen((event) {
       if (!mounted) return;
       setState(() {
-        final email = (event.studentEmail ?? event.studentId).toLowerCase();
-        final index = _emailToSeatIndex[email];
-        if (index != null) {
-          _presentSeatIndices.add(index);
-          _absentSeatIndices.remove(index);
+        final idx = _students.indexWhere((s) => s.rollNumber == event.studentId);
+        if (idx >= 0 && idx < _students.length) {
+          _presentSeatIndices.add(idx);
+          _absentSeatIndices.remove(idx);
         }
       });
       Log.i('[Attendance] WebSocket: ${event.studentId} marked present.');
@@ -206,17 +198,12 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     _wsStudentVerifiedSubscription =
         _wsService.onStudentVerified.listen((event) {
       if (!mounted) return;
-      final email = event.studentId.toLowerCase();
-      int? index = _emailToSeatIndex[email];
-      if (index == null) {
-        final idx = _students.indexWhere((s) => s.rollNumber == event.studentId);
-        if (idx < 0 || idx >= _students.length) {
-          Log.d('[Attendance] student_verified: no seat match for ${event.studentId}');
-          return;
-        }
-        index = idx;
+      final idx = _students.indexWhere((s) => s.rollNumber == event.studentId);
+      if (idx < 0 || idx >= _students.length) {
+        Log.d('[Attendance] student_verified: no seat match for ${event.studentId}');
+        return;
       }
-      final i = index;
+      final i = idx;
       if (event.isAbsent) {
         setState(() {
           _absentSeatIndices.add(i);
@@ -285,30 +272,15 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   void _handleCellTapDown(int index) {
-    final student = index < _students.length ? _students[index] : null;
-    final boardId = widget.boardId ?? _wsService.boardId ?? '';
-
     if (_presentSeatIndices.contains(index)) {
       _presentSeatIndices.remove(index);
       _absentSeatIndices.add(index);
-      _sendTap(student, 'absent', boardId);
     } else if (_absentSeatIndices.contains(index)) {
       _absentSeatIndices.remove(index);
     } else {
       _presentSeatIndices.add(index);
-      _sendTap(student, 'present', boardId);
     }
     if (mounted) setState(() {});
-  }
-
-  void _sendTap(StudentInfo? student, String status, String boardId) {
-    if (student == null || boardId.isEmpty) return;
-    _wsService.sendTap(
-      sessionId: widget.sessionId,
-      studentId: student.email,
-      status: status,
-      boardId: boardId,
-    );
   }
 
   void _handleSplitReviewTap(int index, bool isInPresent) {
@@ -329,17 +301,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       presentIndices: _presentSeatIndices.toList(),
       absentIndices: _absentSeatIndices.toList(),
     );
-    if (_wsService.isConnected) {
-      final presentEmails =
-          _presentSeatIndices.map((i) => _students[i].email).toList();
-      final absentEmails =
-          _absentSeatIndices.map((i) => _students[i].email).toList();
-      _wsService.saveDraft(
-        sessionId: widget.sessionId,
-        presentEmails: presentEmails,
-        absentEmails: absentEmails,
-      );
-    }
     if (mounted) setState(() => _stage = _Stage.splitReview);
   }
 
@@ -349,8 +310,12 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     try {
       final presentEmails =
           _presentSeatIndices.map((i) => _students[i].email).toList();
-      final absentEmails =
-          _absentSeatIndices.map((i) => _students[i].email).toList();
+      // All students NOT present are absent — ensures unmarked students
+      // are explicitly recorded as absent on the server.
+      final absentEmails = _students
+          .where((s) => !_presentSeatIndices.contains(_students.indexOf(s)))
+          .map((s) => s.email)
+          .toList();
 
       if (_wsService.isConnected) {
         _wsService.submitAttendance(
