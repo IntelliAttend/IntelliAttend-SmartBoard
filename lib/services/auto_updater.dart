@@ -270,7 +270,8 @@ class AutoUpdater {
   static Future<bool> checkForUpdate(UpdateManifest manifest, {bool silent = false}) async {
     // Guard: Auto-update is currently disabled. Will be re-enabled in a
     // future release. To opt back in, set ENABLE_AUTO_UPDATE=true in .env.
-    if (!AppConfig.enableAutoUpdate) {
+    // Skip this guard in test mode (testInstalledVersionOverride is set).
+    if (!AppConfig.enableAutoUpdate && testInstalledVersionOverride == null) {
       Log.i('[AutoUpdater] Auto-update disabled via config — skipping');
       return false;
     }
