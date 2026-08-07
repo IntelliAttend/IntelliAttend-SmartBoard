@@ -6,12 +6,12 @@ import '../../core/state/board_state_machine.dart';
 import '../../core/platform/kiosk_service.dart';
 import '../../models/isar_schemas.dart';
 import '../../services/session_state_service.dart';
+import '../../services/session_manager.dart';
 import '../../services/websocket_service.dart';
 import '../../services/api_service.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../main.dart' show globalDeviceRepository;
 import 'idle_screen.dart';
-import 'preparing_screen.dart';
 import 'igniting_screen.dart';
 import 'attendance_screen.dart';
 import 'summary_screen.dart';
@@ -62,8 +62,6 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
         await ApiService.syncTime().catchError((_) => 0);
       }
 
-      // Subscribe to state changes BEFORE applying recovery so we don't
-      // miss the initial event (broadcast streams don't replay).
       _stateSubscription = _sessionState.onStateChanged.listen((state) {
         if (!mounted) return;
         _handleStateChange(state);
@@ -74,9 +72,14 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
         setState(() => _currentRenderState = newState);
       });
 
-      final stateResponse = await ApiService.getCurrentState();
-      if (stateResponse.isNotEmpty && stateResponse['state'] != null) {
-        _sessionState.applyFromRecovery(stateResponse);
+      // Local-first session recovery: check Isar for a resumable session
+      // before hitting the network.
+      final recovered = await _tryLocalSessionRecovery();
+      if (!recovered) {
+        final stateResponse = await ApiService.getCurrentState();
+        if (stateResponse.isNotEmpty && stateResponse['state'] != null) {
+          _sessionState.applyFromRecovery(stateResponse);
+        }
       }
 
       try {
@@ -96,6 +99,46 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
       setState(() {
         _currentRenderState = _boardState.currentState;
       });
+    }
+  }
+
+  Future<bool> _tryLocalSessionRecovery() async {
+    try {
+      final session = await SessionManager.getResumeableSession();
+      if (session == null) {
+        Log.d('[Orchestrator] No resumable session in Isar');
+        return false;
+      }
+
+      Log.i('[Orchestrator] Found resumable session: ${session.sessionId} — attempting recovery');
+
+      final secret = await SecureStorageService.getSessionSecret(session.sessionId);
+      if (secret == null) {
+        Log.w('[Orchestrator] Session secret not found in SecureStorage — cannot recover');
+        return false;
+      }
+
+      final restored = await _sessionState.restoreFromLocal(
+        sessionId: session.sessionId,
+        sessionSecret: secret,
+        courseName: session.courseName,
+        facultyName: session.facultyName,
+        sectionId: session.sectionId,
+      );
+
+      if (restored) {
+        Log.i('[Orchestrator] Session recovered successfully — resuming attendance');
+        try {
+          await _wsService?.connectAttendance(session.sessionId);
+        } catch (e) {
+          Log.w('[Orchestrator] Attendance WS connect failed during recovery: $e');
+        }
+      }
+
+      return restored;
+    } catch (e) {
+      Log.w('[Orchestrator] Local session recovery failed: $e');
+      return false;
     }
   }
 
@@ -142,15 +185,6 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
         return IdleScreen(
           registration: widget.registration,
           completedSession: widget.completedSession,
-        );
-      case BoardState.preparing:
-        final state = _sessionState.currentState;
-        return PreparingScreen(
-          courseName: state.courseName ?? 'Class',
-          facultyName: state.facultyName ?? 'Professor',
-          roomName: widget.registration.roomName,
-          sectionId: state.sectionId,
-          startTime: state.startTime,
         );
       case BoardState.igniting:
         final state = _sessionState.currentState;

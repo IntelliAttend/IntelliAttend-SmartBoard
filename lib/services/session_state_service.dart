@@ -178,6 +178,34 @@ class SessionStateService {
     Log.i('[SessionState] Reset to IDLE');
   }
 
+  Future<bool> restoreFromLocal({
+    required String sessionId,
+    required String? sessionSecret,
+    required String courseName,
+    required String facultyName,
+    required String sectionId,
+  }) async {
+    if (sessionId.isEmpty || sessionSecret == null) {
+      Log.w('[SessionState] Cannot restore — missing sessionId or secret');
+      return false;
+    }
+
+    _sessionSecret = sessionSecret;
+    _sessionState = SessionState(
+      sessionId: sessionId,
+      state: 'ACTIVE',
+      courseName: courseName,
+      facultyName: facultyName,
+      sectionId: sectionId,
+    );
+
+    BoardStateMachine().forceTransitionTo(BoardState.active);
+
+    _stateController.add(_sessionState);
+    Log.i('[SessionState] Restored from local: sid=$sessionId course=$courseName');
+    return true;
+  }
+
   bool _shouldApply(SessionState incoming) {
     if (_sessionState.isEmpty) return true;
 
@@ -196,8 +224,6 @@ class SessionStateService {
     final machine = BoardStateMachine();
     switch (state) {
       case 'PREPARING':
-        machine.transitionTo(BoardState.preparing);
-        break;
       case 'IGNITING':
         machine.transitionTo(BoardState.igniting);
         break;

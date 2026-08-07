@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../core/config/app_config.dart';
 import '../core/config/install_paths.dart';
 import '../core/observability/observability_manager.dart';
 import '../core/update/manifest_policy.dart';
@@ -267,6 +268,13 @@ class AutoUpdater {
   /// or the board is not in the rollout cohort.
   /// If [silent] is true, failures are logged but no overlay is shown.
   static Future<bool> checkForUpdate(UpdateManifest manifest, {bool silent = false}) async {
+    // Guard: Auto-update is currently disabled. Will be re-enabled in a
+    // future release. To opt back in, set ENABLE_AUTO_UPDATE=true in .env.
+    if (!AppConfig.enableAutoUpdate) {
+      Log.i('[AutoUpdater] Auto-update disabled via config — skipping');
+      return false;
+    }
+
     // Guard: AutoUpdater.init() must be called before checkForUpdate
     // (unless the validation harness injects an installed-version override).
     if (_packageInfo == null && testInstalledVersionOverride == null) {

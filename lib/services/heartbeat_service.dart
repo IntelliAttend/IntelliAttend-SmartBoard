@@ -244,8 +244,10 @@ class HeartbeatService {
     final current = machine.currentState;
 
     if (info.isActive && current == BoardState.idle) {
-      Log.i('[Heartbeat] Active session exists — triggering PREPARING');
-      machine.transitionTo(BoardState.preparing);
+      Log.i('[Heartbeat] Active session exists — triggering IGNITING');
+      machine.transitionTo(BoardState.igniting);
+    } else if (info.isActive && current == BoardState.active) {
+      Log.d('[Heartbeat] Session active on server, board already active — no change');
     } else if (info.isCompleted && current == BoardState.active) {
       Log.i('[Heartbeat] Session completed — transitioning to CLOSED');
       machine.transitionTo(BoardState.closed);

@@ -261,7 +261,6 @@ class _IdleScreenState extends State<IdleScreen>
       });
 
       await _refreshTimetable();
-      _checkCrashRecovery();
       // Clear any stale completed sessions from previous days/weeks that
       // might have the same slot IDs as today's classes. Without this,
       // _completedSlotIds blocks the OTP card (via isBedrockCompleted)
@@ -617,29 +616,6 @@ class _IdleScreenState extends State<IdleScreen>
       });
     }
     await _loadRoomNumber();
-  }
-
-  /// Checks the local Isar vault + SecureStorage for a resumable session.
-  /// If one exists (e.g. the board crashed mid-session), clears it to prevent
-  /// auto-navigation to locked mode without OTP entry. The faculty member
-  /// must enter the OTP fresh to start a new session.
-  Future<void> _checkCrashRecovery() async {
-    try {
-      final session = await SessionManager.getResumeableSession();
-      if (session == null) return;
-
-      Log.w(
-          '[Idle] Found stale session ${session.sessionId} — clearing to prevent auto-lock without OTP.');
-      await SessionManager.clearSession(session.sessionId);
-      try {
-        await SecureStorageService.deleteSessionSecret(session.sessionId);
-      } catch (e) {
-        Log.d('[Idle] Could not delete stale session secret: $e');
-      }
-      Log.i('[Idle] Stale session cleared safely.');
-    } catch (e) {
-      Log.w('⚠️ [Idle] Crash recovery cleanup failed: $e');
-    }
   }
 
   /// Helper to extract session secret from server response.

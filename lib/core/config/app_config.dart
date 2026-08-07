@@ -91,6 +91,12 @@ class AppConfig {
   static bool get enableDocuments =>
       _env('ENABLE_DOCUMENTS').toLowerCase() == 'true';
 
+  /// Enable auto-update functionality. Currently disabled — will be
+  /// re-enabled in a future release. Set ENABLE_AUTO_UPDATE=true in .env
+  /// to opt back in.
+  static bool get enableAutoUpdate =>
+      _env('ENABLE_AUTO_UPDATE').toLowerCase() == 'true';
+
   /// Maximum cache age for downloaded documents in days.
   static int get documentCacheMaxDays =>
       int.tryParse(_env('DOCUMENT_CACHE_MAX_DAYS')) ?? 7;

@@ -220,8 +220,12 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     try {
       final presentIds =
           _presentSeatIndices.map((i) => _students[i].studentId).toList();
-      final absentIds =
-          _absentSeatIndices.map((i) => _students[i].studentId).toList();
+      // All students NOT present are absent — ensures unmarked students
+      // are explicitly recorded as absent on the server.
+      final absentIds = _students
+          .where((s) => !_presentSeatIndices.contains(_students.indexOf(s)))
+          .map((s) => s.studentId)
+          .toList();
 
       await ApiService.submitAttendance(
         sessionId: widget.sessionId,
