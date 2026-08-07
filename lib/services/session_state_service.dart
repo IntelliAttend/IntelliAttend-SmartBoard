@@ -194,15 +194,25 @@ class SessionStateService {
     _sessionState = SessionState(
       sessionId: sessionId,
       state: 'ACTIVE',
+      // FIX: Use version 1 instead of default 0 so that subsequent WebSocket
+      // state updates (which carry version >= 1) are not rejected by the
+      // _shouldApply version check. Previously version 0 caused the WS
+      // to silently drop valid state updates after local recovery.
+      version: 1,
       courseName: courseName,
       facultyName: facultyName,
       sectionId: sectionId,
     );
 
-    BoardStateMachine().forceTransitionTo(BoardState.active);
+    // FIX: Do NOT force BoardState.active here. After a crash+restart, the
+    // board should stay on IdleScreen so the hanging lock arrow ("SESSION IN
+    // PROGRESS") appears — matching the normal post-OTP flow. The IdleScreen's
+    // _checkActiveSession() will detect the resumable session in Isar and set
+    // _activeSession, which makes the arrow visible. The user taps the arrow
+    // to open the session overlay and navigates to Attendance from there.
 
     _stateController.add(_sessionState);
-    Log.i('[SessionState] Restored from local: sid=$sessionId course=$courseName');
+    Log.i('[SessionState] Restored from local (board stays idle): sid=$sessionId course=$courseName');
     return true;
   }
 

@@ -227,13 +227,27 @@ class SessionManager {
   static Future<void> clearCompletedSessionsForDay(int dayOfWeek) async {
     final allCompleted = await _isar!.completedSessions.where().findAll();
     if (allCompleted.isNotEmpty) {
-      await _isar!.writeTxn(() async {
-        for (final c in allCompleted) {
-          await _isar!.completedSessions.delete(c.id);
-        }
-      });
-      Log.i(
-          '🧹 [SessionManager] Cleaned ${allCompleted.length} completed-session records for new day.');
+      // FIX: Only delete completed sessions from PREVIOUS days, not today.
+      // The original implementation deleted ALL records regardless of day,
+      // which wiped the duplicate-prevention markers on boot and caused
+      // the OTP card to reappear for an already-started session.
+      final now = TimeSyncService.timeNow;
+      final todayStart = DateTime(now.year, now.month, now.day);
+      final toDelete = allCompleted
+          .where((c) => c.completedAt.isBefore(todayStart))
+          .toList();
+      if (toDelete.isNotEmpty) {
+        await _isar!.writeTxn(() async {
+          for (final c in toDelete) {
+            await _isar!.completedSessions.delete(c.id);
+          }
+        });
+        Log.i(
+            '🧹 [SessionManager] Cleaned ${toDelete.length} old completed-session records '
+            '(preserved ${allCompleted.length - toDelete.length} from today).');
+      } else {
+        Log.d('[SessionManager] No old completed-session records to clean.');
+      }
     }
   }
 

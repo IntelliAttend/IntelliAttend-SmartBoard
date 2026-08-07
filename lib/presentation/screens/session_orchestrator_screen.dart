@@ -72,6 +72,17 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
         setState(() => _currentRenderState = newState);
       });
 
+      // FIX: Create the WebSocket service BEFORE local recovery so that
+      // _tryLocalSessionRecovery() can connect in attendance mode on success.
+      // Previously _wsService was null during recovery, making the
+      // connectAttendance() call a no-op and leaving the board orphaned.
+      try {
+        _wsService = WebsocketService(AppConfig.baseUrl);
+        _wsService!.setDeviceRepository(globalDeviceRepository);
+      } catch (e) {
+        Log.w('[Orchestrator] WS init failed: $e');
+      }
+
       // Local-first session recovery: check Isar for a resumable session
       // before hitting the network.
       final recovered = await _tryLocalSessionRecovery();
@@ -82,14 +93,19 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
         }
       }
 
-      try {
-        _wsService = WebsocketService(AppConfig.baseUrl);
-        _wsService!.setDeviceRepository(globalDeviceRepository);
-        await _wsService!.connectSmartBoard(
-          widget.registration.smartBoardId,
-        );
-      } catch (e) {
-        Log.w('[Orchestrator] WS connect failed: $e');
+      // Connect the WebSocket. If local recovery succeeded, this connects
+      // in board mode for monitoring; the attendance WS was already connected
+      // inside _tryLocalSessionRecovery(). If recovery failed, this is the
+      // primary path — board mode will auto-discover the active session via
+      // _handleBoardConnected → getActiveSession → join_session.
+      if (_wsService != null) {
+        try {
+          await _wsService!.connectSmartBoard(
+            widget.registration.smartBoardId,
+          );
+        } catch (e) {
+          Log.w('[Orchestrator] WS connect failed: $e');
+        }
       }
     } catch (e) {
       Log.w('[Orchestrator] Boot recovery failed: $e');
@@ -128,10 +144,20 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
 
       if (restored) {
         Log.i('[Orchestrator] Session recovered successfully — resuming attendance');
-        try {
-          await _wsService?.connectAttendance(session.sessionId);
-        } catch (e) {
-          Log.w('[Orchestrator] Attendance WS connect failed during recovery: $e');
+        // FIX: _wsService is now initialized before this method is called,
+        // so connectAttendance() will actually connect. Previously it was
+        // null here, making this a no-op and leaving the board orphaned.
+        if (_wsService != null) {
+          try {
+            await _wsService!.connectAttendance(session.sessionId);
+            Log.i('[Orchestrator] Attendance WebSocket connected for session ${session.sessionId}');
+          } catch (e) {
+            Log.w('[Orchestrator] Attendance WS connect failed during recovery: $e');
+            // Fallback: if attendance WS fails, the board-mode connect
+            // in _runBootSequence will attempt auto-join via getActiveSession().
+          }
+        } else {
+          Log.w('[Orchestrator] _wsService is null — attendance WS not connected');
         }
       }
 

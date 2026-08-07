@@ -729,6 +729,8 @@ class WebsocketService {
     Log.i('[WS] board_connected: $boardId — discovering active session');
 
     // §4 — Check for an active session and auto-join via WebSocket.
+    // FIX: Added .catchError so a failed API call doesn't silently swallow
+    // the error, leaving the board orphaned with no session join.
     ApiService.getActiveSession().then((session) {
       if (session['active'] == true) {
         final sid = session['session_id'] as String?;
@@ -739,6 +741,8 @@ class WebsocketService {
       } else {
         Log.d('[WS] No active session on connect');
       }
+    }).catchError((e) {
+      Log.w('[WS] getActiveSession() failed during board_connected — will retry on next heartbeat: $e');
     });
   }
 

@@ -265,7 +265,10 @@ class _IdleScreenState extends State<IdleScreen>
       // might have the same slot IDs as today's classes. Without this,
       // _completedSlotIds blocks the OTP card (via isBedrockCompleted)
       // even when the faculty has not yet taken attendance today.
-      await SessionManager.clearCompletedSessionsForDay(0);
+      // FIX: Pass actual weekday so today's completed sessions are preserved
+      // (critical for crash-recovery: the CompletedSession record prevents
+      // OTP re-entry if the board restarts mid-session).
+      await SessionManager.clearCompletedSessionsForDay(TimeSyncService.timeNow.weekday);
       // Load completed slots before starting the 10s timer so the first
       // _checkUpcomingClass() tick sees accurate data. Without this, a
       // release-build AOT race (debug JIT overhead hides it) leaves the
@@ -746,9 +749,12 @@ class _IdleScreenState extends State<IdleScreen>
       // Start 2-minute hard cooldown only if attendance was NOT taken and
       // the cooldown hasn't already fired for this slot (prevents T-5 + class-end
       // double-fire and guards against 10s-timer re-entry after the first cycle).
+      // FIX: Also skip cooldown if an active session exists — the session is
+      // still in progress and wiping data would destroy crash-recovery state.
       if (!widget.completedSession &&
           _cooldownState == CooldownState.none &&
-          !_cooldownFiredSlots.contains(endedSlotId)) {
+          !_cooldownFiredSlots.contains(endedSlotId) &&
+          _activeSession == null) {
         if (!WindowOrchestratorService().hasTakenAttendance(endedSlotId)) {
           _cooldownFiredSlots.add(endedSlotId);
           _startCooldown();
@@ -799,12 +805,15 @@ class _IdleScreenState extends State<IdleScreen>
     //
     // Also skip when minDiff <= 3 — the next class T-3 window is active or
     // imminent; the cooldown would block the warm-up and create a loop.
+    // FIX: Also skip when _activeSession is non-null — the session is still
+    // in progress and starting cooldown would destroy crash-recovery state.
     Log.iThrottled('t5_check',
         '[Idle T-5] bedrock=$_bedrockEntry cooldown=$_cooldownState preAlloc=$_preAllocatedSessionId upAlloc=$_upcomingAllocatedSessionId minDiff=$minDiff endTime=${_bedrockEntry?.endTime} now=$currentMinutes');
     if (_bedrockEntry != null &&
         _cooldownState != CooldownState.locked &&
         _preAllocatedSessionId == null &&
         _upcomingAllocatedSessionId == null &&
+        _activeSession == null &&
         minDiff > 3) {
       final endParts = _bedrockEntry!.endTime.split(':');
       if (endParts.length == 2) {
@@ -988,8 +997,15 @@ class _IdleScreenState extends State<IdleScreen>
   /// a clean slate. The next-class T-3 re-evaluation happens on completion.
   Future<void> _startCooldown() async {
     _fullCleanup();
-    // Wipe all persisted attendance & session data so the next class starts fresh
-    await SessionManager.clearAllActiveSessions();
+    // FIX: Only wipe active sessions if there is NO resumable session in Isar.
+    // If _activeSession is non-null, the faculty has an active attendance
+    // session that must survive the cooldown (e.g. app restart mid-session).
+    // Clearing it here would destroy the recovery data and force OTP re-entry.
+    if (_activeSession == null) {
+      await SessionManager.clearAllActiveSessions();
+    } else {
+      Log.i('[Idle] Cooldown skipped clearing active sessions — session ${_activeSession!.sessionId} is resumable.');
+    }
     await SessionManager.clearCompletedSessionsForDay(TimeSyncService.timeNow.weekday);
     WindowOrchestratorService().resetAttendanceTracking();
     _cooldownState = CooldownState.locked;
@@ -1458,9 +1474,14 @@ class _IdleScreenState extends State<IdleScreen>
 
           final isBedrockCompleted =
               _bedrockEntry != null && _completedSlotIds.contains(_bedrockEntry!.slotId);
+          // FIX: Also suppress the OTP card when a resumable session exists in
+          // Isar. Without this guard, a crash+restart during an active session
+          // causes the OTP card to reappear because clearCompletedSessionsForDay()
+          // wipes the completed-slot marker on boot.
+          final bool hasActiveSession = _activeSession != null;
           final bool showCardContextually = (_forceShowCard || _bedrockEntry != null) &&
               _cooldownState != CooldownState.locked &&
-              (_forceShowCard || !isBedrockCompleted);
+              (_forceShowCard || (!isBedrockCompleted && !hasActiveSession));
 
           final cardOpacity = showCardContextually ? 1.0 : 0.0;
           final lockOpacity = showCardContextually ? 0.0 : 1.0;
@@ -2509,6 +2530,10 @@ class _IdleScreenState extends State<IdleScreen>
     final activeSlotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
     final isSlotCompleted =
         activeSlotId != null && _completedSlotIds.contains(activeSlotId);
+    // FIX: Treat an active session in Isar as "completed" for the hanging lock
+    // so the lock shows "SESSION IN PROGRESS" / "VIEW SESSION" even if the
+    // CompletedSession record was wiped on boot.
+    final hasActiveSessionForSlot = _activeSession != null;
     final isUnlocked =
         _showStartingSoon && !isSlotCompleted && _upcomingAllocatedSessionId != null;
     final isWarmingUp =
@@ -2530,9 +2555,9 @@ class _IdleScreenState extends State<IdleScreen>
       ringValue = _cooldownSecondsRemaining / 120.0;
       ringColor = AppColors.error;
       showRing = true;
-    } else if (isSlotCompleted) {
+    } else if (isSlotCompleted || hasActiveSessionForSlot) {
       ringValue = 1.0;
-      ringColor = _activeSession != null ? AppColors.primaryTeal : AppColors.warningAmber;
+      ringColor = hasActiveSessionForSlot ? AppColors.primaryTeal : AppColors.warningAmber;
       showRing = true;
     } else if (isUnlocked || isWarmingUp) {
       // T-3 / Warming-up: continue ring from break timer, or full green if no
@@ -2558,8 +2583,8 @@ class _IdleScreenState extends State<IdleScreen>
       final seconds = _cooldownSecondsRemaining % 60;
       label =
           'COOLDOWN PHASE\n${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-    } else if (isSlotCompleted) {
-      label = _activeSession != null ? 'VIEW SESSION' : 'COMPLETED';
+    } else if (isSlotCompleted || hasActiveSessionForSlot) {
+      label = hasActiveSessionForSlot ? 'SESSION IN PROGRESS' : 'COMPLETED';
     } else if (isUnlocked) {
       label = 'TAP TO START';
     } else if (isWarmingUp) {
@@ -2577,6 +2602,8 @@ class _IdleScreenState extends State<IdleScreen>
     // ── Theme colours per state ─────────────────────────────────────────────
     Color themeColor;
     if (isSlotCompleted && _activeSession != null) {
+      themeColor = AppColors.primaryTeal;
+    } else if (hasActiveSessionForSlot) {
       themeColor = AppColors.primaryTeal;
     } else if (isSlotCompleted) {
       themeColor = AppColors.warningAmber;
@@ -2599,7 +2626,7 @@ class _IdleScreenState extends State<IdleScreen>
               });
               _resetInactivityTimer();
             }
-          : isSlotCompleted && _activeSession != null
+          : (isSlotCompleted || hasActiveSessionForSlot) && _activeSession != null
               ? () => setState(() => _showSessionMenu = true)
               : null,
       borderRadius: BorderRadius.circular(50),
@@ -2628,7 +2655,7 @@ class _IdleScreenState extends State<IdleScreen>
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: isSlotCompleted && _activeSession != null
+                  color: (isSlotCompleted || hasActiveSessionForSlot) && _activeSession != null
                       ? AppColors.primaryTeal.withValues(alpha: 0.15)
                       : isSlotCompleted
                           ? AppColors.warningAmber.withValues(alpha: 0.15)
@@ -2641,7 +2668,7 @@ class _IdleScreenState extends State<IdleScreen>
                                       : color.withValues(alpha: 0.05),
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: isSlotCompleted && _activeSession != null
+                    color: (isSlotCompleted || hasActiveSessionForSlot) && _activeSession != null
                         ? AppColors.primaryTeal.withValues(alpha: 0.3)
                         : isSlotCompleted
                             ? AppColors.warningAmber.withValues(alpha: 0.3)
@@ -2653,7 +2680,7 @@ class _IdleScreenState extends State<IdleScreen>
                   ),
                 ),
                 child: Icon(
-                  isSlotCompleted
+                  (isSlotCompleted || hasActiveSessionForSlot)
                       ? Icons.arrow_forward_rounded
                       : isUnlocked
                           ? Icons.lock_open_outlined
