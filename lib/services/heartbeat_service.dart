@@ -243,6 +243,17 @@ class HeartbeatService {
     final machine = BoardStateMachine();
     final current = machine.currentState;
 
+    // FIX: If SessionStateService already has an active session (from local
+    // crash recovery or normal OTP flow), do NOT override the board state.
+    // The board should stay on IdleScreen with the session arrow visible.
+    // Without this guard, the heartbeat detects the server-side session and
+    // forces IGNITING → showing the "VERIFY SESSION" PIN screen.
+    final sessionState = SessionStateService().currentState;
+    if (sessionState.isActive) {
+      Log.d('[Heartbeat] SessionStateService has active session — skipping state override');
+      return;
+    }
+
     if (info.isActive && current == BoardState.idle) {
       Log.i('[Heartbeat] Active session exists — triggering IGNITING');
       machine.transitionTo(BoardState.igniting);
