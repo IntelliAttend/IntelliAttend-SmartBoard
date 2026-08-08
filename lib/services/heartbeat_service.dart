@@ -8,6 +8,7 @@ import '../core/state/board_state_machine.dart';
 import '../data/repositories/device_repository.dart';
 import '../models/remote_config.dart';
 import 'api_service.dart';
+import 'session_state_service.dart';
 import 'remote_config_service.dart';
 import 'time_sync_service.dart';
 import 'update_checker.dart';
