@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
+import 'package:flutter/widgets.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../core/platform/power_command_service.dart';
@@ -260,21 +262,27 @@ class AttendanceSubmittedEvent {
   }
 }
 
-class WebsocketService {
+class WebsocketService with WidgetsBindingObserver {
   static const Duration connectTimeout = Duration(seconds: 5);
   static const Duration pingInterval = Duration(seconds: 15);
+  static const Duration pongTimeout = Duration(seconds: 45);
+  static final _rng = Random();
 
   final String _host;
   WebSocketChannel? _channel;
   Timer? _reconnectTimer;
   Timer? _pingTimer;
+  Timer? _pongWatchdogTimer;
+  DateTime? _lastServerMessage;
   int _reconnectAttempt = 0;
+  bool _isConnecting = false;
   bool _disposed = false;
   String? _sessionId;
   String? _boardId;
   StreamSubscription? _messageSubscription;
 
   bool _isWaitingForFullSync = false;
+  int? _lastBoardEventSeq;
   final List<AttendanceMarkedEvent> _pendingAttendanceEvents = [];
 
   final StreamController<FullStateSync> _syncController =
@@ -346,6 +354,7 @@ class WebsocketService {
     _boardId = boardId;
     _sessionId = null;
     _reconnectAttempt = 0;
+    WidgetsBinding.instance.addObserver(this);
     await _doConnect();
   }
 
@@ -357,7 +366,8 @@ class WebsocketService {
   }
 
   Future<void> _doConnect() async {
-    if (_disposed) return;
+    if (_disposed || _isConnecting) return;
+    _isConnecting = true;
 
     try {
       String path;
@@ -388,6 +398,13 @@ class WebsocketService {
       final wsUri = Uri.parse(wsUrl)
           .replace(scheme: wsUrl.startsWith('https') ? 'wss' : 'ws');
 
+      // Close previous socket if still open (prevents stale onDone from killing the new connection).
+      _messageSubscription?.cancel();
+      _messageSubscription = null;
+      final oldChannel = _channel;
+      _channel = null;
+      oldChannel?.sink.close();
+
       _channel = WebSocketChannel.connect(wsUri);
       Timer? connectTimer;
       connectTimer = Timer(connectTimeout, () {
@@ -399,15 +416,14 @@ class WebsocketService {
       });
 
       _isWaitingForFullSync = true;
+      _lastBoardEventSeq = null;
       _connectionStateController.add(true);
       _sessionState.setConnected(true);
-      HeartbeatService.setWsConnected(true);
 
       // Re-acknowledge dismissed notifications on reconnect (§4.3)
       if (_reconnectAttempt > 0) {
         NotificationListenerService().reAcknowledgeDismissed();
       }
-      _reconnectAttempt = 0;
       _startPingTimer();
 
       PowerCommandService().setWebsocketService(this);
@@ -440,14 +456,27 @@ class WebsocketService {
       // triggers KioskService.forceRelease(), breaking fullscreen.
       try {
         await _channel!.ready;
+        connectTimer.cancel();
       } catch (e) {
         Log.e('[WS] Connection ready error: $e');
+        _isConnecting = false;
         _cleanup();
         _scheduleReconnect();
         return;
       }
+
+      // Handshake succeeded — safe to reset counter and confirm connected state.
+      _isConnecting = false;
+      _reconnectAttempt = 0;
+      _lastServerMessage = DateTime.now();
+      HeartbeatService.setWsConnected(true);
+      _startPongWatchdog();
+
+      // Fetch any notifications that arrived while disconnected.
+      NotificationListenerService().forceSync();
     } catch (e) {
       Log.e('[WS] Connection failed: $e');
+      _isConnecting = false;
       _cleanup();
       _scheduleReconnect();
     }
@@ -518,6 +547,9 @@ class WebsocketService {
 
   void _handleMessage(dynamic rawMessage) {
     try {
+      // Any server message proves the connection is alive.
+      _lastServerMessage = DateTime.now();
+
       final Map<String, dynamic> message = jsonDecode(rawMessage as String);
 
       // Check for notification events (contract v1 format)
@@ -530,6 +562,16 @@ class WebsocketService {
       final type = message['type'] as String?;
 
       if (type == 'pong' || type == 'heartbeat') return;
+
+      // Gap detection: if event_seq is present and we skipped events, re-sync.
+      final eventSeq = message['event_seq'] as int?;
+      if (eventSeq != null && type != 'full_state_sync') {
+        if (_lastBoardEventSeq != null && eventSeq > _lastBoardEventSeq! + 1) {
+          Log.w('[WS] Event gap detected: expected ${_lastBoardEventSeq! + 1}, got $eventSeq — re-syncing');
+          NotificationListenerService().forceSync();
+        }
+        _lastBoardEventSeq = eventSeq;
+      }
 
       if (type == 'board_connected') {
         _handleBoardConnected(message);
@@ -555,6 +597,7 @@ class WebsocketService {
           _sessionState.applyState(SessionState(
             sessionId: message['session_id'] as String,
             state: 'IGNITING',
+            version: message['version'] as int? ?? 1,
             courseName: message['course_name'] as String?,
             facultyName: message['faculty_name'] as String?,
             sectionId: message['section_id'] as String?,
@@ -567,6 +610,7 @@ class WebsocketService {
           _sessionState.applyState(SessionState(
             sessionId: message['session_id'] as String,
             state: 'IGNITING',
+            version: message['version'] as int? ?? 1,
             courseName: message['course_name'] as String?,
             facultyName: message['faculty_name'] as String?,
           ));
@@ -747,12 +791,23 @@ class WebsocketService {
   }
 
   void _handleFullStateSync(Map<String, dynamic> message) {
+    // Sync the event sequence baseline from the server.
+    _lastBoardEventSeq = message['event_seq'] as int?;
+
     final roster = message['roster'] as List<dynamic>?;
     final presentList = message['present_students'] as List<dynamic>?;
     final sourceList = roster ?? presentList ?? [];
-    final students = sourceList
-        .map((e) => PresentStudent.fromJson(e as Map<String, dynamic>))
-        .toList();
+
+    // Per-item try/catch: one malformed entry must not void the entire sync.
+    final students = <PresentStudent>[];
+    for (final e in sourceList) {
+      try {
+        students.add(PresentStudent.fromJson(e as Map<String, dynamic>));
+      } catch (err) {
+        Log.w('[WS] Skipping malformed roster entry: $err');
+      }
+    }
+
     final presentCount = students.where((s) => s.status.toUpperCase() == 'PRESENT').length;
     final totalStudents = message['total_students'] as int? ?? students.length;
     final totalPresent = message['total_present'] as int? ?? presentCount;
@@ -770,7 +825,7 @@ class WebsocketService {
       }
       _pendingAttendanceEvents.clear();
     }
-    Log.i('[WS] full_state_sync: $totalPresent present / $totalStudents total');
+    Log.i('[WS] full_state_sync: $totalPresent present / $totalStudents total (${sourceList.length - students.length} skipped)');
   }
 
   void _handleAttendanceMarked(Map<String, dynamic> message) {
@@ -799,13 +854,8 @@ class WebsocketService {
     _reconnectTimer?.cancel();
     _reconnectAttempt++;
 
-    // Cap at 60 reconnect attempts (~10 minutes), then give up.
-    if (_reconnectAttempt > 60) {
-      Log.e('[WS] Reconnect limit exhausted after $_reconnectAttempt attempts — giving up.');
-      return;
-    }
-
-    // Exponential backoff: 1s, 2s, 4s, 8s, 15s, 15s, 30s, 30s, 60s cap
+    // Exponential backoff: 1s, 2s, 4s, 8s, 15s, 30s, 60s cap
+    // After 60 fast attempts (~10 min), escalate to 5-min fixed retry forever.
     Duration delay;
     if (_reconnectAttempt <= 4) {
       delay = Duration(seconds: 1 << (_reconnectAttempt - 1));
@@ -813,14 +863,18 @@ class WebsocketService {
       delay = const Duration(seconds: 15);
     } else if (_reconnectAttempt <= 7) {
       delay = const Duration(seconds: 30);
-    } else {
+    } else if (_reconnectAttempt <= 60) {
       delay = const Duration(seconds: 60);
+    } else {
+      // Escalation: keep trying every 5 minutes indefinitely.
+      delay = const Duration(minutes: 5);
     }
 
-    // Add jitter (±25%) to prevent thundering herd
-    final jitter = (delay.inMilliseconds * 0.25).toInt();
-    final jitteredMs = delay.inMilliseconds + (jitter > 0 ? (DateTime.now().millisecondsSinceEpoch % (jitter * 2) - jitter) : 0);
-    delay = Duration(milliseconds: jitteredMs.clamp(1000, 120000));
+    // Add jitter (±25%) using proper RNG to prevent thundering herd.
+    final jitterMs = (delay.inMilliseconds * 0.25).toInt();
+    final jitteredMs = delay.inMilliseconds +
+        (jitterMs > 0 ? _rng.nextInt(jitterMs * 2) - jitterMs : 0);
+    delay = Duration(milliseconds: jitteredMs.clamp(1000, 300000));
 
     Log.i('[WS] Reconnecting in ${delay.inSeconds}s (attempt $_reconnectAttempt)');
     _reconnectTimer = Timer(delay, () => _doConnect());
@@ -829,6 +883,9 @@ class WebsocketService {
   void _cleanup() {
     _pingTimer?.cancel();
     _pingTimer = null;
+    _pongWatchdogTimer?.cancel();
+    _pongWatchdogTimer = null;
+    _isConnecting = false;
     _messageSubscription?.cancel();
     _messageSubscription = null;
     _channel?.sink.close();
@@ -840,8 +897,64 @@ class WebsocketService {
     HeartbeatService.setWsConnected(false);
   }
 
+  void _startPongWatchdog() {
+    _pongWatchdogTimer?.cancel();
+    _pongWatchdogTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+      _checkPongHealth();
+    });
+  }
+
+  void _checkPongHealth() {
+    if (_disposed || _channel == null) return;
+    final last = _lastServerMessage;
+    if (last == null) return;
+    if (DateTime.now().difference(last) > pongTimeout) {
+      Log.e('[WS] Pong watchdog: no server message in ${pongTimeout.inSeconds}s — forcing reconnect');
+      _cleanup();
+      _scheduleReconnect();
+    }
+  }
+
+  // ── App lifecycle (Fix 2: detect sleep/wake) ────────────────────
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      Log.i('[WS] App resumed — checking connection health');
+      _handleAppResumed();
+    }
+  }
+
+  void _handleAppResumed() {
+    if (_disposed) return;
+
+    // If the socket is null (cleanly closed or never connected), reconnect now.
+    if (_channel == null) {
+      Log.i('[WS] No active socket after resume — reconnecting');
+      _reconnectAttempt = 0;
+      _doConnect();
+      return;
+    }
+
+    // If the socket exists but we haven't heard from the server in a while,
+    // it's likely half-open. Force-close and reconnect.
+    final last = _lastServerMessage;
+    if (last != null && DateTime.now().difference(last) > pongTimeout) {
+      Log.w('[WS] Stale socket after resume (last message ${DateTime.now().difference(last).inSeconds}s ago) — forcing reconnect');
+      _cleanup();
+      _reconnectAttempt = 0;
+      _scheduleReconnect();
+      return;
+    }
+
+    // Socket looks healthy — just fetch any missed notifications.
+    Log.i('[WS] Socket healthy after resume — fetching missed notifications');
+    NotificationListenerService().forceSync();
+  }
+
   void disconnect() {
     _disposed = true;
+    WidgetsBinding.instance.removeObserver(this);
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _cleanup();
