@@ -20,6 +20,7 @@ import 'services/session_manager.dart';
 import 'core/security/secure_storage_service.dart';
 import 'presentation/screens/boot_screen.dart';
 import 'presentation/screens/attendance_screen.dart';
+import 'presentation/screens/workspace_screen.dart';
 import 'presentation/screens/recovery_screen.dart';
 import 'services/api_service.dart';
 import 'services/heartbeat_service.dart';
@@ -120,6 +121,7 @@ late final IAuthRepository globalAuthRepository;
 
 /// When true, skips full lifecycle and shows AttendanceScreen directly for UI iteration.
 bool kPreviewAttendance = false;
+bool kPreviewWorkspace = false;
 
 void main(List<String> args) {
   if (args.contains('--exit')) {
@@ -127,11 +129,17 @@ void main(List<String> args) {
     exit(0);
   }
 
-  // Preview mode: skip full lifecycle, jump straight to AttendanceScreen.
-  // Usage: flutter run -d windows --dart-define=PREVIEW=true
-  if (const String.fromEnvironment('PREVIEW', defaultValue: '') == 'true') {
+  // Preview mode: skip full lifecycle, jump straight to a screen for UI iteration.
+  // Usage: flutter run -d windows --dart-define=PREVIEW=attendance
+  //        flutter run -d windows --dart-define=PREVIEW=workspace
+  final previewMode = const String.fromEnvironment('PREVIEW', defaultValue: '');
+  if (previewMode.isNotEmpty) {
     WidgetsFlutterBinding.ensureInitialized();
-    kPreviewAttendance = true;
+    if (previewMode == 'workspace') {
+      kPreviewWorkspace = true;
+    } else {
+      kPreviewAttendance = true;
+    }
     runApp(const IntelliAttendApp());
     return;
   }
@@ -603,6 +611,23 @@ class _PreviewAttendanceScreen extends StatelessWidget {
   }
 }
 
+class _PreviewWorkspaceScreen extends StatelessWidget {
+  const _PreviewWorkspaceScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const WorkspaceScreen(
+      sessionId: 'preview-session-001',
+      courseName: 'CS101 - Data Structures',
+      facultyName: 'Dr. Preview',
+      roomName: 'Room 301',
+      presentCount: 32,
+      totalCapacity: 40,
+      isAttendanceSubmitted: true,
+    );
+  }
+}
+
 class IntelliAttendApp extends StatelessWidget {
   const IntelliAttendApp({super.key});
 
@@ -615,7 +640,11 @@ class IntelliAttendApp extends StatelessWidget {
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: ThemeMode.light,
-      home: kPreviewAttendance ? const _PreviewAttendanceScreen() : const BootScreen(),
+      home: kPreviewAttendance
+          ? const _PreviewAttendanceScreen()
+          : kPreviewWorkspace
+              ? const _PreviewWorkspaceScreen()
+              : const BootScreen(),
       builder: (context, child) {
         return UpdateOverlay(
           child: EmergencyOverlay(

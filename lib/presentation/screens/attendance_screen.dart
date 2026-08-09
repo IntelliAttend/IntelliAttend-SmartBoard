@@ -102,7 +102,9 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       _presentCount = widget.initialPresentCount;
       _startEndSessionCooldown();
       unawaited(_loadClassRoster());
-      _restoreLocalSnapshot();
+      _restoreLocalSnapshot().catchError((e) {
+        Log.w('[Attendance] Snapshot restore skipped: $e');
+      });
     }
   }
 

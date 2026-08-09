@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/logger.dart';
+import '../../main.dart' show kPreviewWorkspace;
 import '../../models/board_notification.dart';
 import '../../services/api_service.dart';
 import '../../services/heartbeat_service.dart';
@@ -165,22 +166,28 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
     _resourceTabController.addListener(() {
       if (!_resourceTabController.indexIsChanging) setState(() {});
     });
-    _loadResources();
-    _loadSessionHistory();
-    _resourcesSub = NotificationListenerService().notificationsStream.listen((notifications) {
-      if (!mounted) return;
-      setState(() {
-        _resources = notifications.where((n) => n.hasAttachment).toList();
-        _resourcesLoaded = true;
-        if (_selectedResource != null &&
-            !_resources.any((resource) => resource.id == _selectedResource!.id)) {
-          _selectedResource = null;
-        }
-        if (_selectedResource == null && _resources.isNotEmpty) {
-          _selectedResource = _resources.first;
-        }
+
+    if (kPreviewWorkspace) {
+      _resourcesLoaded = true;
+      _historyLoaded = true;
+    } else {
+      _loadResources();
+      _loadSessionHistory();
+      _resourcesSub = NotificationListenerService().notificationsStream.listen((notifications) {
+        if (!mounted) return;
+        setState(() {
+          _resources = notifications.where((n) => n.hasAttachment).toList();
+          _resourcesLoaded = true;
+          if (_selectedResource != null &&
+              !_resources.any((resource) => resource.id == _selectedResource!.id)) {
+            _selectedResource = null;
+          }
+          if (_selectedResource == null && _resources.isNotEmpty) {
+            _selectedResource = _resources.first;
+          }
+        });
       });
-    });
+    }
   }
 
   Future<void> _loadSessionHistory() async {
