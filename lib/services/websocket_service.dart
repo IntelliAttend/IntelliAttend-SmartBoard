@@ -6,6 +6,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../core/platform/power_command_service.dart';
 import '../core/utils/logger.dart';
+import '../models/media_push_event.dart';
 import '../models/notification_event.dart';
 import '../models/remote_config.dart';
 import 'api_service.dart';
@@ -311,11 +312,19 @@ class WebsocketService with WidgetsBindingObserver {
   final StreamController<ScheduleUpdateEvent> _scheduleUpdateController =
       StreamController<ScheduleUpdateEvent>.broadcast();
 
+  final StreamController<MediaPushEvent> _mediaPushController =
+      StreamController<MediaPushEvent>.broadcast();
+  final StreamController<String> _mediaClearController =
+      StreamController<String>.broadcast();
+
   Stream<NotificationEvent> get onNotificationEvent =>
       _notificationEventController.stream;
 
   Stream<ScheduleUpdateEvent> get onScheduleUpdate =>
       _scheduleUpdateController.stream;
+
+  Stream<MediaPushEvent> get onMediaPush => _mediaPushController.stream;
+  Stream<String> get onMediaClear => _mediaClearController.stream;
 
   Stream<FullStateSync> get onFullStateSync => _syncController.stream;
   Stream<AttendanceMarkedEvent> get onAttendanceMarked =>
@@ -680,6 +689,14 @@ class WebsocketService with WidgetsBindingObserver {
           PowerCommandService().handleSystemCommand(event);
           break;
 
+        case 'media_push':
+          _handleMediaPush(message);
+          break;
+
+        case 'media_clear':
+          _handleMediaClear(message);
+          break;
+
         case 'update_available':
           _handleUpdateAvailable(message);
           break;
@@ -766,6 +783,26 @@ class WebsocketService with WidgetsBindingObserver {
         Log.e('[WS] Re-hydration failed: $e');
       }
     });
+  }
+
+  void _handleMediaPush(Map<String, dynamic> message) {
+    try {
+      final event = MediaPushEvent.fromJson(message);
+      Log.i('[WS] media_push: session=${event.sessionId} type=${event.mediaType} url=${event.mediaUrl.substring(0, 50.clamp(0, event.mediaUrl.length))}');
+      _mediaPushController.add(event);
+    } catch (e) {
+      Log.w('[WS] Failed to parse media_push: $e');
+    }
+  }
+
+  void _handleMediaClear(Map<String, dynamic> message) {
+    try {
+      final sessionId = message['session_id'] as String? ?? '';
+      Log.i('[WS] media_clear: session=$sessionId');
+      _mediaClearController.add(sessionId);
+    } catch (e) {
+      Log.w('[WS] Failed to parse media_clear: $e');
+    }
   }
 
   void _handleBoardConnected(Map<String, dynamic> message) {
@@ -974,5 +1011,7 @@ class WebsocketService with WidgetsBindingObserver {
     _boardStatusController.close();
     _notificationEventController.close();
     _scheduleUpdateController.close();
+    _mediaPushController.close();
+    _mediaClearController.close();
   }
 }

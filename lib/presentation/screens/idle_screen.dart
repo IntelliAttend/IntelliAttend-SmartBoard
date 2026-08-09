@@ -39,6 +39,9 @@ import 'package:video_player/video_player.dart';
 import '../../services/pre_flight_service.dart';
 import '../../core/platform/kiosk_service.dart';
 import '../../core/platform/window_orchestrator_service.dart';
+import '../../models/media_push_event.dart';
+import '../../services/websocket_service.dart';
+import '../widgets/media_overlay.dart';
 
 enum PreFlightStatus { none, connecting, ready, pending }
 enum CooldownState { none, locked }
@@ -91,6 +94,10 @@ class _IdleScreenState extends State<IdleScreen>
 
   NetworkInfo _networkInfo = NetworkInfo(isConnected: false, lastChecked: DateTime.now());
   StreamSubscription<NetworkInfo>? _networkSub;
+
+  MediaPushEvent? _activeMediaPush;
+  StreamSubscription<MediaPushEvent>? _mediaPushSub;
+  StreamSubscription<String>? _mediaClearSub;
 
   // Session ID received from the preflight API response (_triggerWarmUp).
   // Stored here in RAM so OTP submission (_handleVerifyOtp) can use it
@@ -332,7 +339,24 @@ class _IdleScreenState extends State<IdleScreen>
         });
       });
 
-      // 7. If returning from a completed attendance session, keep the
+      // 7. Listen for media push/clear events from WebSocket.
+      try {
+        final wsService = WebsocketService();
+        _mediaPushSub = wsService.onMediaPush.listen((event) {
+          if (!mounted) return;
+          Log.i('[Idle] Media push received: ${event.sessionId} type=${event.mediaType}');
+          setState(() => _activeMediaPush = event);
+        });
+        _mediaClearSub = wsService.onMediaClear.listen((sessionId) {
+          if (!mounted) return;
+          Log.i('[Idle] Media clear received: $sessionId');
+          setState(() => _activeMediaPush = null);
+        });
+      } catch (e) {
+        Log.w('[Idle] Failed to subscribe to media push events: $e');
+      }
+
+      // 8. If returning from a completed attendance session, keep the
       //    app on idle screen but show the minimize button so faculty
       //    can manually minimize if desired.
       if (widget.completedSession) {
@@ -582,6 +606,8 @@ class _IdleScreenState extends State<IdleScreen>
     _allClearSub?.cancel();
     _allClearToastTimer?.cancel();
     _networkSub?.cancel();
+    _mediaPushSub?.cancel();
+    _mediaClearSub?.cancel();
     NetworkInfoService().stopMonitoring();
     // Notifications arriving while on non-idle screens will be queued.
     NotificationListenerService().markIdle(false);
@@ -1651,6 +1677,18 @@ class _IdleScreenState extends State<IdleScreen>
           }
 
           // 8. WiFi status in footer — handled by _buildClockAndInfo
+
+          // 9. Media overlay (highest priority — above everything)
+          if (_activeMediaPush != null) {
+            stackChildren.add(MediaOverlay(
+              event: _activeMediaPush!,
+              onClear: () {
+                if (mounted) {
+                  setState(() => _activeMediaPush = null);
+                }
+              },
+            ));
+          }
 
           return Stack(children: stackChildren);
         },
