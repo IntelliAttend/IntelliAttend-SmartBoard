@@ -19,6 +19,7 @@ import 'core/config/enterprise_deploy_config.dart';
 import 'services/session_manager.dart';
 import 'core/security/secure_storage_service.dart';
 import 'presentation/screens/boot_screen.dart';
+import 'presentation/screens/attendance_screen.dart';
 import 'presentation/screens/recovery_screen.dart';
 import 'services/api_service.dart';
 import 'services/heartbeat_service.dart';
@@ -117,15 +118,22 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 late final IDeviceRepository globalDeviceRepository;
 late final IAuthRepository globalAuthRepository;
 
+/// When true, skips full lifecycle and shows AttendanceScreen directly for UI iteration.
+bool kPreviewAttendance = false;
+
 void main(List<String> args) {
-  // Handle --exit flag: allows external processes (installer, update agent)
-  // to gracefully shut down the app. This is a safety net — the primary
-  // shutdown mechanism is the update agent's WaitingAppExit state, but
-  // this flag covers manual installs and edge cases.
   if (args.contains('--exit')) {
-    // Use print() not Log() since logger may not be initialized yet.
     print('[Main] --exit flag received. Shutting down gracefully.');
     exit(0);
+  }
+
+  // Preview mode: skip full lifecycle, jump straight to AttendanceScreen.
+  // Usage: flutter run -d windows --dart-define=PREVIEW=true
+  if (const String.fromEnvironment('PREVIEW', defaultValue: '') == 'true') {
+    WidgetsFlutterBinding.ensureInitialized();
+    kPreviewAttendance = true;
+    runApp(const IntelliAttendApp());
+    return;
   }
 
   runZonedGuarded(() async {
@@ -577,6 +585,24 @@ Future<void> _doTimeSync() async {
 
 // ─── Shared helpers ──────────────────────────────────────────────────────
 
+class _PreviewAttendanceScreen extends StatelessWidget {
+  const _PreviewAttendanceScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return AttendanceScreen(
+      sessionId: 'preview-session-001',
+      capacity: 40,
+      courseName: 'CS101 - Data Structures',
+      facultyName: 'Dr. Preview',
+      roomName: 'Room 301',
+      initialPresentCount: 0,
+      slotId: 'slot-1',
+      boardId: 'preview-board',
+    );
+  }
+}
+
 class IntelliAttendApp extends StatelessWidget {
   const IntelliAttendApp({super.key});
 
@@ -589,7 +615,7 @@ class IntelliAttendApp extends StatelessWidget {
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: ThemeMode.light,
-      home: const BootScreen(),
+      home: kPreviewAttendance ? const _PreviewAttendanceScreen() : const BootScreen(),
       builder: (context, child) {
         return UpdateOverlay(
           child: EmergencyOverlay(

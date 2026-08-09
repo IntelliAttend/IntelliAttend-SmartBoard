@@ -18,7 +18,7 @@ import '../../services/websocket_service.dart';
 import '../../services/student_service.dart';
 
 
-enum _WorkspaceTab { resources, calendar, settings }
+enum _WorkspaceTab { resources, calendar }
 
 enum _ResourceFilter { myResources, collegeResources }
 
@@ -145,7 +145,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
   static Color get _greenLight => AppColors.successLime.withValues(alpha: 0.12);
   static Color get _red => AppColors.error;
   static Color get _amber => AppColors.warningAmber;
-  static Color get _amberLight => AppColors.warningAmber.withValues(alpha: 0.12);
   static Color get _purple => const Color(0xFFA78BFA);
 
 
@@ -600,9 +599,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                     duration: const Duration(milliseconds: 220),
                     child: _activeTab == _WorkspaceTab.resources
                         ? _buildResourcesView()
-                        : _activeTab == _WorkspaceTab.calendar
-                            ? _buildCalendarView()
-                            : _buildSettingsView(),
+                        : _buildCalendarView(),
                   ),
                 ),
                 Container(width: 1, color: _palette.border),
@@ -645,7 +642,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                   color: Colors.transparent,
                   child: InkWell(
                     borderRadius: BorderRadius.circular(10),
-                    onTap: () => Navigator.of(context).popUntil((route) => route.isFirst),
+                    onTap: () => Navigator.of(context).pop(),
                     child: Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
@@ -816,8 +813,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                 _sidebarItem(icon: Icons.folder_open_rounded, label: 'Resources', tab: _WorkspaceTab.resources, subtitle: 'Files & materials'),
                 const SizedBox(height: 4),
                 _sidebarItem(icon: Icons.calendar_month_rounded, label: 'Calendar', tab: _WorkspaceTab.calendar, subtitle: 'Sessions & events'),
-                const SizedBox(height: 4),
-                _sidebarItem(icon: Icons.settings_outlined, label: 'Settings', tab: _WorkspaceTab.settings, subtitle: 'Preferences'),
               ],
             ),
           ),
@@ -830,7 +825,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
               child: InkWell(
                 borderRadius: BorderRadius.circular(12),
                 onTap: () {
-                  Navigator.of(context).push(
+                  Navigator.of(context).pushReplacement(
                     MaterialPageRoute(
                       builder: (context) => AttendanceScreen(
                         sessionId: widget.sessionId,
@@ -1567,33 +1562,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
     );
   }
 
-  Widget _sectionHeader(IconData icon, String title, String subtitle) {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(9),
-          decoration: BoxDecoration(
-            color: _tealLight,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: _tealAlpha),
-          ),
-          child: Icon(icon, size: 18, color: _teal),
-        ),
-        const SizedBox(width: 12),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title,
-                style: TextStyle(
-                    fontSize: 18, fontWeight: FontWeight.w700, color: _palette.textPrimary)),
-            Text(subtitle,
-                style: TextStyle(fontSize: 11, color: _palette.textMuted)),
-          ],
-        ),
-      ],
-    );
-  }
-
   // ══════════════════════════════════════════════════════════════════════════════
   // CALENDAR VIEW
   // ══════════════════════════════════════════════════════════════════════════════
@@ -1809,216 +1777,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
       ),
     );
   }
-
-  // ══════════════════════════════════════════════════════════════════════════════
-  // SETTINGS VIEW
-  // ══════════════════════════════════════════════════════════════════════════════
-
-  Widget _buildSettingsView() {
-    return SingleChildScrollView(
-      key: const ValueKey('settings'),
-      padding: const EdgeInsets.all(32),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _sectionHeader(Icons.tune_rounded, 'Display Settings', 'UI preferences'),
-                const SizedBox(height: 20),
-                _settingsTile(
-                  icon: Icons.brightness_6_rounded,
-                  iconBg: _amberLight,
-                  iconColor: _amber,
-                  title: 'Theme',
-                  subtitle: 'Toggle between light and dark mode',
-                  trailing: SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'light', label: Text('Light')),
-                      ButtonSegment(value: 'dark', label: Text('Dark')),
-                    ],
-                    selected: const {'dark'},
-                    onSelectionChanged: (_) {},
-                    style: SegmentedButton.styleFrom(
-                      selectedBackgroundColor: _teal,
-                      selectedForegroundColor: Colors.white,
-                    backgroundColor: _palette.surface,
-                      foregroundColor: _palette.textSecondary,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                _settingsTile(
-                  icon: Icons.notifications_outlined,
-                  iconBg: _tealLight,
-                  iconColor: _teal,
-                  title: 'Notifications',
-                  subtitle: 'Alert preferences for session events',
-                  trailing: Switch(
-                    value: true,
-                    activeTrackColor: _teal,
-                    onChanged: (_) {},
-                  ),
-                ),
-                const SizedBox(height: 14),
-                _settingsTile(
-                  icon: Icons.fullscreen_rounded,
-                  iconBg: _greenLight,
-                  iconColor: _green,
-                  title: 'Kiosk Mode',
-                  subtitle: 'Fullscreen kiosk hardening is active',
-                  trailing: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: _greenLight,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: _green.withValues(alpha: 0.25)),
-                    ),
-                    child: Text('ACTIVE',
-                        style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.5,
-                            color: _green)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 28),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _sectionHeader(Icons.info_outline_rounded, 'About', 'App information'),
-                const SizedBox(height: 20),
-                Container(
-                  padding: const EdgeInsets.all(22),
-                  decoration: BoxDecoration(
-                    color: _palette.surface,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: _palette.border),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: _tealLight,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: _tealAlpha),
-                            ),
-                            child: Icon(Icons.school_rounded, color: _teal, size: 28),
-                          ),
-                          const SizedBox(width: 14),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('IntelliAttend SmartBoard',
-                                  style: TextStyle(
-                                      fontSize: 17, fontWeight: FontWeight.w800, color: _palette.textPrimary)),
-                              const SizedBox(height: 3),
-                              Text('Version 5.5.0',
-                                  style: TextStyle(
-                                      fontSize: 12, color: _palette.textMuted)),
-                            ],
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 22),
-                      Container(height: 1, color: _palette.border),
-                      const SizedBox(height: 16),
-                      _infoRow(Icons.construction_rounded, 'Platform', 'Windows'),
-                      _infoRow(Icons.tag_rounded, 'Session', widget.sessionId),
-                      _infoRow(Icons.meeting_room_outlined, 'Room', widget.roomName),
-                      _infoRow(Icons.person_outline_rounded, 'Faculty', widget.facultyName),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _settingsTile({
-    required IconData icon,
-    required Color iconBg,
-    required Color iconColor,
-    required String title,
-    required String subtitle,
-    required Widget trailing,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: _palette.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _palette.border),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: iconBg,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: iconColor.withValues(alpha: 0.2)),
-            ),
-            child: Icon(icon, color: iconColor, size: 22),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title,
-                    style: TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w700, color: _palette.textPrimary)),
-                const SizedBox(height: 2),
-                Text(subtitle,
-                    style: TextStyle(fontSize: 12, color: _palette.textMuted)),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          trailing,
-        ],
-      ),
-    );
-  }
-
-  Widget _infoRow(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        children: [
-          Icon(icon, size: 15, color: _teal.withValues(alpha: 0.7)),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 64,
-            child: Text(label,
-                style: TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w500, color: _palette.textMuted)),
-          ),
-          Expanded(
-            child: Text(value,
-                style: TextStyle(
-                    fontSize: 12, fontWeight: FontWeight.w700, color: _palette.textPrimary)),
-          ),
-        ],
-      ),
-    );
-  }
-
-
 
   // ══════════════════════════════════════════════════════════════════════════════
   // HELPERS

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:isar/isar.dart';
 import '../../core/theme/app_theme.dart';
 import '../../services/api_service.dart';
@@ -11,6 +12,7 @@ import '../../core/platform/kiosk_service.dart';
 import '../../core/utils/roll_number_utils.dart';
 import '../../core/utils/logger.dart';
 import '../../models/isar_schemas.dart';
+import '../../main.dart' show kPreviewAttendance;
 import 'summary_screen.dart';
 import 'workspace_screen.dart';
 import '../widgets/glass_container.dart';
@@ -71,8 +73,9 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
   List<_StudentEntry> _students = [];
 
-  int _pendingRowTapIndex = -1;
-  Timer? _tapTimer;
+  OverlayEntry? _studentInfoOverlay;
+  AnimationController? _cellPulseController;
+  Animation<double>? _cellPulseAnimation;
 
   static const int _gridColumns = 10;
 
@@ -80,12 +83,35 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   void initState() {
     super.initState();
 
-    KioskService.setMode(KioskMode.locked);
-    _presentCount = widget.initialPresentCount;
+    _cellPulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
+    _cellPulseAnimation = Tween<double>(begin: 1.0, end: 1.08).animate(
+      CurvedAnimation(parent: _cellPulseController!, curve: Curves.easeOut),
+    );
 
-    _startEndSessionCooldown();
-    unawaited(_loadClassRoster());
-    _restoreLocalSnapshot();
+    if (kPreviewAttendance) {
+      // Preview mode: skip kiosk, use mock students
+      _students = defaultMockStudents();
+      _presentCount = widget.initialPresentCount;
+      _totalStudents = _students.length;
+      _isRosterLoaded = true;
+    } else {
+      KioskService.setMode(KioskMode.locked);
+      _presentCount = widget.initialPresentCount;
+      _startEndSessionCooldown();
+      unawaited(_loadClassRoster());
+      _restoreLocalSnapshot();
+    }
+  }
+
+  static List<_StudentEntry> defaultMockStudents() {
+    return List.generate(40, (i) => _StudentEntry(
+      studentId: 'stu-${(i + 1).toString().padLeft(3, '0')}',
+      name: 'Student ${i + 1}',
+      rollNumber: RollNumberUtils.generateSeatCode(i),
+    ));
   }
 
   Future<void> _loadClassRoster() async {
@@ -143,54 +169,48 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   void _handleCellTapDown(int index) {
-    final student = index < _students.length ? _students[index] : null;
-
+    _dismissStudentInfo();
     if (_presentSeatIndices.contains(index)) {
       _presentSeatIndices.remove(index);
       _absentSeatIndices.add(index);
-      _sendTap(student, 'absent');
     } else if (_absentSeatIndices.contains(index)) {
       _absentSeatIndices.remove(index);
     } else {
       _presentSeatIndices.add(index);
-      _sendTap(student, 'present');
     }
     if (mounted) setState(() {});
   }
 
-  final List<Map<String, dynamic>> _pendingTaps = [];
+  void _showStudentInfo(int index, BuildContext cellContext) {
+    _dismissStudentInfo();
+    if (index >= _students.length) return;
 
-  void _sendTap(_StudentEntry? student, String status) {
-    if (student == null) return;
+    final student = _students[index];
+    final roll = RollNumberUtils.formatDisplay(
+        student.rollNumber.isNotEmpty ? student.rollNumber : RollNumberUtils.generateSeatCode(index));
 
-    _sendTapViaRest(student.studentId, status).catchError((e) {
-      Log.w('[Attendance] REST tap failed, queuing locally: $e');
-      _pendingTaps.add({
-        'student_id': student.studentId,
-        'status': status,
-        'tapped_at_ms': DateTime.now().millisecondsSinceEpoch,
-      });
-      _savePendingTaps();
-    });
-  }
+    _cellPulseController?.forward(from: 0).then((_) => _cellPulseController?.reverse());
 
-  Future<void> _sendTapViaRest(String studentId, String status) async {
-    await ApiService.tapAttendance(
-      sessionId: widget.sessionId,
-      studentId: studentId,
-      status: status,
+    final renderBox = cellContext.findRenderObject() as RenderBox?;
+    if (renderBox == null) return;
+    final cellPosition = renderBox.localToGlobal(Offset.zero);
+    final cellSize = renderBox.size;
+
+    _studentInfoOverlay = OverlayEntry(
+      builder: (context) => _StudentInfoBubble(
+        studentName: student.name.isNotEmpty ? student.name : 'Student ${index + 1}',
+        rollDisplay: roll,
+        cellPosition: cellPosition,
+        cellSize: cellSize,
+      ),
     );
+
+    Overlay.of(context).insert(_studentInfoOverlay!);
   }
 
-  Future<void> _savePendingTaps() async {
-    try {
-      await SessionManager.savePendingTaps(
-        sessionId: widget.sessionId,
-        taps: _pendingTaps,
-      );
-    } catch (e) {
-      Log.e('[Attendance] Failed to save pending taps: $e');
-    }
+  void _dismissStudentInfo() {
+    _studentInfoOverlay?.remove();
+    _studentInfoOverlay = null;
   }
 
   void _handleSplitReviewTap(int index, bool isInPresent) {
@@ -206,11 +226,13 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
   Future<void> _handleSaveAttendance() async {
     if (_presentSeatIndices.isEmpty && _absentSeatIndices.isEmpty) return;
-    await SessionManager.saveAttendanceSnapshot(
-      sessionId: widget.sessionId,
-      presentIndices: _presentSeatIndices.toList(),
-      absentIndices: _absentSeatIndices.toList(),
-    );
+    if (!kPreviewAttendance) {
+      await SessionManager.saveAttendanceSnapshot(
+        sessionId: widget.sessionId,
+        presentIndices: _presentSeatIndices.toList(),
+        absentIndices: _absentSeatIndices.toList(),
+      );
+    }
     if (mounted) setState(() => _stage = _Stage.splitReview);
   }
 
@@ -268,23 +290,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
-    }
-  }
-
-  void _handleRowTapDown(int rowIndex, int rowStart, int rowEnd) {
-    _tapTimer?.cancel();
-    if (_pendingRowTapIndex == rowIndex) {
-      _pendingRowTapIndex = -1;
-      for (int i = rowStart; i < rowEnd; i++) {
-        _presentSeatIndices.add(i);
-        _absentSeatIndices.remove(i);
-      }
-      if (mounted) setState(() {});
-    } else {
-      _pendingRowTapIndex = rowIndex;
-      _tapTimer = Timer(const Duration(milliseconds: 300), () {
-        _pendingRowTapIndex = -1;
-      });
     }
   }
 
@@ -439,202 +444,219 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   void _showSubmitFirstDialog() {
-    showGeneralDialog(
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    showDialog(
       context: context,
       barrierDismissible: true,
-      barrierLabel: '',
-      barrierColor: Colors.black.withValues(alpha: 0.6),
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, anim1, anim2) => const SizedBox(),
-      transitionBuilder: (context, anim1, anim2, child) {
-        return Transform.scale(
-          scale: anim1.value,
-          child: Opacity(
-            opacity: anim1.value,
-            child: Center(
-              child: Material(
-                color: Colors.transparent,
-                child: GlassContainer(
-                  width: 400,
-                  padding: const EdgeInsets.all(32),
-                  borderRadius: 24,
-                  color: Colors.black.withValues(alpha: 0.8),
-                  borderColor: Colors.white10,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: AppColors.warningAmber.withValues(alpha: 0.1),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.cloud_upload_rounded,
-                            color: AppColors.warningAmber, size: 32),
-                      ),
-                      const SizedBox(height: 24),
-                      const Text(
-                        'Submit Attendance First',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        'Attendance has been saved locally but not yet submitted to the server.\n\nPlease submit before ending the session.',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                            color: Colors.white70, fontSize: 14),
-                      ),
-                      const SizedBox(height: 32),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextButton(
-                              onPressed: () => Navigator.of(context).pop(),
-                              child: const Text('CANCEL',
-                                  style: TextStyle(
-                                      color: Colors.white60,
-                                      fontWeight: FontWeight.bold)),
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            flex: 2,
-                            child: ElevatedButton(
-                              onPressed: () {
-                                Navigator.of(context).pop();
-                                _handleSubmitAttendance();
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: AppColors.primaryTeal,
-                                foregroundColor: Colors.white,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 16),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12)),
-                                elevation: 0,
-                              ),
-                              child: const Text('SUBMIT NOW',
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.bold)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+      barrierColor: Colors.black.withValues(alpha: 0.3),
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Center(
+          child: Container(
+            width: 400,
+            padding: const EdgeInsets.all(32),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF1E293B) : Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: isDark ? Colors.white.withValues(alpha: 0.08) : const Color(0xFFE2E8F0)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.08),
+                  blurRadius: 30,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: AppColors.warningAmber.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.cloud_upload_rounded,
+                      color: AppColors.warningAmber, size: 28),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'SUBMIT ATTENDANCE FIRST',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.5,
+                    color: isDark ? Colors.white : AppColors.textPrimaryLight,
                   ),
                 ),
-              ),
+                const SizedBox(height: 10),
+                Text(
+                  'Attendance has been saved locally but not yet submitted.\n\nPlease submit before ending the session.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.5,
+                    color: isDark ? Colors.white54 : const Color(0xFF64748B),
+                  ),
+                ),
+                const SizedBox(height: 28),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: Text('CANCEL',
+                            style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: isDark ? Colors.white38 : const Color(0xFF94A3B8))),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          _handleSubmitAttendance();
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primaryTeal,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          elevation: 0,
+                        ),
+                        child: const Text('SUBMIT NOW',
+                            style: TextStyle(
+                                fontWeight: FontWeight.w700, fontSize: 13, letterSpacing: 0.5)),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
   void _showEndSessionConfirmation() {
-    showGeneralDialog(
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    showDialog(
       context: context,
       barrierDismissible: true,
-      barrierLabel: '',
-      barrierColor: Colors.black.withValues(alpha: 0.6),
-      transitionDuration: const Duration(milliseconds: 300),
-      pageBuilder: (context, anim1, anim2) => const SizedBox(),
-      transitionBuilder: (context, anim1, anim2, child) {
-        return Transform.scale(
-          scale: anim1.value,
-          child: Opacity(
-            opacity: anim1.value,
-            child: Center(
-              child: Material(
-                color: Colors.transparent,
-                child: GlassContainer(
-                  width: 400,
-                  padding: const EdgeInsets.all(32),
-                  borderRadius: 24,
-                  color: Colors.black.withValues(alpha: 0.8),
-                  borderColor: Colors.white10,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: AppColors.successLime.withValues(alpha: 0.1),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.checklist_rounded,
-                            color: AppColors.successLime, size: 32),
-                      ),
-                      const SizedBox(height: 24),
-                      const Text(
-                        'Attendance Submitted ✓',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '$_presentCount students marked present.\nEnd "${widget.courseName}"?',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                            color: Colors.white70, fontSize: 14),
-                      ),
-                      const SizedBox(height: 32),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextButton(
-                              onPressed: () => Navigator.of(context).pop(),
-                              child: const Text('CANCEL',
-                                  style: TextStyle(
-                                      color: Colors.white60,
-                                      fontWeight: FontWeight.bold)),
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: () {
-                                Navigator.of(context).pop();
-                                _handleEndAttendance();
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: AppColors.error,
-                                foregroundColor: Colors.white,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 16),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12)),
-                                elevation: 0,
-                              ),
-                              child: const Text('END SESSION',
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.bold)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+      barrierColor: Colors.black.withValues(alpha: 0.3),
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Center(
+          child: Container(
+            width: 400,
+            padding: const EdgeInsets.all(32),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF1E293B) : Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: isDark ? Colors.white.withValues(alpha: 0.08) : const Color(0xFFE2E8F0)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.08),
+                  blurRadius: 30,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: AppColors.successLime.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.checklist_rounded,
+                      color: AppColors.successLime, size: 28),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'END SESSION',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.5,
+                    color: isDark ? Colors.white : AppColors.textPrimaryLight,
                   ),
                 ),
-              ),
+                const SizedBox(height: 10),
+                Text(
+                  '$_presentCount students marked present.\nEnd "${widget.courseName}"?',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.5,
+                    color: isDark ? Colors.white54 : const Color(0xFF64748B),
+                  ),
+                ),
+                const SizedBox(height: 28),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: Text('CANCEL',
+                            style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: isDark ? Colors.white38 : const Color(0xFF94A3B8))),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          _handleEndAttendance();
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.error,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          elevation: 0,
+                        ),
+                        child: const Text('END SESSION',
+                            style: TextStyle(
+                                fontWeight: FontWeight.w700, fontSize: 13, letterSpacing: 0.5)),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
   @override
   void dispose() {
+    _dismissStudentInfo();
+    _cellPulseController?.dispose();
     _killSwitchJTimer?.cancel();
     _killSwitchFocusNode.dispose();
     _endSessionCooldownTimer?.cancel();
-    _tapTimer?.cancel();
     super.dispose();
   }
 
@@ -911,79 +933,84 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       );
     }
 
-    const cellSize = 64.0;
-    const cellGap = 6.0;
-    const rowHeaderW = 44.0;
     const cols = _gridColumns;
-    final rows = (itemCount / cols).ceil();
-    final gridW = cols * cellSize + (cols - 1) * cellGap;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-      child: Center(
-        child: SizedBox(
-          width: rowHeaderW + 8 + gridW,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (int row = 0; row < rows; row++) ...[
-                if (row > 0) const SizedBox(height: cellGap),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(
-                      width: rowHeaderW,
-                      height: cellSize,
-                      child: GestureDetector(
-                        onTapDown: (_) {
-                          final start = row * cols;
-                          final end = start + cols > itemCount ? itemCount : start + cols;
-                          _handleRowTapDown(row, start, end);
-                        },
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: isDark ? Colors.white.withValues(alpha: 0.05) : const Color(0xFFF1F5F9),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: isDark ? Colors.white10 : const Color(0xFFE2E8F0)),
-                          ),
-                          child: Center(
-                            child: Text(
-                              'R${row + 1}',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w700,
-                                color: isDark ? Colors.white38 : const Color(0xFF94A3B8),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableW = constraints.maxWidth - 80;
+        const dotArea = 32.0;
+        final gridArea = availableW - dotArea;
+        final cellGap = 8.0;
+        final cellSize = ((gridArea - (cols - 1) * cellGap) / cols).clamp(40.0, 72.0);
+        final gridW = cols * cellSize + (cols - 1) * cellGap;
+        final rows = (itemCount / cols).ceil();
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+          child: Center(
+            child: SizedBox(
+              width: dotArea + gridW,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (int row = 0; row < rows; row++) ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        GestureDetector(
+                          onTap: () {
+                            final start = row * cols;
+                            final end = (start + cols > itemCount) ? itemCount : start + cols;
+                            for (int i = start; i < end; i++) {
+                              _presentSeatIndices.add(i);
+                              _absentSeatIndices.remove(i);
+                            }
+                            if (mounted) setState(() {});
+                          },
+                          child: Container(
+                            width: 12,
+                            height: 12,
+                            margin: const EdgeInsets.only(right: 20),
+                            decoration: BoxDecoration(
+                              color: isDark
+                                  ? Colors.white.withValues(alpha: 0.15)
+                                  : Colors.black.withValues(alpha: 0.08),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: isDark
+                                    ? Colors.white.withValues(alpha: 0.1)
+                                    : Colors.black.withValues(alpha: 0.06),
                               ),
                             ),
                           ),
                         ),
-                      ),
+                        SizedBox(
+                          width: gridW,
+                          child: Wrap(
+                            spacing: cellGap,
+                            runSpacing: cellGap,
+                            children: List.generate(cols, (col) {
+                              final index = row * cols + col;
+                              if (index >= itemCount) {
+                                return SizedBox(
+                                  width: cellSize, height: cellSize,
+                                );
+                              }
+                              return _buildKeycapCell(index, isDark, cellSize);
+                            }),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 6),
-                    SizedBox(
-                      width: gridW,
-                      child: Wrap(
-                        spacing: cellGap,
-                        runSpacing: cellGap,
-                        children: List.generate(cols, (col) {
-                          final index = row * cols + col;
-                          if (index >= itemCount) {
-                            return const SizedBox(
-                              width: cellSize, height: cellSize,
-                            );
-                          }
-                          return _buildKeycapCell(index, isDark, cellSize);
-                        }),
-                      ),
-                    ),
+                    if (row < rows - 1) SizedBox(height: cellGap),
                   ],
-                ),
-              ],
-            ],
+                ],
+              ),
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -999,41 +1026,63 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
     if (isPresent) {
       bgColor = AppColors.successLime;
-      borderColor = AppColors.successLime.withValues(alpha: 0.6);
+      borderColor = AppColors.successLime;
       textColor = Colors.white;
     } else if (isAbsent) {
       bgColor = AppColors.error;
-      borderColor = AppColors.error.withValues(alpha: 0.6);
+      borderColor = AppColors.error;
       textColor = Colors.white;
     } else {
-      bgColor = isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC);
-      borderColor = isDark ? Colors.white10 : const Color(0xFFCBD5E1);
-      textColor = isDark ? Colors.white : const Color(0xFF1E293B);
+      bgColor = isDark ? const Color(0xFF1E293B) : Colors.white;
+      borderColor = isDark ? Colors.white.withValues(alpha: 0.08) : const Color(0xFFE2E8F0);
+      textColor = isDark ? Colors.white70 : const Color(0xFF475569);
     }
 
-    return GestureDetector(
-      onTapDown: (_) => _handleCellTapDown(index),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          color: bgColor,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: borderColor, width: isPresent || isAbsent ? 2.0 : 1.0),
-        ),
-        child: Center(
-          child: Text(
-            roll,
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-              color: textColor,
-              letterSpacing: 0.5,
+    return Builder(
+      builder: (cellContext) {
+        return GestureDetector(
+          onTapDown: (_) => _handleCellTapDown(index),
+          onLongPressStart: (_) => _showStudentInfo(index, cellContext),
+          onLongPressEnd: (_) => _dismissStudentInfo(),
+          child: AnimatedBuilder(
+            animation: _cellPulseAnimation!,
+            builder: (context, child) {
+              final scale = _cellPulseAnimation?.value ?? 1.0;
+              return Transform.scale(
+                scale: scale,
+                child: child,
+              );
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                color: bgColor,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: borderColor,
+                  width: isPresent || isAbsent ? 1.5 : 1.0,
+                ),
+                boxShadow: isPresent || isAbsent
+                    ? [BoxShadow(color: bgColor.withValues(alpha: 0.3), blurRadius: 8, offset: const Offset(0, 2))]
+                    : null,
+              ),
+              child: Center(
+                child: Text(
+                  roll,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: textColor,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -1235,69 +1284,82 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     final hasMarked = presentLocal > 0 || absentCount > 0;
 
     return Container(
-      height: 72,
-      padding: const EdgeInsets.symmetric(horizontal: 32),
+      height: 80,
+      padding: const EdgeInsets.symmetric(horizontal: 40),
       decoration: BoxDecoration(
-        color: isDark ? AppColors.bgDark : AppColors.bgLight,
+        color: isDark ? const Color(0xFF0A0A0A) : Colors.white,
         border: Border(
-            top: BorderSide(color: isDark ? Colors.white10 : Colors.black12)),
+            top: BorderSide(color: isDark ? Colors.white.withValues(alpha: 0.06) : const Color(0xFFE2E8F0))),
       ),
       child: Row(
         children: [
-          _buildFooterBadge(
-              'PRESENT', AppColors.successLime, '$presentLocal'),
-          const SizedBox(width: 24),
+          _buildFooterBadge('PRESENT', AppColors.successLime, '$presentLocal'),
+          const SizedBox(width: 16),
           _buildFooterBadge('ABSENT', AppColors.error, '$absentCount'),
           if (unmarkedCount > 0) ...[
-            const SizedBox(width: 24),
-            _buildFooterBadge('UNMARKED', Colors.grey, '$unmarkedCount'),
+            const SizedBox(width: 16),
+            _buildFooterBadge('UNMARKED', isDark ? Colors.white38 : const Color(0xFF94A3B8), '$unmarkedCount'),
           ],
-          const SizedBox(width: 48),
-          Container(
-              width: 1,
-              height: 24,
-              color: isDark ? Colors.white10 : Colors.black12),
           const Spacer(),
           if (_stage == _Stage.grid)
             ElevatedButton.icon(
               onPressed: hasMarked ? _handleSaveAttendance : null,
-              icon: const Icon(Icons.save_rounded, size: 20),
-              label: const Text('SAVE ATTENDANCE',
+              icon: const Icon(Icons.save_rounded, size: 18),
+              label: const Text('SAVE',
                   style: TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.bold)),
+                      fontSize: 13, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.successLime,
+                backgroundColor: AppColors.primaryTeal,
                 foregroundColor: Colors.white,
-                disabledBackgroundColor: Colors.grey.shade300,
-                disabledForegroundColor: Colors.grey.shade500,
-                minimumSize: const Size(180, 48),
+                disabledBackgroundColor: isDark ? Colors.white.withValues(alpha: 0.06) : const Color(0xFFF1F5F9),
+                disabledForegroundColor: isDark ? Colors.white24 : const Color(0xFF94A3B8),
+                minimumSize: const Size(140, 48),
                 padding: const EdgeInsets.symmetric(horizontal: 24),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                elevation: 0,
+              ),
+            ),
+          if (_stage == _Stage.splitReview) ...[
+            OutlinedButton.icon(
+              onPressed: () => setState(() => _stage = _Stage.grid),
+              icon: const Icon(Icons.arrow_back_rounded, size: 18),
+              label: const Text('BACK',
+                  style: TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: isDark ? Colors.white70 : const Color(0xFF475569),
+                side: BorderSide(color: isDark ? Colors.white12 : const Color(0xFFE2E8F0)),
+                minimumSize: const Size(120, 48),
+                padding: const EdgeInsets.symmetric(horizontal: 20),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
               ),
             ),
-          if (_stage == _Stage.splitReview)
+            const SizedBox(width: 12),
             ElevatedButton.icon(
               onPressed: _isSubmitting ? null : _handleSubmitAttendance,
               icon: _isSubmitting
                   ? const SizedBox(
-                      width: 20, height: 20,
+                      width: 18, height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.cloud_upload_rounded, size: 20),
-              label: Text(_isSubmitting ? 'SUBMITTING...' : 'SUBMIT TO SERVER',
+                  : const Icon(Icons.cloud_upload_rounded, size: 18),
+              label: Text(_isSubmitting ? 'SUBMITTING...' : 'SUBMIT',
                   style: const TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.bold)),
+                      fontSize: 13, fontWeight: FontWeight.w700, letterSpacing: 0.5)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primaryTeal,
                 foregroundColor: Colors.white,
-                disabledBackgroundColor: Colors.grey.shade300,
-                disabledForegroundColor: Colors.grey.shade500,
-                minimumSize: const Size(200, 48),
+                disabledBackgroundColor: isDark ? Colors.white.withValues(alpha: 0.06) : const Color(0xFFF1F5F9),
+                disabledForegroundColor: isDark ? Colors.white24 : const Color(0xFF94A3B8),
+                minimumSize: const Size(160, 48),
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
+                elevation: 0,
               ),
             ),
+          ],
         ],
       ),
     );
@@ -1305,16 +1367,16 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
   Widget _buildFooterBadge(String label, Color color, String value) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(8),
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 8, height: 8,
+            width: 7, height: 7,
             decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
           const SizedBox(width: 8),
@@ -1331,6 +1393,137 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                   fontWeight: FontWeight.w900,
                   color: color)),
         ],
+      ),
+    );
+  }
+}
+
+class _StudentInfoBubble extends StatefulWidget {
+  final String studentName;
+  final String rollDisplay;
+  final Offset cellPosition;
+  final Size cellSize;
+
+  const _StudentInfoBubble({
+    required this.studentName,
+    required this.rollDisplay,
+    required this.cellPosition,
+    required this.cellSize,
+  });
+
+  @override
+  State<_StudentInfoBubble> createState() => _StudentInfoBubbleState();
+}
+
+class _StudentInfoBubbleState extends State<_StudentInfoBubble>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _fadeAnim;
+  late Animation<Offset> _slideAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 250),
+    );
+    _fadeAnim = CurvedAnimation(parent: _controller, curve: Curves.easeOut);
+    _slideAnim = Tween<Offset>(
+      begin: const Offset(0, 0.3),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
+    _controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenW = MediaQuery.of(context).size.width;
+    const bubbleW = 280.0;
+    const coneH = 12.0;
+    const avatarSize = 40.0;
+
+    double left = widget.cellPosition.dx + widget.cellSize.width / 2 - bubbleW / 2;
+    left = left.clamp(12.0, screenW - bubbleW - 12.0);
+    final top = widget.cellPosition.dy - coneH - 8.0;
+
+    return Positioned(
+      left: left,
+      top: top,
+      child: FadeTransition(
+        opacity: _fadeAnim,
+        child: SlideTransition(
+          position: _slideAnim,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              width: bubbleW,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.08),
+                    blurRadius: 20,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: avatarSize,
+                    height: avatarSize,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(
+                      Icons.person_outline,
+                      size: 22,
+                      color: Color(0xFF94A3B8),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.studentName.toUpperCase(),
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.5,
+                            color: Color(0xFF0F172A),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          widget.rollDisplay,
+                          style: GoogleFonts.jetBrainsMono(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: const Color(0xFF64748B),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
