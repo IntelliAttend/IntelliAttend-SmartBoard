@@ -317,6 +317,12 @@ class WebsocketService with WidgetsBindingObserver {
   final StreamController<String> _mediaClearController =
       StreamController<String>.broadcast();
 
+  // Static streams so idle_screen can subscribe without a WebsocketService instance.
+  static final StreamController<MediaPushEvent> _staticMediaPushController =
+      StreamController<MediaPushEvent>.broadcast();
+  static final StreamController<String> _staticMediaClearController =
+      StreamController<String>.broadcast();
+
   Stream<NotificationEvent> get onNotificationEvent =>
       _notificationEventController.stream;
 
@@ -325,6 +331,9 @@ class WebsocketService with WidgetsBindingObserver {
 
   Stream<MediaPushEvent> get onMediaPush => _mediaPushController.stream;
   Stream<String> get onMediaClear => _mediaClearController.stream;
+
+  static Stream<MediaPushEvent> get onMediaPushStatic => _staticMediaPushController.stream;
+  static Stream<String> get onMediaClearStatic => _staticMediaClearController.stream;
 
   Stream<FullStateSync> get onFullStateSync => _syncController.stream;
   Stream<AttendanceMarkedEvent> get onAttendanceMarked =>
@@ -790,6 +799,7 @@ class WebsocketService with WidgetsBindingObserver {
       final event = MediaPushEvent.fromJson(message);
       Log.i('[WS] media_push: session=${event.sessionId} type=${event.mediaType} url=${event.mediaUrl.substring(0, 50.clamp(0, event.mediaUrl.length))}');
       _mediaPushController.add(event);
+      _staticMediaPushController.add(event);
     } catch (e) {
       Log.w('[WS] Failed to parse media_push: $e');
     }
@@ -800,6 +810,7 @@ class WebsocketService with WidgetsBindingObserver {
       final sessionId = message['session_id'] as String? ?? '';
       Log.i('[WS] media_clear: session=$sessionId');
       _mediaClearController.add(sessionId);
+      _staticMediaClearController.add(sessionId);
     } catch (e) {
       Log.w('[WS] Failed to parse media_clear: $e');
     }

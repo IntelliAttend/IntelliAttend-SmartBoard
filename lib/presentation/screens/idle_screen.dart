@@ -341,13 +341,12 @@ class _IdleScreenState extends State<IdleScreen>
 
       // 7. Listen for media push/clear events from WebSocket.
       try {
-        final wsService = WebsocketService();
-        _mediaPushSub = wsService.onMediaPush.listen((event) {
+        _mediaPushSub = WebsocketService.onMediaPushStatic.listen((event) {
           if (!mounted) return;
           Log.i('[Idle] Media push received: ${event.sessionId} type=${event.mediaType}');
           setState(() => _activeMediaPush = event);
         });
-        _mediaClearSub = wsService.onMediaClear.listen((sessionId) {
+        _mediaClearSub = WebsocketService.onMediaClearStatic.listen((sessionId) {
           if (!mounted) return;
           Log.i('[Idle] Media clear received: $sessionId');
           setState(() => _activeMediaPush = null);
