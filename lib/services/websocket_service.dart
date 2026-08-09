@@ -6,6 +6,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../core/platform/power_command_service.dart';
 import '../core/utils/logger.dart';
+import '../models/media_push_event.dart';
 import '../models/notification_event.dart';
 import '../models/remote_config.dart';
 import 'api_service.dart';
@@ -271,6 +272,7 @@ class WebsocketService with WidgetsBindingObserver {
   final String _host;
   WebSocketChannel? _channel;
   Timer? _reconnectTimer;
+  Timer? _stuckConnectingWatchdog;
   Timer? _pingTimer;
   Timer? _pongWatchdogTimer;
   DateTime? _lastServerMessage;
@@ -311,11 +313,28 @@ class WebsocketService with WidgetsBindingObserver {
   final StreamController<ScheduleUpdateEvent> _scheduleUpdateController =
       StreamController<ScheduleUpdateEvent>.broadcast();
 
+  final StreamController<MediaPushEvent> _mediaPushController =
+      StreamController<MediaPushEvent>.broadcast();
+  final StreamController<String> _mediaClearController =
+      StreamController<String>.broadcast();
+
+  // Static streams so idle_screen can subscribe without a WebsocketService instance.
+  static final StreamController<MediaPushEvent> _staticMediaPushController =
+      StreamController<MediaPushEvent>.broadcast();
+  static final StreamController<String> _staticMediaClearController =
+      StreamController<String>.broadcast();
+
   Stream<NotificationEvent> get onNotificationEvent =>
       _notificationEventController.stream;
 
   Stream<ScheduleUpdateEvent> get onScheduleUpdate =>
       _scheduleUpdateController.stream;
+
+  Stream<MediaPushEvent> get onMediaPush => _mediaPushController.stream;
+  Stream<String> get onMediaClear => _mediaClearController.stream;
+
+  static Stream<MediaPushEvent> get onMediaPushStatic => _staticMediaPushController.stream;
+  static Stream<String> get onMediaClearStatic => _staticMediaClearController.stream;
 
   Stream<FullStateSync> get onFullStateSync => _syncController.stream;
   Stream<AttendanceMarkedEvent> get onAttendanceMarked =>
@@ -369,6 +388,19 @@ class WebsocketService with WidgetsBindingObserver {
     if (_disposed || _isConnecting) return;
     _isConnecting = true;
 
+    // Safety watchdog: if _isConnecting is stuck true for 60s, force-reset
+    // and retry. Prevents permanent death from an unhandled early-return path
+    // or a hanging HTTP request that never resolves.
+    _stuckConnectingWatchdog?.cancel();
+    _stuckConnectingWatchdog = Timer(const Duration(seconds: 60), () {
+      if (_isConnecting && _channel == null && !_disposed) {
+        Log.e('[WS] _isConnecting stuck true for 60s — force resetting and reconnecting');
+        _isConnecting = false;
+        _cleanup();
+        _scheduleReconnect();
+      }
+    });
+
     try {
       String path;
       if (_sessionId != null) {
@@ -377,6 +409,8 @@ class WebsocketService with WidgetsBindingObserver {
         path = '/api/v1/websocket/board/$_boardId';
       } else {
         Log.w('[WS] No board ID or session ID available');
+        _isConnecting = false;
+        _stuckConnectingWatchdog?.cancel();
         _scheduleReconnect();
         return;
       }
@@ -384,12 +418,16 @@ class WebsocketService with WidgetsBindingObserver {
       final ticketData = await ApiService.getWebSocketTicket();
       if (ticketData == null) {
         Log.w('[WS] Failed to obtain WebSocket ticket, scheduling reconnect');
+        _isConnecting = false;
+        _stuckConnectingWatchdog?.cancel();
         _scheduleReconnect();
         return;
       }
       final ticket = ticketData['ticket'] as String?;
       if (ticket == null || ticket.isEmpty) {
         Log.w('[WS] Invalid ticket from server, scheduling reconnect');
+        _isConnecting = false;
+        _stuckConnectingWatchdog?.cancel();
         _scheduleReconnect();
         return;
       }
@@ -460,6 +498,7 @@ class WebsocketService with WidgetsBindingObserver {
       } catch (e) {
         Log.e('[WS] Connection ready error: $e');
         _isConnecting = false;
+        _stuckConnectingWatchdog?.cancel();
         _cleanup();
         _scheduleReconnect();
         return;
@@ -467,6 +506,7 @@ class WebsocketService with WidgetsBindingObserver {
 
       // Handshake succeeded — safe to reset counter and confirm connected state.
       _isConnecting = false;
+      _stuckConnectingWatchdog?.cancel();
       _reconnectAttempt = 0;
       _lastServerMessage = DateTime.now();
       HeartbeatService.setWsConnected(true);
@@ -477,6 +517,7 @@ class WebsocketService with WidgetsBindingObserver {
     } catch (e) {
       Log.e('[WS] Connection failed: $e');
       _isConnecting = false;
+      _stuckConnectingWatchdog?.cancel();
       _cleanup();
       _scheduleReconnect();
     }
@@ -680,6 +721,14 @@ class WebsocketService with WidgetsBindingObserver {
           PowerCommandService().handleSystemCommand(event);
           break;
 
+        case 'media_push':
+          _handleMediaPush(message);
+          break;
+
+        case 'media_clear':
+          _handleMediaClear(message);
+          break;
+
         case 'update_available':
           _handleUpdateAvailable(message);
           break;
@@ -768,6 +817,28 @@ class WebsocketService with WidgetsBindingObserver {
     });
   }
 
+  void _handleMediaPush(Map<String, dynamic> message) {
+    try {
+      final event = MediaPushEvent.fromJson(message);
+      Log.i('[WS] media_push: session=${event.sessionId} type=${event.mediaType} url=${event.mediaUrl.substring(0, 50.clamp(0, event.mediaUrl.length))}');
+      _mediaPushController.add(event);
+      _staticMediaPushController.add(event);
+    } catch (e) {
+      Log.w('[WS] Failed to parse media_push: $e');
+    }
+  }
+
+  void _handleMediaClear(Map<String, dynamic> message) {
+    try {
+      final sessionId = message['session_id'] as String? ?? '';
+      Log.i('[WS] media_clear: session=$sessionId');
+      _mediaClearController.add(sessionId);
+      _staticMediaClearController.add(sessionId);
+    } catch (e) {
+      Log.w('[WS] Failed to parse media_clear: $e');
+    }
+  }
+
   void _handleBoardConnected(Map<String, dynamic> message) {
     final boardId = message['board_id'] as String? ?? '';
     Log.i('[WS] board_connected: $boardId — discovering active session');
@@ -845,6 +916,8 @@ class WebsocketService with WidgetsBindingObserver {
       sessionId: event.sessionId,
       state: 'CLOSED',
     ));
+    // Clear session targeting so reconnects go back to board channel (Fix B3)
+    _sessionId = null;
     Log.i('[WS] session_ended: ${event.sessionId} status=${event.status}');
   }
 
@@ -885,6 +958,8 @@ class WebsocketService with WidgetsBindingObserver {
     _pingTimer = null;
     _pongWatchdogTimer?.cancel();
     _pongWatchdogTimer = null;
+    _stuckConnectingWatchdog?.cancel();
+    _stuckConnectingWatchdog = null;
     _isConnecting = false;
     _messageSubscription?.cancel();
     _messageSubscription = null;
@@ -974,5 +1049,7 @@ class WebsocketService with WidgetsBindingObserver {
     _boardStatusController.close();
     _notificationEventController.close();
     _scheduleUpdateController.close();
+    _mediaPushController.close();
+    _mediaClearController.close();
   }
 }
