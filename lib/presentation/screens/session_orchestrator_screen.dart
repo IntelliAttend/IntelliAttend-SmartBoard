@@ -201,6 +201,7 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
   void dispose() {
     _stateSubscription?.cancel();
     _boardStateSubscription?.cancel();
+    _wsService?.disconnect();
     super.dispose();
   }
 

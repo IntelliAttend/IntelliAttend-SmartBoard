@@ -272,6 +272,7 @@ class WebsocketService with WidgetsBindingObserver {
   final String _host;
   WebSocketChannel? _channel;
   Timer? _reconnectTimer;
+  Timer? _stuckConnectingWatchdog;
   Timer? _pingTimer;
   Timer? _pongWatchdogTimer;
   DateTime? _lastServerMessage;
@@ -387,6 +388,19 @@ class WebsocketService with WidgetsBindingObserver {
     if (_disposed || _isConnecting) return;
     _isConnecting = true;
 
+    // Safety watchdog: if _isConnecting is stuck true for 60s, force-reset
+    // and retry. Prevents permanent death from an unhandled early-return path
+    // or a hanging HTTP request that never resolves.
+    _stuckConnectingWatchdog?.cancel();
+    _stuckConnectingWatchdog = Timer(const Duration(seconds: 60), () {
+      if (_isConnecting && _channel == null && !_disposed) {
+        Log.e('[WS] _isConnecting stuck true for 60s — force resetting and reconnecting');
+        _isConnecting = false;
+        _cleanup();
+        _scheduleReconnect();
+      }
+    });
+
     try {
       String path;
       if (_sessionId != null) {
@@ -395,6 +409,8 @@ class WebsocketService with WidgetsBindingObserver {
         path = '/api/v1/websocket/board/$_boardId';
       } else {
         Log.w('[WS] No board ID or session ID available');
+        _isConnecting = false;
+        _stuckConnectingWatchdog?.cancel();
         _scheduleReconnect();
         return;
       }
@@ -402,12 +418,16 @@ class WebsocketService with WidgetsBindingObserver {
       final ticketData = await ApiService.getWebSocketTicket();
       if (ticketData == null) {
         Log.w('[WS] Failed to obtain WebSocket ticket, scheduling reconnect');
+        _isConnecting = false;
+        _stuckConnectingWatchdog?.cancel();
         _scheduleReconnect();
         return;
       }
       final ticket = ticketData['ticket'] as String?;
       if (ticket == null || ticket.isEmpty) {
         Log.w('[WS] Invalid ticket from server, scheduling reconnect');
+        _isConnecting = false;
+        _stuckConnectingWatchdog?.cancel();
         _scheduleReconnect();
         return;
       }
@@ -478,6 +498,7 @@ class WebsocketService with WidgetsBindingObserver {
       } catch (e) {
         Log.e('[WS] Connection ready error: $e');
         _isConnecting = false;
+        _stuckConnectingWatchdog?.cancel();
         _cleanup();
         _scheduleReconnect();
         return;
@@ -485,6 +506,7 @@ class WebsocketService with WidgetsBindingObserver {
 
       // Handshake succeeded — safe to reset counter and confirm connected state.
       _isConnecting = false;
+      _stuckConnectingWatchdog?.cancel();
       _reconnectAttempt = 0;
       _lastServerMessage = DateTime.now();
       HeartbeatService.setWsConnected(true);
@@ -495,6 +517,7 @@ class WebsocketService with WidgetsBindingObserver {
     } catch (e) {
       Log.e('[WS] Connection failed: $e');
       _isConnecting = false;
+      _stuckConnectingWatchdog?.cancel();
       _cleanup();
       _scheduleReconnect();
     }
@@ -893,6 +916,8 @@ class WebsocketService with WidgetsBindingObserver {
       sessionId: event.sessionId,
       state: 'CLOSED',
     ));
+    // Clear session targeting so reconnects go back to board channel (Fix B3)
+    _sessionId = null;
     Log.i('[WS] session_ended: ${event.sessionId} status=${event.status}');
   }
 
@@ -933,6 +958,8 @@ class WebsocketService with WidgetsBindingObserver {
     _pingTimer = null;
     _pongWatchdogTimer?.cancel();
     _pongWatchdogTimer = null;
+    _stuckConnectingWatchdog?.cancel();
+    _stuckConnectingWatchdog = null;
     _isConnecting = false;
     _messageSubscription?.cancel();
     _messageSubscription = null;
