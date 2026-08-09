@@ -232,6 +232,7 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
           facultyName: state.facultyName ?? 'Professor',
           roomName: state.roomName ?? widget.registration.roomName,
           boardId: widget.registration.smartBoardId,
+          courseCode: state.courseCode,
           onNavigateBack: _returnToIdle,
         );
       case BoardState.closed:

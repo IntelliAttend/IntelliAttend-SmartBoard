@@ -4,7 +4,7 @@ version: 5.5.0+48
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
-  flutter: ">=3.44.0 <3.45.0"
+  flutter: ">=3.41.0 <4.0.0"
 
 dependencies:
   flutter:
@@ -37,7 +37,6 @@ dependencies:
   
   # Window Management
   window_manager: ^0.5.1
-  screen_retriever: ^0.2.0
   # screen_brightness removed: unsupported on Windows desktop monitors
   # (the plugin probes WMI on every app launch and floods logs with
   # "Problem getting monitor brightness"). Brightness control is not a
@@ -56,7 +55,6 @@ dependencies:
 
   # Observability (crash reporting + performance monitoring)
   sentry: ^8.14.2
-  sentry_flutter: ^8.14.1
 
   # Audio
   audioplayers: ^6.4.0
@@ -69,10 +67,8 @@ dependencies:
   
   # Network & Device Telemetry
   connectivity_plus: ^7.1.1
-  device_info_plus: ^12.4.0
   package_info_plus: ^9.0.1
   web_socket_channel: ^3.0.3
-  lottie: ^3.3.3
   number_flow: ^1.0.4
   # firebase_auth deliberately NOT included — the Windows C++ plugin calls
   # abort() when AuthStateListener / IdTokenListener callbacks fire on a
@@ -93,7 +89,6 @@ flutter:
     - assets/background.png
     - assets/logo.png
     - assets/logo_square.png
-    - assets/Errorfailure.lottie
 
 
 dependency_overrides:

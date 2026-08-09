@@ -25,6 +25,7 @@ class AttendanceScreen extends StatefulWidget {
   final String roomName;
   final String? slotId;
   final String? boardId;
+  final String? courseCode;
 
   final int initialPresentCount;
   final VoidCallback? onNavigateBack;
@@ -39,6 +40,7 @@ class AttendanceScreen extends StatefulWidget {
     this.initialPresentCount = 0,
     this.slotId,
     this.boardId,
+    this.courseCode,
     this.onNavigateBack,
   });
 
@@ -268,6 +270,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
             facultyName: widget.facultyName,
             roomName: widget.roomName,
             slotId: widget.slotId,
+            courseCode: widget.courseCode,
             presentCount: _presentSeatIndices.length,
             totalCapacity: widget.capacity,
             students: _students.map((s) => StudentInfo(

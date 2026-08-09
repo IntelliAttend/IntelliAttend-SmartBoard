@@ -756,6 +756,64 @@ class ApiService {
     throw _apiError('College resources fetch', response);
   }
 
+  // ─── Syllabus & Topics ──────────────────────────────────────────────────
+
+  static Future<Map<String, dynamic>> getSubjectSyllabus(
+    String courseCode, {
+    String regulation = 'R22',
+  }) async {
+    final response = await _request(
+      'GET',
+      'api/v2/syllabus/subjects/$courseCode',
+      headers: await _authHeaders(),
+      queryParameters: {'regulation': regulation},
+      maxRetries: 2,
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    if (response.statusCode == 404) return {};
+    throw _apiError('Subject syllabus fetch', response);
+  }
+
+  static Future<List<Map<String, dynamic>>> getTopicCompletions(
+    String courseCode,
+    String sectionId,
+  ) async {
+    final response = await _request(
+      'GET',
+      'api/v2/syllabus/subjects/$courseCode/completion',
+      headers: await _authHeaders(),
+      queryParameters: {'section_id': sectionId},
+      maxRetries: 2,
+    );
+    if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body);
+      final list = decoded is List ? decoded : [];
+      return list.cast<Map<String, dynamic>>();
+    }
+    if (response.statusCode == 404) return [];
+    throw _apiError('Topic completions fetch', response);
+  }
+
+  static Future<Map<String, dynamic>> getSyllabusProgress(
+    String courseCode,
+    String sectionId,
+  ) async {
+    final response = await _request(
+      'GET',
+      'api/v2/syllabus/subjects/$courseCode/progress',
+      headers: await _authHeaders(),
+      queryParameters: {'section_id': sectionId},
+      maxRetries: 2,
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    if (response.statusCode == 404) return {};
+    throw _apiError('Syllabus progress fetch', response);
+  }
+
   // ─── Update Status Reporting ───────────────────────────────────────────
   //
   // Boards send update success/failure/rollback events to the server so the

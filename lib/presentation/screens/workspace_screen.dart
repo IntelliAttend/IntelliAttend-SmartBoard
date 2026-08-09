@@ -1,14 +1,18 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/logger.dart';
 import '../../main.dart' show kPreviewWorkspace;
 import '../../models/board_notification.dart';
+import '../../models/course_topic.dart';
+import '../../models/syllabus_unit.dart';
 import '../../services/api_service.dart';
 import '../../services/heartbeat_service.dart';
 import '../../services/notification_listener_service.dart';
 import '../../services/resource_service.dart';
+import '../../services/syllabus_service.dart';
 import '../../services/document_service.dart';
 import 'summary_screen.dart';
 import 'document_viewer_screen.dart';
@@ -19,7 +23,7 @@ import '../../services/websocket_service.dart';
 import '../../services/student_service.dart';
 
 
-enum _WorkspaceTab { resources, calendar }
+enum _WorkspaceTab { resources, topics, calendar }
 
 enum _ResourceFilter { myResources, collegeResources }
 
@@ -91,6 +95,7 @@ class WorkspaceScreen extends StatefulWidget {
   final String roomName;
   final String? sectionId;
   final String? slotId;
+  final String? courseCode;
   final int presentCount;
   final int totalCapacity;
   final List<StudentInfo>? students;
@@ -107,6 +112,7 @@ class WorkspaceScreen extends StatefulWidget {
     required this.roomName,
     this.sectionId,
     this.slotId,
+    this.courseCode,
     required this.presentCount,
     required this.totalCapacity,
     this.students,
@@ -134,6 +140,16 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
   bool _resourcesLoaded = false;
   BoardNotification? _selectedResource;
   StreamSubscription<List<BoardNotification>>? _resourcesSub;
+
+  // ── Topics / Syllabus state ──
+  List<SyllabusUnit> _syllabusUnits = [];
+  List<CourseTopic> _allTopics = [];
+  bool _topicsLoaded = false;
+  int _topicFilter = 0;
+  String _topicSearchQuery = '';
+  final TextEditingController _topicSearchController = TextEditingController();
+  final List<bool> _expandedUnits = [];
+  static const _topicFilterLabels = ['All', 'Completed', 'In Progress', 'Pending'];
 
   late AnimationController _pulseController;
   _WSColors get _palette => _WSColors.of(context);
@@ -187,6 +203,39 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
           }
         });
       });
+    }
+    _loadTopics();
+  }
+
+  Future<void> _loadTopics() async {
+    final code = widget.courseCode;
+    final section = widget.sectionId;
+    if (code == null || code.isEmpty || section == null || section.isEmpty) {
+      if (mounted) setState(() => _topicsLoaded = true);
+      return;
+    }
+
+    try {
+      final results = await Future.wait([
+        SyllabusService.getUnitsWithProgress(code, section),
+        SyllabusService.getTopics(code, section),
+      ]);
+      if (!mounted) return;
+
+      final units = results[0] as List<SyllabusUnit>;
+      final topics = results[1] as List<CourseTopic>;
+
+      setState(() {
+        _syllabusUnits = units;
+        _allTopics = topics;
+        _topicsLoaded = true;
+        _expandedUnits.clear();
+        _expandedUnits.addAll(List.filled(units.length, false));
+        if (units.isNotEmpty) _expandedUnits[0] = true;
+      });
+    } catch (e) {
+      Log.w('[Workspace] Topics load failed: $e');
+      if (mounted) setState(() => _topicsLoaded = true);
     }
   }
 
@@ -279,6 +328,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
     _resourcesSub?.cancel();
     _resourceTabController.dispose();
     _pulseController.dispose();
+    _topicSearchController.dispose();
     super.dispose();
   }
 
@@ -606,7 +656,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                     duration: const Duration(milliseconds: 220),
                     child: _activeTab == _WorkspaceTab.resources
                         ? _buildResourcesView()
-                        : _buildCalendarView(),
+                        : _activeTab == _WorkspaceTab.topics
+                            ? _buildTopicsView()
+                            : _buildCalendarView(),
                   ),
                 ),
                 Container(width: 1, color: _palette.border),
@@ -819,6 +871,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
               children: [
                 _sidebarItem(icon: Icons.folder_open_rounded, label: 'Resources', tab: _WorkspaceTab.resources, subtitle: 'Files & materials'),
                 const SizedBox(height: 4),
+                _sidebarItem(icon: Icons.menu_book_rounded, label: 'Topics', tab: _WorkspaceTab.topics, subtitle: 'Syllabus & progress'),
+                const SizedBox(height: 4),
                 _sidebarItem(icon: Icons.calendar_month_rounded, label: 'Calendar', tab: _WorkspaceTab.calendar, subtitle: 'Sessions & events'),
               ],
             ),
@@ -841,6 +895,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                         facultyName: widget.facultyName,
                         roomName: widget.roomName,
                         slotId: widget.slotId,
+                        courseCode: widget.courseCode,
                         initialPresentCount: widget.presentCount,
                         boardId: '',
                       ),
@@ -1563,6 +1618,352 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                 ],
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // TOPICS VIEW — Syllabus units & subtopics with progress
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  int get _totalTopicCount => _allTopics.length;
+  int get _completedTopicCount => _allTopics.where((t) => t.isCompleted).length;
+
+  List<CourseTopic> get _filteredTopics {
+    var topics = _allTopics.toList();
+    if (_topicSearchQuery.isNotEmpty) {
+      final q = _topicSearchQuery.toLowerCase();
+      topics = topics.where((t) => t.name.toLowerCase().contains(q)).toList();
+    }
+    switch (_topicFilter) {
+      case 1:
+        topics = topics.where((t) => t.isCompleted).toList();
+        break;
+      case 2:
+        topics = topics.where((t) => !t.isCompleted).toList();
+        break;
+      case 3:
+        topics = topics.where((t) => !t.isCompleted).toList();
+        break;
+    }
+    return topics;
+  }
+
+  Widget _buildTopicsView() {
+    return Column(
+      key: const ValueKey('topics'),
+      children: [
+        Container(
+          padding: const EdgeInsets.fromLTRB(40, 32, 40, 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  color: _palette.surface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _palette.border),
+                ),
+                child: TextField(
+                  controller: _topicSearchController,
+                  onChanged: (val) => setState(() => _topicSearchQuery = val),
+                  style: TextStyle(fontSize: 14, color: _palette.textPrimary),
+                  decoration: InputDecoration(
+                    hintText: 'Search topics...',
+                    hintStyle: TextStyle(color: _palette.textMuted, fontSize: 14),
+                    prefixIcon: Icon(Icons.search_rounded, color: _palette.textMuted, size: 20),
+                    suffixIcon: _topicSearchQuery.isNotEmpty
+                        ? IconButton(
+                            icon: Icon(Icons.close_rounded, color: _palette.textMuted, size: 18),
+                            onPressed: () {
+                              _topicSearchController.clear();
+                              setState(() => _topicSearchQuery = '');
+                            },
+                          )
+                        : null,
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  ...List.generate(_topicFilterLabels.length, (i) {
+                    final isActive = _topicFilter == i;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: GestureDetector(
+                        onTap: () => setState(() => _topicFilter = i),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                          decoration: BoxDecoration(
+                            color: isActive ? _teal.withValues(alpha: 0.15) : _palette.surface,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: isActive ? _teal.withValues(alpha: 0.3) : _palette.border,
+                            ),
+                          ),
+                          child: Text(
+                            _topicFilterLabels[i],
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: isActive ? _teal : _palette.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                  const Spacer(),
+                  if (_totalTopicCount > 0)
+                    Text(
+                      '$_completedTopicCount / $_totalTopicCount topics',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: _palette.textSecondary,
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Expanded(
+          child: _topicSearchQuery.isNotEmpty || _topicFilter != 0
+              ? _buildFilteredTopicsList()
+              : _buildUnitList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFilteredTopicsList() {
+    final filtered = _filteredTopics;
+    if (!_topicsLoaded) return const Center(child: CircularProgressIndicator());
+    if (filtered.isEmpty) return _buildTopicsEmptyState('No topics match your filter');
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+      itemCount: filtered.length,
+      itemBuilder: (context, index) => _buildTopicItem(filtered[index], index, filtered.length),
+    );
+  }
+
+  Widget _buildUnitList() {
+    if (!_topicsLoaded) return const Center(child: CircularProgressIndicator());
+    if (_syllabusUnits.isEmpty) return _buildTopicsEmptyState('Syllabus topics have not been added yet');
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+      itemCount: _syllabusUnits.length,
+      itemBuilder: (context, index) => _buildUnitTile(_syllabusUnits[index], index),
+    );
+  }
+
+  Widget _buildUnitTile(SyllabusUnit unit, int unitIndex) {
+    final isExpanded = _expandedUnits.length > unitIndex ? _expandedUnits[unitIndex] : false;
+    final allDone = unit.isComplete;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: _palette.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isExpanded ? _teal.withValues(alpha: 0.25) : _palette.border,
+          width: isExpanded ? 1.5 : 1,
+        ),
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+          childrenPadding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          initiallyExpanded: isExpanded,
+          onExpansionChanged: (val) {
+            HapticFeedback.lightImpact();
+            setState(() {
+              while (_expandedUnits.length <= unitIndex) {
+                _expandedUnits.add(false);
+              }
+              _expandedUnits[unitIndex] = val;
+            });
+          },
+          leading: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: allDone
+                  ? AppColors.successLime.withValues(alpha: 0.15)
+                  : _teal.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Center(
+              child: allDone
+                  ? const Icon(Icons.check_rounded, size: 20, color: AppColors.successLime)
+                  : Text(
+                      '${unit.unitNumber}',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: _teal),
+                    ),
+            ),
+          ),
+          title: Text(
+            unit.title,
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _palette.textPrimary),
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Row(
+              children: [
+                Text(
+                  '${unit.completedTopics} / ${unit.totalTopics} Topics',
+                  style: TextStyle(fontSize: 11, color: _palette.textSecondary, fontWeight: FontWeight.w500),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 60,
+                  height: 4,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(2),
+                    child: LinearProgressIndicator(
+                      value: unit.totalTopics > 0 ? unit.completedTopics / unit.totalTopics : 0,
+                      backgroundColor: _palette.textMuted.withValues(alpha: 0.15),
+                      valueColor: AlwaysStoppedAnimation<Color>(allDone ? AppColors.successLime : _teal),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '${unit.percentage.round()}%',
+                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _palette.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          trailing: Icon(
+            isExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
+            color: _palette.textMuted,
+            size: 22,
+          ),
+          children: _allTopics
+              .where((t) => t.unitNumber == unit.unitNumber)
+              .toList()
+              .asMap()
+              .entries
+              .map((entry) => _buildTopicItem(entry.value, entry.key, unit.topics.length))
+              .toList(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTopicItem(CourseTopic topic, int index, int total) {
+    final bool isLast = index == total - 1;
+    final bool isCompleted = topic.isCompleted;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 28,
+            child: Column(
+              children: [
+                Container(
+                  width: 20,
+                  height: 20,
+                  decoration: BoxDecoration(
+                    color: isCompleted
+                        ? AppColors.successLime
+                        : _palette.textMuted.withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    isCompleted ? Icons.check : Icons.circle,
+                    size: isCompleted ? 12 : 6,
+                    color: isCompleted ? Colors.white : _palette.textMuted.withValues(alpha: 0.4),
+                  ),
+                ),
+                if (!isLast)
+                  Container(
+                    width: 2,
+                    height: 20,
+                    color: isCompleted
+                        ? AppColors.successLime.withValues(alpha: 0.3)
+                        : _palette.textMuted.withValues(alpha: 0.1),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        topic.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: isCompleted ? FontWeight.w600 : FontWeight.w500,
+                          color: isCompleted
+                              ? _palette.textPrimary
+                              : _palette.textSecondary.withValues(alpha: 0.6),
+                          decoration: isCompleted ? TextDecoration.lineThrough : null,
+                          decorationColor: _palette.textMuted.withValues(alpha: 0.3),
+                        ),
+                      ),
+                    ),
+                    if (isCompleted)
+                      Container(
+                        margin: const EdgeInsets.only(left: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppColors.successLime.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          'Completed',
+                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.successLime),
+                        ),
+                      ),
+                  ],
+                ),
+                if (!isLast && _topicSearchQuery.isEmpty && _topicFilter == 0)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Container(height: 0.5, color: _palette.border),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTopicsEmptyState(String message) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.menu_book_outlined, size: 56, color: _palette.textMuted.withValues(alpha: 0.3)),
+          const SizedBox(height: 16),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: _palette.textSecondary),
           ),
         ],
       ),
