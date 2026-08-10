@@ -32,33 +32,43 @@ const ActiveSessionSchema = CollectionSchema(
       name: r'facultyName',
       type: IsarType.string,
     ),
-    r'presentIndices': PropertySchema(
+    r'pendingTapsJson': PropertySchema(
       id: 3,
+      name: r'pendingTapsJson',
+      type: IsarType.string,
+    ),
+    r'presentIndices': PropertySchema(
+      id: 4,
       name: r'presentIndices',
       type: IsarType.longList,
     ),
     r'rosterCount': PropertySchema(
-      id: 4,
+      id: 5,
       name: r'rosterCount',
       type: IsarType.long,
     ),
     r'scheduledEndTime': PropertySchema(
-      id: 5,
+      id: 6,
       name: r'scheduledEndTime',
       type: IsarType.dateTime,
     ),
     r'sectionId': PropertySchema(
-      id: 6,
+      id: 7,
       name: r'sectionId',
       type: IsarType.string,
     ),
     r'sessionId': PropertySchema(
-      id: 7,
+      id: 8,
       name: r'sessionId',
       type: IsarType.string,
     ),
+    r'slotId': PropertySchema(
+      id: 9,
+      name: r'slotId',
+      type: IsarType.string,
+    ),
     r'verifiedStudentIds': PropertySchema(
-      id: 8,
+      id: 10,
       name: r'verifiedStudentIds',
       type: IsarType.stringList,
     )
@@ -100,9 +110,16 @@ int _activeSessionEstimateSize(
   bytesCount += 3 + object.absentIndices.length * 8;
   bytesCount += 3 + object.courseName.length * 3;
   bytesCount += 3 + object.facultyName.length * 3;
+  {
+    final value = object.pendingTapsJson;
+    if (value != null) {
+      bytesCount += 3 + value.length * 3;
+    }
+  }
   bytesCount += 3 + object.presentIndices.length * 8;
   bytesCount += 3 + object.sectionId.length * 3;
   bytesCount += 3 + object.sessionId.length * 3;
+  bytesCount += 3 + object.slotId.length * 3;
   bytesCount += 3 + object.verifiedStudentIds.length * 3;
   {
     for (var i = 0; i < object.verifiedStudentIds.length; i++) {
@@ -122,12 +139,14 @@ void _activeSessionSerialize(
   writer.writeLongList(offsets[0], object.absentIndices);
   writer.writeString(offsets[1], object.courseName);
   writer.writeString(offsets[2], object.facultyName);
-  writer.writeLongList(offsets[3], object.presentIndices);
-  writer.writeLong(offsets[4], object.rosterCount);
-  writer.writeDateTime(offsets[5], object.scheduledEndTime);
-  writer.writeString(offsets[6], object.sectionId);
-  writer.writeString(offsets[7], object.sessionId);
-  writer.writeStringList(offsets[8], object.verifiedStudentIds);
+  writer.writeString(offsets[3], object.pendingTapsJson);
+  writer.writeLongList(offsets[4], object.presentIndices);
+  writer.writeLong(offsets[5], object.rosterCount);
+  writer.writeDateTime(offsets[6], object.scheduledEndTime);
+  writer.writeString(offsets[7], object.sectionId);
+  writer.writeString(offsets[8], object.sessionId);
+  writer.writeString(offsets[9], object.slotId);
+  writer.writeStringList(offsets[10], object.verifiedStudentIds);
 }
 
 ActiveSession _activeSessionDeserialize(
@@ -141,12 +160,14 @@ ActiveSession _activeSessionDeserialize(
   object.courseName = reader.readString(offsets[1]);
   object.facultyName = reader.readString(offsets[2]);
   object.id = id;
-  object.presentIndices = reader.readLongList(offsets[3]) ?? [];
-  object.rosterCount = reader.readLong(offsets[4]);
-  object.scheduledEndTime = reader.readDateTime(offsets[5]);
-  object.sectionId = reader.readString(offsets[6]);
-  object.sessionId = reader.readString(offsets[7]);
-  object.verifiedStudentIds = reader.readStringList(offsets[8]) ?? [];
+  object.pendingTapsJson = reader.readStringOrNull(offsets[3]);
+  object.presentIndices = reader.readLongList(offsets[4]) ?? [];
+  object.rosterCount = reader.readLong(offsets[5]);
+  object.scheduledEndTime = reader.readDateTime(offsets[6]);
+  object.sectionId = reader.readString(offsets[7]);
+  object.sessionId = reader.readString(offsets[8]);
+  object.slotId = reader.readString(offsets[9]);
+  object.verifiedStudentIds = reader.readStringList(offsets[10]) ?? [];
   return object;
 }
 
@@ -164,16 +185,20 @@ P _activeSessionDeserializeProp<P>(
     case 2:
       return (reader.readString(offset)) as P;
     case 3:
-      return (reader.readLongList(offset) ?? []) as P;
+      return (reader.readStringOrNull(offset)) as P;
     case 4:
-      return (reader.readLong(offset)) as P;
+      return (reader.readLongList(offset) ?? []) as P;
     case 5:
-      return (reader.readDateTime(offset)) as P;
+      return (reader.readLong(offset)) as P;
     case 6:
-      return (reader.readString(offset)) as P;
+      return (reader.readDateTime(offset)) as P;
     case 7:
       return (reader.readString(offset)) as P;
     case 8:
+      return (reader.readString(offset)) as P;
+    case 9:
+      return (reader.readString(offset)) as P;
+    case 10:
       return (reader.readStringList(offset) ?? []) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -848,6 +873,160 @@ extension ActiveSessionQueryFilter
   }
 
   QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      pendingTapsJsonIsNull() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(const FilterCondition.isNull(
+        property: r'pendingTapsJson',
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      pendingTapsJsonIsNotNull() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(const FilterCondition.isNotNull(
+        property: r'pendingTapsJson',
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      pendingTapsJsonEqualTo(
+    String? value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'pendingTapsJson',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      pendingTapsJsonGreaterThan(
+    String? value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'pendingTapsJson',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      pendingTapsJsonLessThan(
+    String? value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'pendingTapsJson',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      pendingTapsJsonBetween(
+    String? lower,
+    String? upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'pendingTapsJson',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      pendingTapsJsonStartsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.startsWith(
+        property: r'pendingTapsJson',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      pendingTapsJsonEndsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.endsWith(
+        property: r'pendingTapsJson',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      pendingTapsJsonContains(String value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.contains(
+        property: r'pendingTapsJson',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      pendingTapsJsonMatches(String pattern, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.matches(
+        property: r'pendingTapsJson',
+        wildcard: pattern,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      pendingTapsJsonIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'pendingTapsJson',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      pendingTapsJsonIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        property: r'pendingTapsJson',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
       presentIndicesElementEqualTo(int value) {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.equalTo(
@@ -1377,6 +1556,142 @@ extension ActiveSessionQueryFilter
   }
 
   QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      slotIdEqualTo(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      slotIdGreaterThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      slotIdLessThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      slotIdBetween(
+    String lower,
+    String upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'slotId',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      slotIdStartsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.startsWith(
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      slotIdEndsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.endsWith(
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      slotIdContains(String value, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.contains(
+        property: r'slotId',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      slotIdMatches(String pattern, {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.matches(
+        property: r'slotId',
+        wildcard: pattern,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      slotIdIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'slotId',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
+      slotIdIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        property: r'slotId',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterFilterCondition>
       verifiedStudentIdsElementEqualTo(
     String value, {
     bool caseSensitive = true,
@@ -1638,6 +1953,20 @@ extension ActiveSessionQuerySortBy
     });
   }
 
+  QueryBuilder<ActiveSession, ActiveSession, QAfterSortBy>
+      sortByPendingTapsJson() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'pendingTapsJson', Sort.asc);
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterSortBy>
+      sortByPendingTapsJsonDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'pendingTapsJson', Sort.desc);
+    });
+  }
+
   QueryBuilder<ActiveSession, ActiveSession, QAfterSortBy> sortByRosterCount() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'rosterCount', Sort.asc);
@@ -1690,6 +2019,18 @@ extension ActiveSessionQuerySortBy
       return query.addSortBy(r'sessionId', Sort.desc);
     });
   }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterSortBy> sortBySlotId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'slotId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterSortBy> sortBySlotIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'slotId', Sort.desc);
+    });
+  }
 }
 
 extension ActiveSessionQuerySortThenBy
@@ -1729,6 +2070,20 @@ extension ActiveSessionQuerySortThenBy
   QueryBuilder<ActiveSession, ActiveSession, QAfterSortBy> thenByIdDesc() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'id', Sort.desc);
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterSortBy>
+      thenByPendingTapsJson() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'pendingTapsJson', Sort.asc);
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterSortBy>
+      thenByPendingTapsJsonDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'pendingTapsJson', Sort.desc);
     });
   }
 
@@ -1784,6 +2139,18 @@ extension ActiveSessionQuerySortThenBy
       return query.addSortBy(r'sessionId', Sort.desc);
     });
   }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterSortBy> thenBySlotId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'slotId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QAfterSortBy> thenBySlotIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'slotId', Sort.desc);
+    });
+  }
 }
 
 extension ActiveSessionQueryWhereDistinct
@@ -1806,6 +2173,14 @@ extension ActiveSessionQueryWhereDistinct
       {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
       return query.addDistinctBy(r'facultyName', caseSensitive: caseSensitive);
+    });
+  }
+
+  QueryBuilder<ActiveSession, ActiveSession, QDistinct>
+      distinctByPendingTapsJson({bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'pendingTapsJson',
+          caseSensitive: caseSensitive);
     });
   }
 
@@ -1844,6 +2219,13 @@ extension ActiveSessionQueryWhereDistinct
     });
   }
 
+  QueryBuilder<ActiveSession, ActiveSession, QDistinct> distinctBySlotId(
+      {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'slotId', caseSensitive: caseSensitive);
+    });
+  }
+
   QueryBuilder<ActiveSession, ActiveSession, QDistinct>
       distinctByVerifiedStudentIds() {
     return QueryBuilder.apply(this, (query) {
@@ -1879,6 +2261,13 @@ extension ActiveSessionQueryProperty
     });
   }
 
+  QueryBuilder<ActiveSession, String?, QQueryOperations>
+      pendingTapsJsonProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'pendingTapsJson');
+    });
+  }
+
   QueryBuilder<ActiveSession, List<int>, QQueryOperations>
       presentIndicesProperty() {
     return QueryBuilder.apply(this, (query) {
@@ -1908,6 +2297,12 @@ extension ActiveSessionQueryProperty
   QueryBuilder<ActiveSession, String, QQueryOperations> sessionIdProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'sessionId');
+    });
+  }
+
+  QueryBuilder<ActiveSession, String, QQueryOperations> slotIdProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'slotId');
     });
   }
 

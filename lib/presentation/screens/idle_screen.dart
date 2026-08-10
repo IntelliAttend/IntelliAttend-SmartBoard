@@ -498,6 +498,23 @@ class _IdleScreenState extends State<IdleScreen>
     return int.parse(parts[0]) * 60 + int.parse(parts[1]);
   }
 
+  DateTime _computeSlotEndTime(String? slotId) {
+    final now = TimeSyncService.timeNow;
+    if (slotId != null && slotId.isNotEmpty) {
+      for (final entry in _todayTimeline) {
+        if (entry.slotId == slotId) {
+          final parts = entry.endTime.split(':');
+          if (parts.length == 2) {
+            return DateTime(now.year, now.month, now.day,
+                int.parse(parts[0]), int.parse(parts[1]));
+          }
+        }
+      }
+    }
+    Log.w('[Idle] _computeSlotEndTime: slot $slotId not found in timetable — falling back to +1h');
+    return now.add(const Duration(hours: 1));
+  }
+
   int _currentGapMinutes() {
     if (_todayTimeline.isEmpty) return 0;
     final now = TimeSyncService.timeNow;
@@ -579,6 +596,22 @@ class _IdleScreenState extends State<IdleScreen>
         _bedrockEntry = TimetableCache().currentSlot;
       });
     }
+
+    // Re-validate: if a session was recovered before timetable loaded, check
+    // that its slotId matches the now-known current slot. If stale, discard.
+    if (_activeSession != null && _activeSession!.slotId.isNotEmpty && _bedrockEntry != null) {
+      if (_activeSession!.slotId != _bedrockEntry!.slotId) {
+        Log.w('[Idle] Stale session ${_activeSession!.sessionId} (slot ${_activeSession!.slotId}) != current ${_bedrockEntry!.slotId} — clearing');
+        await SessionManager.clearSession(_activeSession!.sessionId);
+        if (mounted) {
+          setState(() {
+            _activeSession = null;
+            _showMinimizeButton = false;
+          });
+        }
+      }
+    }
+
     await _loadRoomNumber();
     await _loadCompletedSlots();
   }
@@ -703,11 +736,19 @@ class _IdleScreenState extends State<IdleScreen>
   }
 
   Future<void> _checkActiveSession() async {
-    final session = await SessionManager.getResumeableSession();
+    final session = await SessionManager.getResumeableSession(
+      currentSlotId: _bedrockEntry?.slotId,
+    );
     if (session != null && mounted) {
-      setState(() => _activeSession = session);
+      setState(() {
+        _activeSession = session;
+        _showMinimizeButton = true;
+      });
     } else if (session == null && mounted && _activeSession != null) {
-      setState(() => _activeSession = null);
+      setState(() {
+        _activeSession = null;
+        _showMinimizeButton = false;
+      });
     }
   }
 
@@ -755,7 +796,11 @@ class _IdleScreenState extends State<IdleScreen>
       _forceShowCard = false;
       _isReadyCheckDone = false;
 
-      // Step 3: If no session was transferred, enter PENDING state so the
+      // Step 3: Clear any ActiveSession from a previous slot so crash
+      // recovery does not resurrect a stale session for a different period.
+      SessionManager.clearSessionsNotMatching(bedrockSlotId);
+
+      // Step 4: If no session was transferred, enter PENDING state so the
       // OTP card shows "PENDING" instead of silently staying at none.
       if (_preAllocatedSessionId == null) {
         _upcomingAllocatedSessionId = null;
@@ -1385,13 +1430,16 @@ class _IdleScreenState extends State<IdleScreen>
 
       final slotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
 
+      final scheduledEndTime = _computeSlotEndTime(slotId);
+
       await SessionManager.saveSession(
         sessionId: sessionId,
         rosterCount: rosterCount,
         facultyName: facultyName,
         courseName: courseName,
         sectionId: sectionId,
-        endTime: TimeSyncService.timeNow.add(const Duration(hours: 1)),
+        endTime: scheduledEndTime,
+        slotId: slotId ?? '',
       );
 
       // Persist a CompletedSession record immediately so the slot is marked
@@ -1432,11 +1480,12 @@ class _IdleScreenState extends State<IdleScreen>
       if (mounted) {
         final activeSession = ActiveSession()
           ..sessionId = sessionId
+          ..slotId = slotId ?? ''
           ..courseName = courseName
           ..facultyName = facultyName
           ..sectionId = sectionId
           ..rosterCount = rosterCount
-          ..scheduledEndTime = TimeSyncService.timeNow.add(const Duration(hours: 1))
+          ..scheduledEndTime = scheduledEndTime
           ..presentIndices = []
           ..absentIndices = []
           ..verifiedStudentIds = [];

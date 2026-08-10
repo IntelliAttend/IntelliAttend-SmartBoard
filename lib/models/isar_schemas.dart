@@ -12,6 +12,8 @@ class ActiveSession {
   @Index(unique: true)
   late String sessionId;
 
+  String slotId = '';
+
   late DateTime scheduledEndTime;
   late String facultyName;
   late String courseName;

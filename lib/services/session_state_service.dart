@@ -100,7 +100,6 @@ class SessionState {
 
   bool get isEmpty => sessionId.isEmpty;
   bool get isPreparing => state == 'PREPARING';
-  bool get isIgniting => state == 'IGNITING';
   bool get isActive => state == 'ACTIVE';
   bool get isClosed => state == 'CLOSED';
   bool get isIdle => state == 'IDLE' || state.isEmpty;
@@ -233,10 +232,6 @@ class SessionStateService {
   void _syncBoardStateMachine(String state) {
     final machine = BoardStateMachine();
     switch (state) {
-      case 'PREPARING':
-      case 'IGNITING':
-        machine.transitionTo(BoardState.igniting);
-        break;
       case 'ACTIVE':
         machine.transitionTo(BoardState.active);
         break;

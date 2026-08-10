@@ -125,7 +125,7 @@ bool kPreviewWorkspace = false;
 
 void main(List<String> args) {
   if (args.contains('--exit')) {
-    print('[Main] --exit flag received. Shutting down gracefully.');
+    Log.i('[Main] --exit flag received. Shutting down gracefully.');
     exit(0);
   }
 

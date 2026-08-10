@@ -1,7 +1,7 @@
 import 'dart:async';
 import '../utils/logger.dart';
 
-enum BoardState { idle, igniting, active, closed }
+enum BoardState { idle, active, closed }
 
 class BoardStateMachine {
   BoardStateMachine._();
@@ -19,9 +19,7 @@ class BoardStateMachine {
   bool _allowTransition(BoardState from, BoardState to) {
     switch (from) {
       case BoardState.idle:
-        return to == BoardState.igniting;
-      case BoardState.igniting:
-        return to == BoardState.active || to == BoardState.idle;
+        return to == BoardState.active;
       case BoardState.active:
         return to == BoardState.closed || to == BoardState.idle;
       case BoardState.closed:

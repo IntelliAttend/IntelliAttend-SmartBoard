@@ -1,13 +1,13 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intelliattend_smartboard/core/config/install_paths.dart';
 import 'package:intelliattend_smartboard/core/update/manifest_policy.dart';
 import 'package:intelliattend_smartboard/core/update/manifest_validator.dart';
 import 'package:intelliattend_smartboard/core/utils/version.dart';
+
+// ignore_for_file: invalid_use_of_visible_for_testing_member
 import 'package:intelliattend_smartboard/models/remote_config.dart';
 import 'package:intelliattend_smartboard/services/auto_updater.dart';
 import 'package:intelliattend_smartboard/services/update_health_monitor.dart';
@@ -165,7 +165,7 @@ void main() {
         rolloutPercentage: 50,
       );
       final results = List.generate(
-        100, (_) => manifest.includesBoard('board-${_}'),
+        100, (i) => manifest.includesBoard('board-$i'),
       );
       final included = results.where((r) => r).length;
       expect(included, greaterThan(0));
@@ -368,11 +368,6 @@ void main() {
 
     test('availableUpdate persists after dismiss', () async {
       await AutoUpdater.init(boardId: 'test-board', boardChannel: 'stable');
-      final manifest = UpdateManifest(
-        minimumVersion: '9.9.9',
-        downloadUrl: 'http://localhost:1/bogus.msi',
-        rolloutPercentage: 100,
-      );
       // Set available update
       AutoUpdater.dismiss();
       // availableUpdate should still be whatever it was set to
@@ -616,16 +611,6 @@ void main() {
 
     test('Scenario 1: Admin pushes update → guards pass → pipeline starts', () async {
       await AutoUpdater.init(boardId: 'board-001', boardChannel: 'stable');
-
-      final manifest = UpdateManifest(
-        schemaVersion: 2,
-        minimumVersion: '9.9.9',
-        downloadUrl: 'http://localhost:1/update.msi',
-        sha256: 'a' * 64,
-        force: true,
-        rolloutPercentage: 100,
-        channel: 'stable',
-      );
 
       // The pipeline will attempt HTTP download which will fail on localhost:1
       // But that's expected — we're testing that it passes all guards.

@@ -637,7 +637,7 @@ class WebsocketService with WidgetsBindingObserver {
           Log.i('[WS] session_preparing: ${message['session_id']}');
           _sessionState.applyState(SessionState(
             sessionId: message['session_id'] as String,
-            state: 'IGNITING',
+            state: 'PREPARING',
             version: message['version'] as int? ?? 1,
             courseName: message['course_name'] as String?,
             facultyName: message['faculty_name'] as String?,
@@ -650,7 +650,7 @@ class WebsocketService with WidgetsBindingObserver {
           Log.i('[WS] session_igniting: ${message['session_id']}');
           _sessionState.applyState(SessionState(
             sessionId: message['session_id'] as String,
-            state: 'IGNITING',
+            state: 'PREPARING',
             version: message['version'] as int? ?? 1,
             courseName: message['course_name'] as String?,
             facultyName: message['faculty_name'] as String?,

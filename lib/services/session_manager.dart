@@ -107,9 +107,11 @@ class SessionManager {
     required String courseName,
     required String sectionId,
     required DateTime endTime,
+    String slotId = '',
   }) async {
     final session = ActiveSession()
       ..sessionId = sessionId
+      ..slotId = slotId
       ..rosterCount = rosterCount
       ..facultyName = facultyName
       ..courseName = courseName
@@ -122,19 +124,31 @@ class SessionManager {
     });
 
     Log.i(
-        '🚀 [SessionManager] Session $sessionId persisted: $courseName by $facultyName');
+        '🚀 [SessionManager] Session $sessionId persisted: $courseName by $facultyName (slot: $slotId)');
   }
 
-  /// Check if there's an active session that hasn't expired
-  static Future<ActiveSession?> getResumeableSession() async {
+  /// Check if there's an active session that hasn't expired.
+  /// If [currentSlotId] is provided, only returns a session matching that slot.
+  static Future<ActiveSession?> getResumeableSession({String? currentSlotId}) async {
     final now = TimeSyncService.timeNow;
-    final session = await _isar!.activeSessions
+    ActiveSession? session;
+
+    if (currentSlotId != null && currentSlotId.isNotEmpty) {
+      session = await _isar!.activeSessions
+          .filter()
+          .slotIdEqualTo(currentSlotId)
+          .scheduledEndTimeGreaterThan(now)
+          .findFirst();
+    }
+
+    // Fallback: any session with future end time (no slot filter)
+    session ??= await _isar!.activeSessions
         .filter()
         .scheduledEndTimeGreaterThan(now)
         .findFirst();
 
     if (session != null) {
-      Log.i('[SessionManager] Found resumeable session: ${session.sessionId}');
+      Log.i('[SessionManager] Found resumeable session: ${session.sessionId} (slot: ${session.slotId})');
     }
     return session;
   }
@@ -179,6 +193,19 @@ class SessionManager {
       await _isar!.activeSessions.where().deleteAll();
     });
     Log.i('[SessionManager] All active sessions wiped from Isar.');
+  }
+
+  /// Clears all ActiveSession records that don't match the given [currentSlotId].
+  /// Called on slot transitions to prevent stale sessions from being recovered.
+  static Future<void> clearSessionsNotMatching(String currentSlotId) async {
+    await _isar!.writeTxn(() async {
+      final all = await _isar!.activeSessions.where().findAll();
+      final stale = all.where((s) => s.slotId != currentSlotId).toList();
+      if (stale.isNotEmpty) {
+        await _isar!.activeSessions.deleteAll(stale.map((s) => s.id).toList());
+        Log.i('[SessionManager] Cleared ${stale.length} stale session(s) not matching slot $currentSlotId');
+      }
+    });
   }
 
   static Future<void> recordCompletedSession({

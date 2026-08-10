@@ -9,10 +9,10 @@ import '../../services/session_state_service.dart';
 import '../../services/session_manager.dart';
 import '../../services/websocket_service.dart';
 import '../../services/api_service.dart';
+import '../../services/timetable_cache.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../main.dart' show globalDeviceRepository;
 import 'idle_screen.dart';
-import 'igniting_screen.dart';
 import 'attendance_screen.dart';
 import 'summary_screen.dart';
 
@@ -120,9 +120,22 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
 
   Future<bool> _tryLocalSessionRecovery() async {
     try {
-      final session = await SessionManager.getResumeableSession();
+      final currentSlot = TimetableCache().currentSlot;
+      final session = await SessionManager.getResumeableSession(
+        currentSlotId: currentSlot?.slotId,
+      );
       if (session == null) {
         Log.d('[Orchestrator] No resumable session in Isar');
+        return false;
+      }
+
+      // Validate: if session has a slotId and it doesn't match the current
+      // timetable slot, discard it — it's from a previous period.
+      if (session.slotId.isNotEmpty &&
+          currentSlot != null &&
+          session.slotId != currentSlot.slotId) {
+        Log.w('[Orchestrator] Stale session slot ${session.slotId} != current ${currentSlot.slotId} — clearing');
+        await SessionManager.clearSession(session.sessionId);
         return false;
       }
 
@@ -144,17 +157,12 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
 
       if (restored) {
         Log.i('[Orchestrator] Session recovered successfully — resuming attendance');
-        // FIX: _wsService is now initialized before this method is called,
-        // so connectAttendance() will actually connect. Previously it was
-        // null here, making this a no-op and leaving the board orphaned.
         if (_wsService != null) {
           try {
             await _wsService!.connectAttendance(session.sessionId);
             Log.i('[Orchestrator] Attendance WebSocket connected for session ${session.sessionId}');
           } catch (e) {
             Log.w('[Orchestrator] Attendance WS connect failed during recovery: $e');
-            // Fallback: if attendance WS fails, the board-mode connect
-            // in _runBootSequence will attempt auto-join via getActiveSession().
           }
         } else {
           Log.w('[Orchestrator] _wsService is null — attendance WS not connected');
@@ -212,15 +220,6 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
         return IdleScreen(
           registration: widget.registration,
           completedSession: widget.completedSession,
-        );
-      case BoardState.igniting:
-        final state = _sessionState.currentState;
-        return IgnitingScreen(
-          courseName: state.courseName ?? 'Class',
-          facultyName: state.facultyName ?? 'Professor',
-          roomName: widget.registration.roomName,
-          capacity: widget.registration.capacity,
-          smartBoardId: widget.registration.smartBoardId,
         );
       case BoardState.active:
         final state = _sessionState.currentState;

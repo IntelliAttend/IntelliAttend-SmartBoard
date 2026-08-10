@@ -3,6 +3,8 @@ import 'package:window_manager/window_manager.dart';
 import 'kiosk_service.dart';
 import 'notification_service.dart';
 import '../../services/time_sync_service.dart';
+import '../../services/api_service.dart';
+import '../../services/session_state_service.dart';
 import '../utils/logger.dart';
 import '../../main.dart';
 
@@ -31,6 +33,9 @@ class WindowOrchestratorService {
   /// Replaces Firestore queries in the T-5 check — zero network cost.
   final Set<String> _attendanceTakenSlots = {};
 
+  /// Tracks which slots have already been auto-closed to prevent duplicate API calls.
+  final Set<String> _autoClosedSlots = {};
+
   /// Called by IdleScreen when OTP submission succeeds.
   /// Marks the slot as attended so the T-5 warning is suppressed.
   void markAttendanceTaken(String slotId) {
@@ -46,6 +51,7 @@ class WindowOrchestratorService {
   /// class starts with a clean slate.
   void resetAttendanceTracking() {
     _attendanceTakenSlots.clear();
+    _autoClosedSlots.clear();
     _t3FiredSlots.clear();
     _t0FiredSlots.clear();
     _backPressureFiredSlots.clear();
@@ -81,6 +87,7 @@ class WindowOrchestratorService {
         _t0FiredSlots.clear();
         _backPressureFiredSlots.clear();
         _endOfClassFiredSlots.clear();
+        _autoClosedSlots.clear();
         _lastTickDate = now;
       }
 
@@ -182,6 +189,20 @@ class WindowOrchestratorService {
               'Attendance Required',
               '"${currentSlot.courseName}" ends in ~${diffSec ~/ 60} minutes. Please take attendance now.',
             );
+          }
+        }
+
+        // ── Auto-close session when slot endTime passes ──────────────────
+        if (now.isAfter(slotEnd) && !_autoClosedSlots.contains(currentSlot.slotId)) {
+          _autoClosedSlots.add(currentSlot.slotId);
+          final sessionState = SessionStateService().currentState;
+          if (sessionState.isActive) {
+            Log.i('[Orchestrator] Auto-closing session ${sessionState.sessionId} — slot ${currentSlot.slotId} ended');
+            try {
+              await ApiService.terminateSession(sessionState.sessionId);
+            } catch (e) {
+              Log.e('[Orchestrator] Auto-close API failed: $e');
+            }
           }
         }
       }
