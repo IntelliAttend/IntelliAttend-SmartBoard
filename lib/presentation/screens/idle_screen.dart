@@ -736,18 +736,30 @@ class _IdleScreenState extends State<IdleScreen>
   }
 
   Future<void> _checkActiveSession() async {
+    // If we already have an active session, verify it's still lifecycle='active'
+    // in Isar (i.e. hasn't been marked completed by SummaryScreen).
+    if (_activeSession != null) {
+      final exists = await SessionManager.sessionExists(_activeSession!.sessionId);
+      if (!exists && mounted) {
+        Log.i('[Idle] Active session ${_activeSession!.sessionId} no longer active — clearing.');
+        setState(() {
+          _activeSession = null;
+          _showMinimizeButton = false;
+        });
+      }
+      return;
+    }
+
+    // No active session yet — discover one. Only finds sessions with
+    // lifecycle='active'. Completed or orphaned sessions are ignored.
     final session = await SessionManager.getResumeableSession(
       currentSlotId: _bedrockEntry?.slotId,
     );
+
     if (session != null && mounted) {
       setState(() {
         _activeSession = session;
         _showMinimizeButton = true;
-      });
-    } else if (session == null && mounted && _activeSession != null) {
-      setState(() {
-        _activeSession = null;
-        _showMinimizeButton = false;
       });
     }
   }
@@ -2766,12 +2778,12 @@ class _IdleScreenState extends State<IdleScreen>
                   ),
                 ),
                 child: Icon(
-                  (isSlotCompleted || hasActiveSessionForSlot)
+                  hasActiveSessionForSlot
                       ? Icons.arrow_forward_rounded
-                      : isUnlocked
-                          ? Icons.lock_open_outlined
-                          : isWarmingUp
-                              ? Icons.lock_outline
+                      : isSlotCompleted
+                          ? Icons.check_circle_outline_rounded
+                          : isUnlocked
+                              ? Icons.lock_open_outlined
                               : Icons.lock_outline,
                   color: themeColor,
                   size: 32,

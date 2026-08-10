@@ -249,6 +249,7 @@ class _BootScreenState extends State<BootScreen> {
               const SizedBox(height: 24),
               TextField(
                 controller: pinController,
+                readOnly: true,
                 obscureText: true,
                 keyboardType: TextInputType.number,
                 maxLength: 6,

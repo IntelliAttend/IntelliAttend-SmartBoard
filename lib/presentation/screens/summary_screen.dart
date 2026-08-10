@@ -64,6 +64,9 @@ class _SummaryScreenState extends State<SummaryScreen> {
         attendeeCount: widget.presentCount,
       );
     }
+    // Mark lifecycle as completed BEFORE clearing so crash recovery
+    // sees this session as ended, not active.
+    await SessionManager.markSessionCompleted(widget.sessionId);
     await SessionManager.clearSession(widget.sessionId);
   }
 

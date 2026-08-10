@@ -272,10 +272,10 @@ class PreFlightService {
         return null;
       }
 
-      if (onStatusChange != null) onStatusChange('none');
-      if (onError != null) onError(e.toString());
-
       if (state.retryCount >= _maxWarmUpRetries) {
+        // All retries exhausted — notify UI of failure and start recovery polling.
+        if (onStatusChange != null) onStatusChange('none');
+        if (onError != null) onError(e.toString());
         Log.w(
             '[PreFlight] Max retries reached for $slotId. Starting recovery polling.');
         state.inProgress = false;
@@ -284,6 +284,10 @@ class PreFlightService {
             onSuccess: onSuccess, onStatusChange: onStatusChange, onError: onError);
         return null;
       }
+
+      // Retries remain — keep status as 'connecting' so the UI shows
+      // "WARMING UP..." instead of flashing "PENDING" between attempts.
+      if (onError != null) onError(e.toString());
 
       final delay = Duration(seconds: 30 * (1 << (state.retryCount - 1)));
       final jitter = Random().nextInt(5);

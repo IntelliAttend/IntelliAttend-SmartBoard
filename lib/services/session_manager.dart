@@ -117,7 +117,8 @@ class SessionManager {
       ..courseName = courseName
       ..sectionId = sectionId
       ..scheduledEndTime = endTime
-      ..verifiedStudentIds = [];
+      ..verifiedStudentIds = []
+      ..lifecycle = 'active';
 
     await _isar!.writeTxn(() async {
       await _isar!.activeSessions.put(session);
@@ -129,28 +130,54 @@ class SessionManager {
 
   /// Check if there's an active session that hasn't expired.
   /// If [currentSlotId] is provided, only returns a session matching that slot.
+  /// Uses lifecycle as the primary authority: only 'active' sessions are returned.
   static Future<ActiveSession?> getResumeableSession({String? currentSlotId}) async {
-    final now = TimeSyncService.timeNow;
     ActiveSession? session;
 
     if (currentSlotId != null && currentSlotId.isNotEmpty) {
       session = await _isar!.activeSessions
           .filter()
           .slotIdEqualTo(currentSlotId)
-          .scheduledEndTimeGreaterThan(now)
+          .lifecycleEqualTo('active')
           .findFirst();
     }
 
-    // Fallback: any session with future end time (no slot filter)
+    // Fallback: any active session (no slot filter)
     session ??= await _isar!.activeSessions
         .filter()
-        .scheduledEndTimeGreaterThan(now)
+        .lifecycleEqualTo('active')
         .findFirst();
 
     if (session != null) {
       Log.i('[SessionManager] Found resumeable session: ${session.sessionId} (slot: ${session.slotId})');
     }
     return session;
+  }
+
+  /// Check if a session with the given ID exists and is still 'active' in Isar.
+  /// Used by IdleScreen to verify an in-memory session is still live.
+  static Future<bool> sessionExists(String sessionId) async {
+    final count = await _isar!.activeSessions
+        .filter()
+        .sessionIdEqualTo(sessionId)
+        .lifecycleEqualTo('active')
+        .count();
+    return count > 0;
+  }
+
+  /// Mark a session's lifecycle as 'completed'. Called by SummaryScreen before
+  /// clearSession() so that crash recovery sees the session as ended, not active.
+  static Future<void> markSessionCompleted(String sessionId) async {
+    final session = await _isar!.activeSessions
+        .filter()
+        .sessionIdEqualTo(sessionId)
+        .findFirst();
+    if (session == null) return;
+    await _isar!.writeTxn(() async {
+      session.lifecycle = 'completed';
+      await _isar!.activeSessions.put(session);
+    });
+    Log.i('[SessionManager] Session $sessionId lifecycle set to completed');
   }
 
   // REPLACED BY VOLATILE MEMORY LOGIC in v5.2
@@ -467,7 +494,33 @@ class SessionManager {
         .sessionIdEqualTo(sessionId)
         .findFirst();
     if (session == null) return null;
+
+    // If the session lifecycle is 'completed', the snapshot is stale.
+    // Clear it and return null so crash recovery doesn't resurrect old marks.
+    if (session.lifecycle == 'completed') {
+      Log.i('[SessionManager] Snapshot for $sessionId is completed — clearing.');
+      await clearAttendanceSnapshot(sessionId);
+      return null;
+    }
+
     return (session.presentIndices, session.absentIndices);
+  }
+
+  /// Wipe the attendance snapshot (presentIndices/absentIndices) from an
+  /// ActiveSession without deleting the session itself. Called when starting
+  /// a fresh session to prevent stale marks from a previous session leaking in.
+  static Future<void> clearAttendanceSnapshot(String sessionId) async {
+    final session = await _isar!.activeSessions
+        .filter()
+        .sessionIdEqualTo(sessionId)
+        .findFirst();
+    if (session == null) return;
+    await _isar!.writeTxn(() async {
+      session.presentIndices = [];
+      session.absentIndices = [];
+      await _isar!.activeSessions.put(session);
+    });
+    Log.i('[SessionManager] Attendance snapshot cleared for $sessionId');
   }
 
   /// Save pending taps for offline recovery

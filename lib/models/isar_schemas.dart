@@ -28,6 +28,11 @@ class ActiveSession {
 
   /// JSON-encoded list of pending taps for offline recovery
   String? pendingTapsJson;
+
+  /// Explicit lifecycle state: 'active' or 'completed'.
+  /// The single source of truth for whether a session is still live.
+  /// Replaces fragile inference from scheduledEndTime / record existence.
+  String lifecycle = 'active';
 }
 
 

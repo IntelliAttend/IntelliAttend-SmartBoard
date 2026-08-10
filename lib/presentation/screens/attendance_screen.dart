@@ -174,6 +174,9 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
   void _handleCellTapDown(int index) {
     _dismissStudentInfo();
+    // Lock cells after attendance has been submitted to prevent post-submit
+    // edits that would desync the local grid from the server state.
+    if (_isAttendanceSubmitted) return;
     if (_presentSeatIndices.contains(index)) {
       _presentSeatIndices.remove(index);
       _absentSeatIndices.add(index);
@@ -218,6 +221,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   void _handleSplitReviewTap(int index, bool isInPresent) {
+    if (_isAttendanceSubmitted) return;
     if (isInPresent) {
       _presentSeatIndices.remove(index);
       _absentSeatIndices.add(index);
@@ -757,7 +761,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                         );
                       },
                       child: _stage == _Stage.grid
-                          ? _buildInteractionGrid(isDark)
+                          ? AbsorbPointer(
+                              absorbing: _isAttendanceSubmitted,
+                              child: _buildInteractionGrid(isDark),
+                            )
                           : _buildSplitReviewView(isDark),
                     ),
                   ),

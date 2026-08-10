@@ -109,6 +109,7 @@ class _DocumentViewerScreenState extends State<DocumentViewerScreen>
             style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w600)),
         content: TextField(
           controller: ctrl,
+          readOnly: true,
           keyboardType: TextInputType.number,
           autofocus: true,
           style: GoogleFonts.inter(color: Colors.white, fontSize: 16),
@@ -528,6 +529,7 @@ class _DocumentViewerScreenState extends State<DocumentViewerScreen>
                 height: 36,
                 child: TextField(
                   controller: _searchController,
+                  readOnly: true,
                   style: GoogleFonts.inter(color: Colors.white, fontSize: 14),
                   decoration: InputDecoration(
                     hintText: 'Search in document\u2026',

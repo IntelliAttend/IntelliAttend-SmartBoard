@@ -1668,6 +1668,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                 ),
                 child: TextField(
                   controller: _topicSearchController,
+                  readOnly: true,
                   onChanged: (val) => setState(() => _topicSearchQuery = val),
                   style: TextStyle(fontSize: 14, color: _palette.textPrimary),
                   decoration: InputDecoration(
