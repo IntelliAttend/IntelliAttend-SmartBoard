@@ -84,31 +84,43 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
       }
 
       // Local-first session recovery: check Isar for a resumable session
-      // before hitting the network.
-      final recovered = await _tryLocalSessionRecovery();
-      if (!recovered) {
-        final stateResponse = await ApiService.getCurrentState();
-        if (stateResponse.isNotEmpty && stateResponse['state'] != null) {
-          _sessionState.applyFromRecovery(stateResponse);
-        }
+      // before hitting the network. Guard with timeout so a hung Isar or
+      // SecureStorage call never blocks the WS connect below.
+      bool recovered = false;
+      try {
+        recovered = await _tryLocalSessionRecovery()
+            .timeout(const Duration(seconds: 8), onTimeout: () {
+          Log.w('[Orchestrator] Local session recovery timed out after 8s');
+          return false;
+        });
+      } catch (e) {
+        Log.w('[Orchestrator] Local session recovery error: $e');
       }
-
-      // Connect the WebSocket. If local recovery succeeded, this connects
-      // in board mode for monitoring; the attendance WS was already connected
-      // inside _tryLocalSessionRecovery(). If recovery failed, this is the
-      // primary path — board mode will auto-discover the active session via
-      // _handleBoardConnected → getActiveSession → join_session.
-      if (_wsService != null) {
+      if (!recovered) {
         try {
-          await _wsService!.connectSmartBoard(
-            widget.registration.smartBoardId,
-          );
+          final stateResponse = await ApiService.getCurrentState();
+          if (stateResponse.isNotEmpty && stateResponse['state'] != null) {
+            _sessionState.applyFromRecovery(stateResponse);
+          }
         } catch (e) {
-          Log.w('[Orchestrator] WS connect failed: $e');
+          Log.w('[Orchestrator] getCurrentState failed: $e');
         }
       }
     } catch (e) {
       Log.w('[Orchestrator] Boot recovery failed: $e');
+    }
+
+    // ALWAYS connect WebSocket — even if recovery failed. This is the
+    // primary path for board-mode auto-discovery via getActiveSession.
+    // Moved outside the try-catch so it can never be skipped.
+    if (_wsService != null) {
+      try {
+        await _wsService!.connectSmartBoard(
+          widget.registration.smartBoardId,
+        );
+      } catch (e) {
+        Log.w('[Orchestrator] WS connect failed: $e');
+      }
     }
 
     if (mounted) {
