@@ -897,6 +897,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                         slotId: widget.slotId,
                         courseCode: widget.courseCode,
                         initialPresentCount: widget.presentCount,
+                        previousPresentIndices: widget.presentIndices,
+                        previousAbsentIndices: widget.absentIndices,
                         boardId: '',
                       ),
                     ),

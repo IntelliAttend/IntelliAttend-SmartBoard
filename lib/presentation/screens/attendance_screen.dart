@@ -28,6 +28,8 @@ class AttendanceScreen extends StatefulWidget {
   final String? courseCode;
 
   final int initialPresentCount;
+  final List<int>? previousPresentIndices;
+  final List<int>? previousAbsentIndices;
   final VoidCallback? onNavigateBack;
 
   const AttendanceScreen({
@@ -38,6 +40,8 @@ class AttendanceScreen extends StatefulWidget {
     required this.facultyName,
     required this.roomName,
     this.initialPresentCount = 0,
+    this.previousPresentIndices,
+    this.previousAbsentIndices,
     this.slotId,
     this.boardId,
     this.courseCode,
@@ -107,6 +111,22 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       _restoreLocalSnapshot().catchError((e) {
         Log.w('[Attendance] Snapshot restore skipped: $e');
       });
+      // Fallback: if snapshot is empty but previous indices were passed (e.g. from
+      // WorkspaceScreen), initialise the grid from them so edits can continue.
+      if (widget.previousPresentIndices != null || widget.previousAbsentIndices != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _presentSeatIndices.isEmpty && _absentSeatIndices.isEmpty) {
+            setState(() {
+              _presentSeatIndices.addAll(widget.previousPresentIndices ?? []);
+              _absentSeatIndices.addAll(widget.previousAbsentIndices ?? []);
+              _presentCount = _presentSeatIndices.length;
+              if (_presentSeatIndices.isNotEmpty || _absentSeatIndices.isNotEmpty) {
+                _stage = _Stage.splitReview;
+              }
+            });
+          }
+        });
+      }
     }
   }
 
@@ -134,6 +154,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
           ));
         }
       }
+      unique.sort((a, b) => RollNumberUtils.compareRollNumber(a.rollNumber, b.rollNumber));
       _students = unique;
 
       Log.i('[Attendance] Loaded ${_students.length} unique students from hydration roster');
@@ -262,6 +283,15 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         presentEmails: presentIds,
         absentEmails: absentIds,
       );
+
+      // Persist snapshot after successful submit so re-entry restores latest state
+      if (!kPreviewAttendance) {
+        await SessionManager.saveAttendanceSnapshot(
+          sessionId: widget.sessionId,
+          presentIndices: _presentSeatIndices.toList(),
+          absentIndices: _absentSeatIndices.toList(),
+        );
+      }
 
       setState(() => _isAttendanceSubmitted = true);
       if (!mounted) return;

@@ -102,4 +102,12 @@ class RollNumberUtils {
         ? rollNumber.substring(rollNumber.length - 2)
         : rollNumber;
   }
+
+  /// Compare two roll numbers for natural sort order (case-insensitive).
+  ///
+  /// Produces correct ordering for IDs like:
+  ///   23n31a6601 < 23n31a6645 < 23n31a66q6 < 24n31a6601
+  static int compareRollNumber(String a, String b) {
+    return a.toLowerCase().compareTo(b.toLowerCase());
+  }
 }
