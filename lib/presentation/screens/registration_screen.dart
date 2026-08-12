@@ -10,7 +10,7 @@ import '../../core/platform/kiosk_service.dart';
 import '../../core/utils/logger.dart';
 import '../../data/repositories/device_repository.dart';
 import '../providers/registration_provider.dart';
-import 'idle_screen.dart';
+import 'session_orchestrator_screen.dart';
 
 class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({super.key});
@@ -122,10 +122,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
             final registration = await deviceRepo.getRegistration();
             if (!mounted || !context.mounted) return;
             if (registration != null) {
-              Log.i('[RegistrationScreen] Registration confirmed in Isar — navigating directly to IdleScreen.');
+              Log.i('[RegistrationScreen] Registration confirmed in Isar — navigating to SessionOrchestratorScreen.');
               Navigator.of(context).pushAndRemoveUntil(
                 MaterialPageRoute(
-                  builder: (context) => IdleScreen(registration: registration),
+                  builder: (context) => SessionOrchestratorScreen(registration: registration),
                 ),
                 (route) => false,
               );
