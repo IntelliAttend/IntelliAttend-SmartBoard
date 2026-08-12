@@ -1612,59 +1612,101 @@ class _IdleScreenState extends State<IdleScreen>
           }
 
           // 4. Main UI
+          final double horizontalPad =
+              (size.width * 0.05).clamp(20.0, 80.0);
+          final bool isNarrow = size.width < 1200;
+          final double cardMaxWidth =
+              isNarrow ? 320.0 : (size.width * 0.25).clamp(280.0, 400.0);
+
+          Widget mainContent;
+          if (isNarrow) {
+            mainContent = SingleChildScrollView(
+              padding: EdgeInsets.symmetric(horizontal: horizontalPad),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 20),
+                  _buildCourseInfo(
+                      primaryTextColor, secondaryTextColor, showVideo),
+                  const SizedBox(height: 30),
+                  Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: cardMaxWidth),
+                      child: _buildAuthCard(
+                          isBlindlyWhite
+                              ? Colors.white
+                              : headerFooterColor,
+                          isBlindlyWhite
+                              ? AppColors.textPrimaryLight
+                              : primaryTextColor,
+                          isBlindlyWhite
+                              ? AppColors.textSecondaryLight
+                              : secondaryTextColor,
+                          showVideo && !isBlindlyWhite,
+                          cardMaxWidth),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                ],
+              ),
+            );
+          } else {
+            mainContent = Padding(
+              padding: EdgeInsets.symmetric(horizontal: horizontalPad),
+              child: Row(
+                children: [
+                  Expanded(
+                    flex: 6,
+                    child: _buildCourseInfo(
+                        primaryTextColor, secondaryTextColor, showVideo),
+                  ),
+                  const SizedBox(width: 40),
+                  Expanded(
+                    flex: 4,
+                    child: Stack(
+                      alignment: Alignment.centerRight,
+                      children: [
+                        Opacity(
+                          opacity: cardOpacity,
+                          child: IgnorePointer(
+                            ignoring: cardOpacity < 0.1,
+                            child: ConstrainedBox(
+                              constraints:
+                                  BoxConstraints(maxWidth: cardMaxWidth),
+                              child: _buildAuthCard(
+                                  isBlindlyWhite
+                                      ? Colors.white
+                                      : headerFooterColor,
+                                  isBlindlyWhite
+                                      ? AppColors.textPrimaryLight
+                                      : primaryTextColor,
+                                  isBlindlyWhite
+                                      ? AppColors.textSecondaryLight
+                                      : secondaryTextColor,
+                                  showVideo && !isBlindlyWhite,
+                                  cardMaxWidth),
+                            ),
+                          ),
+                        ),
+                        Opacity(
+                          opacity: lockOpacity,
+                          child: IgnorePointer(
+                            ignoring: lockOpacity < 0.1,
+                            child: _buildHangingLock(primaryTextColor),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+
           stackChildren.add(Column(
             children: [
               _buildTopHeader(primaryTextColor, headerFooterColor, showVideo),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 80),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        flex: 6,
-                        child: _buildCourseInfo(
-                            primaryTextColor, secondaryTextColor, showVideo),
-                      ),
-                      const SizedBox(width: 40),
-                      Expanded(
-                        flex: 4,
-                        child: Stack(
-                          alignment: Alignment.centerRight,
-                          children: [
-                            Opacity(
-                              opacity: cardOpacity,
-                              child: IgnorePointer(
-                                ignoring: cardOpacity < 0.1,
-                                child: ConstrainedBox(
-                                  constraints: const BoxConstraints(maxWidth: 320),
-                                  child: _buildAuthCard(
-                                      isBlindlyWhite
-                                          ? Colors.white
-                                          : headerFooterColor,
-                                      isBlindlyWhite
-                                          ? AppColors.textPrimaryLight
-                                          : primaryTextColor,
-                                      isBlindlyWhite
-                                          ? AppColors.textSecondaryLight
-                                          : secondaryTextColor,
-                                      showVideo && !isBlindlyWhite),
-                                ),
-                              ),
-                            ),
-                            Opacity(
-                              opacity: lockOpacity,
-                              child: IgnorePointer(
-                                ignoring: lockOpacity < 0.1,
-                                child: _buildHangingLock(primaryTextColor),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+              Expanded(child: mainContent),
               _buildFooter(
                   headerFooterColor, primaryTextColor, secondaryTextColor,
                   showVideo),
@@ -1757,8 +1799,14 @@ class _IdleScreenState extends State<IdleScreen>
   }
 
   Widget _buildTopHeader(Color textColor, Color bgColor, bool isVideoActive) {
+    final size = MediaQuery.of(context).size;
+    final double hPad = (size.width * 0.03).clamp(16.0, 40.0);
+    final double vPad = (size.height * 0.02).clamp(12.0, 20.0);
+    final double logoSize = (size.width * 0.025).clamp(28.0, 36.0);
+    final double titleFontSize = (size.width * 0.017).clamp(18.0, 24.0);
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 20),
+      padding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
       decoration: BoxDecoration(
         color: bgColor.withValues(alpha: isVideoActive ? 0.5 : 0.8),
         border:
@@ -1771,8 +1819,8 @@ class _IdleScreenState extends State<IdleScreen>
             children: [
               Image.asset(
                 'assets/logo_square.png',
-                width: 36,
-                height: 36,
+                width: logoSize,
+                height: logoSize,
                 fit: BoxFit.contain,
               ),
               const SizedBox(width: 12),
@@ -1780,7 +1828,7 @@ class _IdleScreenState extends State<IdleScreen>
                 'IntelliAttend SmartBoard',
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  fontSize: 24,
+                  fontSize: titleFontSize,
                   fontWeight: FontWeight.w900,
                   color: textColor == Colors.white
                       ? Colors.white
@@ -2081,7 +2129,7 @@ class _IdleScreenState extends State<IdleScreen>
         Text(
           course.toUpperCase(),
           style: TextStyle(
-            fontSize: 64,
+            fontSize: (MediaQuery.of(context).size.width * 0.04).clamp(36.0, 64.0),
             fontWeight: FontWeight.w900,
             color: primaryColor,
             height: 1.1,
@@ -2093,9 +2141,20 @@ class _IdleScreenState extends State<IdleScreen>
   }
 
   Widget _buildAuthCard(Color bgColor, Color primaryColor, Color secondaryColor,
-      bool isVideoActive) {
+      bool isVideoActive, double cardWidth) {
+    final double cardPadding = cardWidth < 280 ? 12.0 : 20.0;
+    final double titleFontSize = (cardWidth * 0.05).clamp(12.0, 16.0);
+    final double bodyFontSize = (cardWidth * 0.04).clamp(10.0, 12.0);
+    final double statusFontSize = (cardWidth * 0.033).clamp(8.0, 10.0);
+    final double buttonHeight = cardWidth < 280 ? 38.0 : 44.0;
+    final double buttonFontSize = (cardWidth * 0.045).clamp(11.0, 14.0);
+    final double iconSize = (cardWidth * 0.06).clamp(14.0, 20.0);
+    final double lockIconSize = (cardWidth * 0.065).clamp(14.0, 20.0);
+    final double pinAvailableWidth = (cardWidth - cardPadding * 2 - 16).clamp(120.0, 300.0);
+    final double verticalGap = cardWidth < 280 ? 20.0 : 32.0;
+
     return GlassContainer(
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.all(cardPadding),
       borderRadius: 16,
       color: bgColor.withValues(alpha: 0.8),
       borderColor: primaryColor.withValues(alpha: 0.1),
@@ -2106,27 +2165,33 @@ class _IdleScreenState extends State<IdleScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'START ATTENDANCE',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: primaryColor,
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'START ATTENDANCE',
+                    style: TextStyle(
+                      fontSize: titleFontSize,
+                      fontWeight: FontWeight.bold,
+                      color: primaryColor,
+                    ),
+                  ),
                 ),
               ),
               Icon(Icons.lock_open_outlined,
-                  size: 20, color: secondaryColor.withValues(alpha: 0.5)),
+                  size: lockIconSize, color: secondaryColor.withValues(alpha: 0.5)),
             ],
           ),
           const SizedBox(height: 12),
           Text(
             'Enter the session code displayed on your mobile device to begin Session.',
             style: TextStyle(
-              fontSize: 12,
+              fontSize: bodyFontSize,
               color: secondaryColor,
             ),
           ),
-          const SizedBox(height: 32),
+          SizedBox(height: verticalGap),
           GestureDetector(
             onTap: () {
               setState(() => _isKeypadExpanded = !_isKeypadExpanded);
@@ -2137,6 +2202,7 @@ class _IdleScreenState extends State<IdleScreen>
               child: PinInput(
                 value: _otpController.text,
                 obscureText: true,
+                availableWidth: pinAvailableWidth,
               ),
             ),
           ),
@@ -2145,7 +2211,7 @@ class _IdleScreenState extends State<IdleScreen>
             secondChild: Padding(
               padding: const EdgeInsets.only(top: 24),
               child: _buildNumericKeypad(
-                  primaryColor == Colors.white, isVideoActive),
+                  primaryColor == Colors.white, isVideoActive, cardWidth),
             ),
             crossFadeState: _isKeypadExpanded
                 ? CrossFadeState.showSecond
@@ -2160,7 +2226,7 @@ class _IdleScreenState extends State<IdleScreen>
                 alignment: Alignment.centerLeft,
                 child: Text(
                   _errorMessage!,
-                  style: const TextStyle(color: AppColors.error, fontSize: 12),
+                  style: TextStyle(color: AppColors.error, fontSize: bodyFontSize),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -2176,17 +2242,17 @@ class _IdleScreenState extends State<IdleScreen>
                   _preFlightError!,
                   style: TextStyle(
                     color: AppColors.warningAmber,
-                    fontSize: 10,
+                    fontSize: statusFontSize,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
             ),
-          const SizedBox(height: 32),
+          SizedBox(height: verticalGap),
           SizedBox(
             width: double.infinity,
-            height: 44,
+            height: buttonHeight,
             child: ElevatedButton(
               onPressed: _isLoading ? null : _handleVerifyOtp,
               style: ElevatedButton.styleFrom(
@@ -2197,7 +2263,7 @@ class _IdleScreenState extends State<IdleScreen>
                     borderRadius: BorderRadius.circular(12)),
               ),
               child: _isLoading
-                  ? const SizedBox(
+                  ? SizedBox(
                       height: 20,
                       width: 20,
                       child: CircularProgressIndicator(
@@ -2206,11 +2272,11 @@ class _IdleScreenState extends State<IdleScreen>
                       mainAxisAlignment: MainAxisAlignment.center,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.check_circle_outline, size: 18),
-                        const SizedBox(width: 10),
-                        const Text('SUBMIT',
+                        Icon(Icons.check_circle_outline, size: iconSize),
+                        SizedBox(width: cardWidth < 280 ? 6 : 10),
+                        Text('SUBMIT',
                             style: TextStyle(
-                                fontSize: 14,
+                                fontSize: buttonFontSize,
                                 fontWeight: FontWeight.bold,
                                 letterSpacing: 1.2)),
                       ],
@@ -2229,8 +2295,8 @@ class _IdleScreenState extends State<IdleScreen>
                   alignment: Alignment.centerLeft,
                   child: Text(
                     'STATUS: ${_getPreFlightStatusText()}',
-                    style: const TextStyle(
-                      fontSize: 10,
+                    style: TextStyle(
+                      fontSize: statusFontSize,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 1,
                       color: Colors.grey,
@@ -2251,10 +2317,10 @@ class _IdleScreenState extends State<IdleScreen>
                   const SizedBox(width: 8),
                   FittedBox(
                     fit: BoxFit.scaleDown,
-                    child: const Text(
+                    child: Text(
                       'ENCRYPTED SESSION',
                       style: TextStyle(
-                        fontSize: 10,
+                        fontSize: statusFontSize,
                         fontWeight: FontWeight.bold,
                         letterSpacing: 1,
                         color: Colors.grey,
@@ -2288,9 +2354,13 @@ class _IdleScreenState extends State<IdleScreen>
 
   Widget _buildFooter(Color bgColor, Color primaryColor, Color secondaryColor,
       bool isVideoActive) {
+    final size = MediaQuery.of(context).size;
+    final double footerHeight = (size.height * 0.1).clamp(70.0, 100.0);
+    final double hPad = (size.width * 0.03).clamp(16.0, 40.0);
+
     return Container(
-      height: 100,
-      padding: const EdgeInsets.symmetric(horizontal: 40),
+      height: footerHeight,
+      padding: EdgeInsets.symmetric(horizontal: hPad),
       decoration: BoxDecoration(
         color: bgColor.withValues(alpha: isVideoActive ? 0.5 : 0.9),
         border:
@@ -2328,10 +2398,10 @@ class _IdleScreenState extends State<IdleScreen>
                     ],
                   ),
           ),
-          const SizedBox(width: 40),
+          const SizedBox(width: 20),
           // WiFi status icon — color indicates state
           _buildWifiStatusIcon(),
-          const SizedBox(width: 40),
+          const SizedBox(width: 20),
           // Clock — right-aligned
           _buildClockAndInfo(primaryColor, secondaryColor),
         ],
@@ -2391,6 +2461,10 @@ class _IdleScreenState extends State<IdleScreen>
   }
 
   Widget _buildClockAndInfo(Color primaryColor, Color secondaryColor) {
+    final size = MediaQuery.of(context).size;
+    final double clockFontSize = (size.width * 0.017).clamp(18.0, 24.0);
+    final double dateFontSize = (size.width * 0.007).clamp(8.0, 10.0);
+
     return StreamBuilder<DateTime>(
       stream: Stream.periodic(
           const Duration(seconds: 1), (_) => TimeSyncService.timeNow),
@@ -2407,7 +2481,7 @@ class _IdleScreenState extends State<IdleScreen>
             Text(
               "$timeStr $period",
               style: GoogleFonts.jetBrainsMono(
-                fontSize: 24,
+                fontSize: clockFontSize,
                 fontWeight: FontWeight.bold,
                 color: primaryColor,
               ),
@@ -2415,7 +2489,7 @@ class _IdleScreenState extends State<IdleScreen>
             Text(
               _getFormattedDate(now).toUpperCase(),
               style: TextStyle(
-                fontSize: 10,
+                fontSize: dateFontSize,
                 fontWeight: FontWeight.bold,
                 letterSpacing: 1,
                 color: secondaryColor.withValues(alpha: 0.5),
@@ -2447,13 +2521,20 @@ class _IdleScreenState extends State<IdleScreen>
 
   Widget _buildActiveSessionOverlay(Color primaryText, Color secondaryText) {
     final session = _activeSession!;
+    final size = MediaQuery.of(context).size;
+    final double overlayWidth = (size.width * 0.45).clamp(320.0, 560.0);
+    final double overlayPadding = (size.width * 0.025).clamp(16.0, 32.0);
+    final double titleFontSize = (size.width * 0.014).clamp(14.0, 18.0);
+    final double subtitleFontSize = (size.width * 0.01).clamp(11.0, 13.0);
+    final bool isNarrowOverlay = overlayWidth < 400;
+
     return Positioned.fill(
       child: Material(
         color: Colors.black.withValues(alpha: 0.3),
         child: Center(
           child: Container(
-            width: 560,
-            padding: const EdgeInsets.all(32),
+            width: overlayWidth,
+            padding: EdgeInsets.all(overlayPadding),
             decoration: BoxDecoration(
               color: const Color(0xFFF8FAFC),
               borderRadius: BorderRadius.circular(24),
@@ -2482,11 +2563,11 @@ class _IdleScreenState extends State<IdleScreen>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text('Session Active',
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: const Color(0xFF0F172A)),
+                            style: TextStyle(fontSize: titleFontSize, fontWeight: FontWeight.w800, color: const Color(0xFF0F172A)),
                           ),
                           const SizedBox(height: 4),
                           Text('${session.courseName} · ${session.facultyName}',
-                            style: TextStyle(fontSize: 13, color: const Color(0xFF475569)),
+                            style: TextStyle(fontSize: subtitleFontSize, color: const Color(0xFF475569)),
                           ),
                         ],
                       ),
@@ -2500,74 +2581,89 @@ class _IdleScreenState extends State<IdleScreen>
                 const SizedBox(height: 28),
                 Divider(height: 1, color: const Color(0x1A000000)),
                 const SizedBox(height: 24),
-                Row(
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
                   children: [
-                    Expanded(child: _buildActionCard(
-                      icon: Icons.dashboard_rounded,
-                      label: 'Workspace',
-                      subtitle: 'Files & session tools',
-                      color: const Color(0xFF14B8A6),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => WorkspaceScreen(
-                          sessionId: session.sessionId,
-                          courseName: session.courseName,
-                          facultyName: session.facultyName,
-                          roomName: widget.registration.roomName,
-                          sectionId: session.sectionId,
-                          slotId: null,
-                          presentCount: session.presentIndices.length,
-                          totalCapacity: session.rosterCount,
-                        )),
-                      ),
-                    )),
-                    const SizedBox(width: 12),
-                    Expanded(child: _buildActionCard(
-                      icon: Icons.people_rounded,
-                      label: 'Attendance',
-                      subtitle: 'Mark present/absent',
-                      color: const Color(0xFF8B5CF6),
-                      onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => AttendanceScreen(
+                    SizedBox(
+                      width: isNarrowOverlay
+                          ? overlayWidth - overlayPadding * 2
+                          : (overlayWidth - overlayPadding * 2 - 12) / 2,
+                      child: _buildActionCard(
+                        icon: Icons.dashboard_rounded,
+                        label: 'Workspace',
+                        subtitle: 'Files & session tools',
+                        color: const Color(0xFF14B8A6),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => WorkspaceScreen(
                             sessionId: session.sessionId,
-                            capacity: session.rosterCount,
                             courseName: session.courseName,
                             facultyName: session.facultyName,
                             roomName: widget.registration.roomName,
+                            sectionId: session.sectionId,
                             slotId: null,
-                            initialPresentCount: session.presentIndices.length,
-                            boardId: widget.registration.smartBoardId,
-                            onNavigateBack: () => Navigator.of(context).pop(),
+                            presentCount: session.presentIndices.length,
+                            totalCapacity: session.rosterCount,
                           )),
-                        );
-                      },
-                    )),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(child: _buildActionCard(
-                      icon: Icons.analytics_outlined,
-                      label: 'Analytics',
-                      subtitle: 'Session statistics',
-                      color: const Color(0xFFF59E0B),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const AnalyticsScreen()),
+                        ),
                       ),
-                    )),
-                    const SizedBox(width: 12),
-                    Expanded(child: _buildActionCard(
-                      icon: Icons.calendar_month_rounded,
-                      label: 'Timetable',
-                      subtitle: 'View schedule',
-                      color: const Color(0xFF3B82F6),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => TimetableScreen(
-                          weeklyTimeline: TimetableCache().weeklyTimeline,
-                        )),
+                    ),
+                    SizedBox(
+                      width: isNarrowOverlay
+                          ? overlayWidth - overlayPadding * 2
+                          : (overlayWidth - overlayPadding * 2 - 12) / 2,
+                      child: _buildActionCard(
+                        icon: Icons.people_rounded,
+                        label: 'Attendance',
+                        subtitle: 'Mark present/absent',
+                        color: const Color(0xFF8B5CF6),
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(builder: (_) => AttendanceScreen(
+                              sessionId: session.sessionId,
+                              capacity: session.rosterCount,
+                              courseName: session.courseName,
+                              facultyName: session.facultyName,
+                              roomName: widget.registration.roomName,
+                              slotId: null,
+                              initialPresentCount: session.presentIndices.length,
+                              boardId: widget.registration.smartBoardId,
+                              onNavigateBack: () => Navigator.of(context).pop(),
+                            )),
+                          );
+                        },
                       ),
-                    )),
+                    ),
+                    SizedBox(
+                      width: isNarrowOverlay
+                          ? overlayWidth - overlayPadding * 2
+                          : (overlayWidth - overlayPadding * 2 - 12) / 2,
+                      child: _buildActionCard(
+                        icon: Icons.analytics_outlined,
+                        label: 'Analytics',
+                        subtitle: 'Session statistics',
+                        color: const Color(0xFFF59E0B),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => const AnalyticsScreen()),
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: isNarrowOverlay
+                          ? overlayWidth - overlayPadding * 2
+                          : (overlayWidth - overlayPadding * 2 - 12) / 2,
+                      child: _buildActionCard(
+                        icon: Icons.calendar_month_rounded,
+                        label: 'Timetable',
+                        subtitle: 'View schedule',
+                        color: const Color(0xFF3B82F6),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => TimetableScreen(
+                            weeklyTimeline: TimetableCache().weeklyTimeline,
+                          )),
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -2797,7 +2893,7 @@ class _IdleScreenState extends State<IdleScreen>
             textAlign: TextAlign.center,
             style: TextStyle(
               color: themeColor,
-              fontSize: 10,
+              fontSize: (MediaQuery.of(context).size.width * 0.007).clamp(8.0, 10.0),
               fontWeight: FontWeight.bold,
               letterSpacing: 2,
             ),
@@ -2807,26 +2903,39 @@ class _IdleScreenState extends State<IdleScreen>
     );
   }
 
-  Widget _buildNumericKeypad(bool isDark, bool isVideoActive) {
+  Widget _buildNumericKeypad(
+      bool isDark, bool isVideoActive, double cardWidth) {
+    final double spacing = cardWidth < 280 ? 4.0 : 8.0;
+    final double aspectRatio = cardWidth < 280 ? 1.3 : 1.6;
+    final double buttonFontSize = (cardWidth * 0.05).clamp(13.0, 16.0);
+    final double backspaceIconSize = (cardWidth * 0.05).clamp(12.0, 16.0);
+
     return GridView.count(
       shrinkWrap: true,
       crossAxisCount: 3,
-      mainAxisSpacing: 8,
-      crossAxisSpacing: 8,
-      childAspectRatio: 1.6,
+      mainAxisSpacing: spacing,
+      crossAxisSpacing: spacing,
+      childAspectRatio: aspectRatio,
       physics: const NeverScrollableScrollPhysics(),
       children: [
         for (var i = 1; i <= 9; i++)
-          _keypadButton(i.toString(), isDark, isVideoActive),
+          _keypadButton(i.toString(), isDark, isVideoActive,
+              fontSize: buttonFontSize, backspaceIconSize: backspaceIconSize),
         const SizedBox(),
-        _keypadButton('0', isDark, isVideoActive),
-        _keypadButton('backspace', isDark, isVideoActive, isAction: true),
+        _keypadButton('0', isDark, isVideoActive,
+            fontSize: buttonFontSize, backspaceIconSize: backspaceIconSize),
+        _keypadButton('backspace', isDark, isVideoActive,
+            isAction: true,
+            fontSize: buttonFontSize,
+            backspaceIconSize: backspaceIconSize),
       ],
     );
   }
 
   Widget _keypadButton(String label, bool isDark, bool isVideoActive,
-      {bool isAction = false}) {
+      {bool isAction = false,
+      double fontSize = 16,
+      double backspaceIconSize = 16}) {
     return InkWell(
       onTap: () {
         if (label == 'backspace') {
@@ -2859,11 +2968,12 @@ class _IdleScreenState extends State<IdleScreen>
         child: Center(
           child: label == 'backspace'
               ? Icon(Icons.backspace_outlined,
-                  size: 16, color: isDark ? Colors.white38 : Colors.black38)
+                  size: backspaceIconSize,
+                  color: isDark ? Colors.white38 : Colors.black38)
               : Text(
                   label,
                   style: GoogleFonts.jetBrainsMono(
-                    fontSize: 16,
+                    fontSize: fontSize,
                     fontWeight: FontWeight.bold,
                     color: isDark ? Colors.white : AppColors.textPrimaryLight,
                   ),
