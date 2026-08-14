@@ -75,7 +75,9 @@ class _IdleScreenState extends State<IdleScreen>
   Timer? _preClassTimer;
   TimetableEntry? _upcomingSlot;
   bool _showStartingSoon = false;
-  bool _showMinimizeButton = false;
+  // TEMPORARY: always show minimize button for production safety.
+  // Revert by changing back to `false` and restoring the assignments below.
+  bool _showMinimizeButton = true;
   bool _hasOtpBeenTriggered = false;
   bool _showSessionMenu = false;
   Timer? _inactivityTimer;
@@ -445,10 +447,7 @@ class _IdleScreenState extends State<IdleScreen>
           if (!info.hasInternet) {
             _showMinimizeButton = true;
           }
-          // Internet restored: hide button if OTP hasn't been triggered yet
-          if (info.hasInternet && !_hasOtpBeenTriggered) {
-            _showMinimizeButton = false;
-          }
+          // TEMPORARY: button always visible — no hide on internet restore
         });
       }
     });
@@ -606,7 +605,7 @@ class _IdleScreenState extends State<IdleScreen>
         if (mounted) {
           setState(() {
             _activeSession = null;
-            _showMinimizeButton = false;
+            // TEMPORARY: button always visible — do not hide on stale session
           });
         }
       }
@@ -744,7 +743,7 @@ class _IdleScreenState extends State<IdleScreen>
         Log.i('[Idle] Active session ${_activeSession!.sessionId} no longer active — clearing.');
         setState(() {
           _activeSession = null;
-          _showMinimizeButton = false;
+          // TEMPORARY: button always visible — do not hide when session cleared
         });
       }
       return;
@@ -1167,7 +1166,7 @@ class _IdleScreenState extends State<IdleScreen>
     _preFlightError = null;
     _forceShowCard = false;
     _showStartingSoon = false;
-    _showMinimizeButton = false;
+    // TEMPORARY: button always visible — do not reset on slot transition
     _hasOtpBeenTriggered = false;
     _showSessionMenu = false;
     _isKeypadExpanded = false;
