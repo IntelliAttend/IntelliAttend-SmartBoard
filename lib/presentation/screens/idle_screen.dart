@@ -504,10 +504,16 @@ class _IdleScreenState extends State<IdleScreen>
   /// Check if we are currently in a break slot using explicit is_break flag.
   /// Falls back to time-gap detection if no explicit break entries exist.
   bool _isCurrentBreak() {
+    return _getCurrentBreakEntry() != null;
+  }
+
+  /// Returns the current break entry if we are in a break slot, null otherwise.
+  /// Uses explicit is_break flag from slot definitions.
+  TimetableEntry? _getCurrentBreakEntry() {
     final now = TimeSyncService.timeNow;
     final currentMinutes = now.hour * 60 + now.minute;
 
-    // First, check for explicit break entries
+    // Check for explicit break entries
     for (final entry in _todayTimeline) {
       if (!entry.isBreak) continue;
       final startParts = entry.startTime.split(':');
@@ -516,12 +522,11 @@ class _IdleScreenState extends State<IdleScreen>
       final startMinutes = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
       final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
       if (currentMinutes >= startMinutes && currentMinutes < endMinutes) {
-        return true;
+        return entry;
       }
     }
 
-    // Fallback: check time gaps if no explicit break entries exist
-    return _isBreakGap();
+    return null;
   }
 
   /// Independent gap check for the break timer — NOT gated by [enableVideoBreaks]
@@ -2218,9 +2223,8 @@ class _IdleScreenState extends State<IdleScreen>
   Widget _buildCourseInfo(
       Color primaryColor, Color secondaryColor, bool isVideoActive) {
     final isSunday = TimeSyncService.timeNow.weekday == DateTime.sunday;
-    final isBio = _isBioBreak();
-    final isLunch = _isLunchBreak();
-    final hasBreak = isBio || isLunch;
+    final currentBreak = _getCurrentBreakEntry();
+    final hasBreak = currentBreak != null;
 
     var course = _bedrockEntry?.courseName ?? '';
     var faculty = _bedrockEntry?.facultyName ?? '';
@@ -2228,12 +2232,10 @@ class _IdleScreenState extends State<IdleScreen>
     if (isSunday && _bedrockEntry == null) {
       course = 'SUNDAY FUNDAY';
       faculty = 'SYSTEM IDLE';
-    } else if (isBio) {
-      course = 'BIO BREAK TIME';
+    } else if (hasBreak) {
+      // Show explicit break name from slot definitions
+      course = currentBreak.periodName?.toUpperCase() ?? 'BREAK TIME';
       faculty = 'REFRESH';
-    } else if (isLunch) {
-      course = 'LUNCH BREAK';
-      faculty = 'RECHARGE';
     } else if (_bedrockEntry == null && _isEveningPhase()) {
       course = 'HAPPY EVENING';
       faculty = 'HAVE A GREAT DAY';
@@ -2312,8 +2314,8 @@ class _IdleScreenState extends State<IdleScreen>
                   color: AppColors.primaryTeal.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(
-                    isBio ? Icons.coffee_outlined : Icons.restaurant_outlined,
+                child: const Icon(
+                    Icons.coffee_outlined,
                     color: AppColors.primaryTeal),
               ),
               const SizedBox(width: 16),
@@ -2321,7 +2323,7 @@ class _IdleScreenState extends State<IdleScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    isBio ? 'QUICK REFRESHMENT' : 'MID-DAY MEAL',
+                    currentBreak.periodName?.toUpperCase() ?? 'BREAK TIME',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -2574,6 +2576,9 @@ class _IdleScreenState extends State<IdleScreen>
     final double footerHeight = (size.height * 0.1).clamp(70.0, 100.0);
     final double hPad = (size.width * 0.03).clamp(16.0, 40.0);
 
+    // Filter to only class/lab slots (no breaks)
+    final classSlots = _todayTimeline.where((e) => !e.isBreak).toList();
+
     return Container(
       height: footerHeight,
       padding: EdgeInsets.symmetric(horizontal: hPad),
@@ -2586,7 +2591,7 @@ class _IdleScreenState extends State<IdleScreen>
         children: [
           // Timeline
           Expanded(
-            child: _todayTimeline.isEmpty
+            child: classSlots.isEmpty
                 ? Center(
                     child: Text(
                       TimeSyncService.timeNow.weekday == DateTime.sunday
@@ -2600,15 +2605,11 @@ class _IdleScreenState extends State<IdleScreen>
                   )
                 : Row(
                     children: [
-                      for (int i = 0; i < _todayTimeline.length; i++) ...[
+                      for (int i = 0; i < classSlots.length; i++) ...[
                         if (i > 0)
-                          Container(
-                            width: 1,
-                            height: 30,
-                            color: secondaryColor.withValues(alpha: 0.1),
-                          ),
+                          _buildTimelineSeparator(classSlots[i - 1], classSlots[i]),
                         Expanded(
-                          child: _buildTimelineSlot(i),
+                          child: _buildTimelineSlotFromClass(classSlots[i]),
                         ),
                       ],
                     ],
@@ -2622,6 +2623,37 @@ class _IdleScreenState extends State<IdleScreen>
           _buildClockAndInfo(primaryColor, secondaryColor),
         ],
       ),
+    );
+  }
+
+  /// Build a separator between two class slots.
+  /// If there's a break between them, show a green line.
+  Widget _buildTimelineSeparator(TimetableEntry prev, TimetableEntry next) {
+    // Check if there's a break between these two slots
+    final hasBreakBetween = _todayTimeline.any((e) =>
+        e.isBreak &&
+        _toMinutes(e.startTime) >= _toMinutes(prev.endTime) &&
+        _toMinutes(e.endTime) <= _toMinutes(next.startTime));
+
+    return Container(
+      width: hasBreakBetween ? 2 : 1,
+      height: 30,
+      color: hasBreakBetween
+          ? AppColors.successLime.withValues(alpha: 0.6)
+          : AppColors.textSecondaryDark.withValues(alpha: 0.1),
+    );
+  }
+
+  /// Build timeline slot for a class entry (skip breaks).
+  Widget _buildTimelineSlotFromClass(TimetableEntry entry) {
+    final live = entry.slotId == _bedrockEntry?.slotId;
+    final isCompleted = _completedSlotIds.contains(entry.slotId);
+    final isFailed = _failedSlotIds.contains(entry.slotId);
+    return TimelineSlot(
+      entry: entry,
+      isLive: live,
+      isCompleted: isCompleted,
+      isFailed: isFailed,
     );
   }
 
