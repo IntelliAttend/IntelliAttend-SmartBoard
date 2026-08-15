@@ -78,7 +78,6 @@ class _IdleScreenState extends State<IdleScreen>
   // TEMPORARY: always show minimize button for production safety.
   // Revert by changing back to `false` and restoring the assignments below.
   bool _showMinimizeButton = true;
-  bool _hasOtpBeenTriggered = false;
   bool _showSessionMenu = false;
   Timer? _inactivityTimer;
   final TextEditingController _otpController = TextEditingController();
@@ -372,7 +371,6 @@ class _IdleScreenState extends State<IdleScreen>
       if (widget.completedSession) {
         setState(() {
           _showMinimizeButton = true;
-          _hasOtpBeenTriggered = true;
         });
       }
     });
@@ -1317,7 +1315,6 @@ class _IdleScreenState extends State<IdleScreen>
     _forceShowCard = false;
     _showStartingSoon = false;
     // TEMPORARY: button always visible — do not reset on slot transition
-    _hasOtpBeenTriggered = false;
     _showSessionMenu = false;
     _isKeypadExpanded = false;
     _upcomingSlot = null;
@@ -1697,7 +1694,6 @@ class _IdleScreenState extends State<IdleScreen>
         setState(() {
           _preAllocatedSessionId = null;
           _upcomingAllocatedSessionId = null;
-          _hasOtpBeenTriggered = true;
           _showMinimizeButton = true;
           _forceShowCard = false;
           _isKeypadExpanded = false;
