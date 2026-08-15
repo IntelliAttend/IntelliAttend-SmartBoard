@@ -592,32 +592,14 @@ class _IdleScreenState extends State<IdleScreen>
     return 0;
   }
 
-  bool _isBioBreak() {
-    // Check explicit break entries first
-    final now = TimeSyncService.timeNow;
-    final currentMinutes = now.hour * 60 + now.minute;
-    for (final entry in _todayTimeline) {
-      if (!entry.isBreak) continue;
-      final startParts = entry.startTime.split(':');
-      final endParts = entry.endTime.split(':');
-      if (startParts.length != 2 || endParts.length != 2) continue;
-      final startMinutes = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
-      final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
-      if (currentMinutes >= startMinutes && currentMinutes < endMinutes) {
-        final duration = endMinutes - startMinutes;
-        return duration > 0 && duration <= 15;
-      }
-    }
-    // Fallback to gap detection
-    final gap = _currentGapMinutes();
-    return gap > 0 && gap <= 15;
-  }
-
   bool _isPreBootPhase() {
     if (_bedrockEntry != null || _todayTimeline.isEmpty) return false;
     final now = TimeSyncService.timeNow;
     final currentMinutes = now.hour * 60 + now.minute;
-    final firstEntry = _todayTimeline.first;
+    // Find first class slot (skip breaks)
+    final classSlots = _todayTimeline.where((e) => !e.isBreak).toList();
+    if (classSlots.isEmpty) return false;
+    final firstEntry = classSlots.first;
     final parts = firstEntry.startTime.split(':');
     if (parts.length != 2) return false;
     int firstStart = int.parse(parts[0]) * 60 + int.parse(parts[1]);
@@ -630,13 +612,16 @@ class _IdleScreenState extends State<IdleScreen>
     if (_todayTimeline.isEmpty || _bedrockEntry != null) return false;
     final now = TimeSyncService.timeNow;
     final currentMinutes = now.hour * 60 + now.minute;
-    for (final entry in _todayTimeline) {
+    // Find last class slot (skip breaks)
+    final classSlots = _todayTimeline.where((e) => !e.isBreak).toList();
+    if (classSlots.isEmpty) return false;
+    for (final entry in classSlots) {
       final parts = entry.startTime.split(':');
       if (parts.length != 2) continue;
       int startMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
       if (startMinutes > currentMinutes) return false;
     }
-    final lastEntry = _todayTimeline.last;
+    final lastEntry = classSlots.last;
     final endParts = lastEntry.endTime.split(':');
     if (endParts.length != 2) return false;
     int lastEndMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
@@ -929,10 +914,12 @@ class _IdleScreenState extends State<IdleScreen>
 
     // ── Next upcoming class ───────────────────────────────────────────────────
     // Computed early so both T-5 cooldown and T-3 warm-up can reference it.
+    // Only consider class/lab slots — never break slots.
     TimetableEntry? nextEntry;
     int minDiff = 9999;
 
     for (final entry in _todayTimeline) {
+      if (entry.isBreak) continue;  // Skip break slots
       final parts = entry.startTime.split(':');
       if (parts.length != 2) continue;
 
@@ -1001,8 +988,8 @@ class _IdleScreenState extends State<IdleScreen>
     // ── Cooldown guard ─────────────────────────────────────────────────────
     // During the 2-minute hard freeze, all T-3/T-0 processing is skipped.
     // After cooldown completes, _evaluateNextClass handles the next-link chain.
+    // Break timer continues running in background during cooldown.
     if (_cooldownState == CooldownState.locked) {
-      _stopBreakTimer();
       return;
     }
 
@@ -1103,8 +1090,9 @@ class _IdleScreenState extends State<IdleScreen>
       _isReadyCheckDone = false;
 
       if (nextEntry != null && minDiff <= 10) {
-        final bool isFirstClass = _todayTimeline.isNotEmpty &&
-            _todayTimeline.first.slotId == nextEntry.slotId;
+        final classSlots = _todayTimeline.where((e) => !e.isBreak).toList();
+        final bool isFirstClass = classSlots.isNotEmpty &&
+            classSlots.first.slotId == nextEntry.slotId;
         if (isFirstClass) {
           PreFlightService().runDailyBoot();
         }
@@ -1231,13 +1219,11 @@ class _IdleScreenState extends State<IdleScreen>
   }
 
   /// Starts the break timer right now (instead of waiting for the next 10s
-  /// timer tick) when we are in a break slot or >=5-minute gap between classes
-  /// and not already in the T-3 window.
+  /// timer tick) when we are in a break slot or >=5-minute gap between classes.
+  /// This method is called after cooldown completes to ensure the break timer
+  /// is running even during T-3 window, providing continuous ring progress.
   void _kickstartBreakTimerIfNeeded() {
-    if (_showStartingSoon || _breakTimer != null || _todayTimeline.isEmpty) {
-      return;
-    }
-    if (_cooldownState != CooldownState.none) return;
+    if (_breakTimer != null || _todayTimeline.isEmpty) return;
     if (_bedrockEntry != null) return;
 
     final now = TimeSyncService.timeNow;
@@ -1266,6 +1252,7 @@ class _IdleScreenState extends State<IdleScreen>
     TimetableEntry? nextEntry;
     int minDiff = 9999;
     for (final entry in _todayTimeline) {
+      if (entry.isBreak) continue;  // Skip breaks for gap detection
       final parts = entry.startTime.split(':');
       if (parts.length != 2) continue;
       int entryMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
@@ -1291,6 +1278,8 @@ class _IdleScreenState extends State<IdleScreen>
 
   /// Full cache cleanse — wipes all warm-up state, session IDs, and tracking
   /// registers so the next class starts with a clean slate.
+  /// Does NOT reset cooldown state or break timer — those are managed
+  /// independently by their own lifecycle methods.
   void _fullCleanup() {
     _warmUpTriggeredSlotId = null;
     _completedWarmUpSlots.clear();
@@ -1304,9 +1293,9 @@ class _IdleScreenState extends State<IdleScreen>
     _upcomingSlot = null;
     _preAllocatedSessionId = null;
     _upcomingAllocatedSessionId = null;
-    _cooldownState = CooldownState.none;
+    // Note: _cooldownState and _breakTimer are NOT reset here.
+    // They have their own lifecycle methods (_startCooldown, _stopBreakTimer).
     _otpController.clear();
-    _stopBreakTimer();
   }
 
   // ── Break Countdown Timer ──────────────────────────────────────────────────
@@ -1418,6 +1407,7 @@ class _IdleScreenState extends State<IdleScreen>
     int minDiff = 9999;
 
     for (final entry in _todayTimeline) {
+      if (entry.isBreak) continue;  // Skip break slots
       final parts = entry.startTime.split(':');
       if (parts.length != 2) continue;
       int entryMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
@@ -1434,8 +1424,9 @@ class _IdleScreenState extends State<IdleScreen>
 
     // T-10 daily boot (first class only)
     if (minDiff <= 10) {
-      final bool isFirstClass = _todayTimeline.isNotEmpty &&
-          _todayTimeline.first.slotId == nextEntry.slotId;
+      final classSlots = _todayTimeline.where((e) => !e.isBreak).toList();
+      final bool isFirstClass = classSlots.isNotEmpty &&
+          classSlots.first.slotId == nextEntry.slotId;
       if (isFirstClass) {
         PreFlightService().runDailyBoot();
       }
@@ -2942,23 +2933,23 @@ class _IdleScreenState extends State<IdleScreen>
     final isWarmingUp =
         _showStartingSoon && !isSlotCompleted && !isUnlocked;
     final isWiping = _cooldownState == CooldownState.locked;
+
+    // Break timer is active during break time regardless of cooldown/T-3 state
     final isBreakTimerActive = _breakTimer != null &&
         _breakSecondsRemaining > 0 &&
-        !isWiping &&
         !isSlotCompleted &&
-        !isUnlocked &&
-        !isWarmingUp;
+        !hasActiveSessionForSlot;
+
+    // Get current break entry for label
+    final currentBreak = _getCurrentBreakEntry();
 
     // ── Ring progress & colour ──────────────────────────────────────────────
+    // Priority: Active Session > Slot Completed > Cooldown+Break > T-3+Break > Break only
     double ringValue = 0.0;
     Color ringColor = Colors.transparent;
     bool showRing = false;
 
-    if (isWiping) {
-      ringValue = _cooldownSecondsRemaining / 120.0;
-      ringColor = AppColors.error;
-      showRing = true;
-    } else if (hasActiveSessionForSlot) {
+    if (hasActiveSessionForSlot) {
       // Session active: show progress based on actual elapsed time
       ringValue = _computeSessionProgress();
       ringColor = _getSessionProgressColor();
@@ -2967,42 +2958,55 @@ class _IdleScreenState extends State<IdleScreen>
       ringValue = 1.0;
       ringColor = AppColors.warningAmber;
       showRing = true;
-    } else if (isUnlocked || isWarmingUp) {
-      // T-3 / Warming-up: continue ring from break timer, or full green if no
-      // break timer. When the break timer expires (remaining == 0) but the next
-      // class hasn't started yet, show a full ring rather than 0%.
-      if (_breakDurationSeconds > 0 && _breakSecondsRemaining > 0) {
-        ringValue = _breakSecondsRemaining / _breakDurationSeconds;
-      } else {
-        ringValue = 1.0;
-      }
-      ringColor = AppColors.successLime;
-      showRing = true;
     } else if (isBreakTimerActive) {
+      // Break is the base layer — always use break progress
       ringValue = _breakSecondsRemaining / _breakDurationSeconds;
-      ringColor = AppColors.primaryTeal;
+      showRing = true;
+
+      // Overlay: cooldown changes color to red
+      if (isWiping) {
+        ringColor = AppColors.error;
+      }
+      // Overlay: T-3 changes color to green
+      else if (isUnlocked || isWarmingUp) {
+        ringColor = AppColors.successLime;
+      }
+      // Default: teal for break
+      else {
+        ringColor = AppColors.primaryTeal;
+      }
+    } else if (isWiping) {
+      // No break timer, but cooldown active
+      ringValue = _cooldownSecondsRemaining / 120.0;
+      ringColor = AppColors.error;
+      showRing = true;
+    } else if (isUnlocked || isWarmingUp) {
+      // No break timer, but T-3 active
+      ringValue = 1.0;
+      ringColor = AppColors.successLime;
       showRing = true;
     }
 
     // ── Label ───────────────────────────────────────────────────────────────
     String label;
-    if (isWiping) {
+    if (hasActiveSessionForSlot) {
+      label = 'SESSION IN PROGRESS';
+    } else if (isSlotCompleted) {
+      label = 'COMPLETED';
+    } else if (isBreakTimerActive) {
+      // Use explicit break name from slot definitions
+      final breakName = currentBreak?.periodName?.toUpperCase() ?? 'BREAK';
+      final minutes = (_breakSecondsRemaining / 60).floor();
+      final seconds = _breakSecondsRemaining % 60;
+      label = '$breakName\n${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+    } else if (isWiping) {
       final minutes = (_cooldownSecondsRemaining / 60).floor();
       final seconds = _cooldownSecondsRemaining % 60;
-      label =
-          'COOLDOWN PHASE\n${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-    } else if (isSlotCompleted || hasActiveSessionForSlot) {
-      label = hasActiveSessionForSlot ? 'SESSION IN PROGRESS' : 'COMPLETED';
+      label = 'COOLDOWN\n${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
     } else if (isUnlocked) {
       label = 'TAP TO START';
     } else if (isWarmingUp) {
       label = 'WARMING UP...';
-    } else if (isBreakTimerActive) {
-      final breakLabel = _isBioBreak() ? 'BIO BREAK' : 'LUNCH BREAK';
-      final minutes = (_breakSecondsRemaining / 60).floor();
-      final seconds = _breakSecondsRemaining % 60;
-      label =
-          '$breakLabel\n${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
     } else {
       label = 'SESSION LOCKED';
     }
