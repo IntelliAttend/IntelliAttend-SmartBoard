@@ -87,31 +87,17 @@ class TimetableScreen extends StatelessWidget {
         final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
         final isLive = entry.startTime.compareTo(timeStr) <= 0 && entry.endTime.compareTo(timeStr) > 0 && entry.dayOfWeek == now.weekday;
 
-        // Check if there's a break before this entry
-        final hasBreakBefore = index > 0 && entries[index - 1].endTime != entry.startTime;
+        // Use explicit is_break flag from server instead of inferring from time gaps
+        if (entry.isBreak) {
+          return _buildBreakCard(entry, isDark);
+        }
+
+        // Check if there's a break before this entry (using explicit flag)
+        final hasBreakBefore = index > 0 && entries[index - 1].isBreak;
 
         return Column(
           children: [
             if (hasBreakBefore) ...[
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  const Expanded(child: Divider(color: Colors.grey, thickness: 1, height: 1)),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Text(
-                      'BREAK',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 1.5,
-                        color: isDark ? Colors.white30 : Colors.black26,
-                      ),
-                    ),
-                  ),
-                  const Expanded(child: Divider(color: Colors.grey, thickness: 1, height: 1)),
-                ],
-              ),
               const SizedBox(height: 8),
             ] else if (index > 0) ...[
               const SizedBox(height: 16),
@@ -180,6 +166,74 @@ class TimetableScreen extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+
+  /// Build a break card with explicit break information from the server.
+  Widget _buildBreakCard(TimetableEntry entry, bool isDark) {
+    final breakName = entry.periodName ?? 'Break';
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 80,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.startTime,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? Colors.white38 : Colors.black38,
+                  ),
+                ),
+                Text(
+                  entry.endTime,
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: isDark ? Colors.white24 : Colors.black26,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 24),
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white.withValues(alpha: 0.02) : Colors.grey.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.grey.withValues(alpha: 0.1),
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.coffee_outlined,
+                    size: 14,
+                    color: isDark ? Colors.white24 : Colors.black26,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    breakName.toUpperCase(),
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1.5,
+                      color: isDark ? Colors.white30 : Colors.black26,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:isar/isar.dart';
 import '../../core/theme/app_theme.dart';
+import '../../models/board_notification.dart';
 import '../../services/api_service.dart';
+import '../../services/network_info_service.dart';
 import '../../services/session_manager.dart';
 import '../../services/student_service.dart';
 import '../../core/platform/kiosk_service.dart';
@@ -13,6 +16,7 @@ import '../../core/utils/roll_number_utils.dart';
 import '../../core/utils/logger.dart';
 import '../../models/isar_schemas.dart';
 import '../../main.dart' show kPreviewAttendance;
+import '../widgets/notification_popdown.dart';
 import 'summary_screen.dart';
 import 'workspace_screen.dart';
 import '../widgets/glass_container.dart';
@@ -80,6 +84,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   List<_StudentEntry> _students = [];
 
   OverlayEntry? _studentInfoOverlay;
+  BoardNotification? _activeNotification;
   AnimationController? _cellPulseController;
   Animation<double>? _cellPulseAnimation;
 
@@ -278,13 +283,74 @@ class _AttendanceScreenState extends State<AttendanceScreen>
           .map((s) => s.studentId)
           .toList();
 
-      await ApiService.submitAttendance(
-        sessionId: widget.sessionId,
-        presentEmails: presentIds,
-        absentEmails: absentIds,
-      );
+      // Check network connectivity before attempting submit
+      final networkInfo = NetworkInfoService().current;
+      final isOnline = networkInfo.hasInternet;
 
-      // Persist snapshot after successful submit so re-entry restores latest state
+      if (isOnline) {
+        // Online: submit directly to server
+        await ApiService.submitAttendance(
+          sessionId: widget.sessionId,
+          presentEmails: presentIds,
+          absentEmails: absentIds,
+        );
+
+        // Persist snapshot after successful submit
+        if (!kPreviewAttendance) {
+          await SessionManager.saveAttendanceSnapshot(
+            sessionId: widget.sessionId,
+            presentIndices: _presentSeatIndices.toList(),
+            absentIndices: _absentSeatIndices.toList(),
+          );
+        }
+
+        setState(() => _isAttendanceSubmitted = true);
+        if (!mounted) return;
+
+        // Online success — navigate directly, no notification needed
+        _navigateToWorkspace();
+      } else {
+        // Offline: queue attendance for later sync
+        await _queueAttendanceOffline(presentIds, absentIds);
+
+        // Persist snapshot locally
+        if (!kPreviewAttendance) {
+          await SessionManager.saveAttendanceSnapshot(
+            sessionId: widget.sessionId,
+            presentIndices: _presentSeatIndices.toList(),
+            absentIndices: _absentSeatIndices.toList(),
+          );
+        }
+
+        setState(() => _isAttendanceSubmitted = true);
+        if (!mounted) return;
+
+        // Show prominent offline notification banner
+        _showAttendanceNotification(
+          icon: Icons.cloud_off_rounded,
+          iconColor: const Color(0xFFF59E0B),
+          title: 'Attendance saved locally',
+          subtitle: 'Will be submitted automatically when connection is restored.',
+          autoDismissSeconds: 5,
+        );
+
+        // Navigate to workspace after notification is shown
+        await Future.delayed(const Duration(milliseconds: 2500));
+        if (mounted) _navigateToWorkspace();
+      }
+    } catch (e) {
+      Log.e('[Attendance] Error submitting attendance: $e');
+
+      // If server submit failed, queue offline as fallback
+      final presentIds =
+          _presentSeatIndices.map((i) => _students[i].studentId).toList();
+      final absentIds = _students
+          .where((s) => !_presentSeatIndices.contains(_students.indexOf(s)))
+          .map((s) => s.studentId)
+          .toList();
+
+      await _queueAttendanceOffline(presentIds, absentIds);
+
       if (!kPreviewAttendance) {
         await SessionManager.saveAttendanceSnapshot(
           sessionId: widget.sessionId,
@@ -296,40 +362,118 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       setState(() => _isAttendanceSubmitted = true);
       if (!mounted) return;
 
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => WorkspaceScreen(
-            sessionId: widget.sessionId,
-            courseName: widget.courseName,
-            facultyName: widget.facultyName,
-            roomName: widget.roomName,
-            slotId: widget.slotId,
-            courseCode: widget.courseCode,
-            presentCount: _presentSeatIndices.length,
-            totalCapacity: widget.capacity,
-            students: _students.map((s) => StudentInfo(
-              rollNumber: s.rollNumber,
-              name: s.name,
-              email: s.studentId,
-              sectionId: '',
-              classId: '',
-            )).toList(),
-            presentIndices: _presentSeatIndices.toList(),
-            absentIndices: _absentSeatIndices.toList(),
-            isAttendanceSubmitted: true,
-          ),
-        ),
+      // Show prominent offline notification banner
+      _showAttendanceNotification(
+        icon: Icons.cloud_off_rounded,
+        iconColor: const Color(0xFFF59E0B),
+        title: 'Attendance saved locally',
+        subtitle: 'Server unreachable. Will retry when connection is restored.',
+        autoDismissSeconds: 5,
       );
-    } catch (e) {
-      Log.e('[Attendance] Error submitting attendance: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to submit. Please try again.')),
-        );
-      }
+
+      await Future.delayed(const Duration(milliseconds: 2500));
+      if (mounted) _navigateToWorkspace();
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
+  }
+
+  /// Queue attendance data for offline sync.
+  Future<void> _queueAttendanceOffline(
+    List<String> presentIds,
+    List<String> absentIds,
+  ) async {
+    final isar = SessionManager.isar;
+
+    // Check if already queued for this session
+    final existing = await isar.pendingAttendances
+        .where()
+        .sessionIdEqualTo(widget.sessionId)
+        .findFirst();
+
+    if (existing != null) {
+      // Update existing entry
+      await isar.writeTxn(() async {
+        existing.presentIdsJson = jsonEncode(presentIds);
+        existing.absentIdsJson = jsonEncode(absentIds);
+        existing.createdAt = DateTime.now();
+        existing.retryCount = 0;
+        existing.lastError = null;
+        await isar.pendingAttendances.put(existing);
+      });
+      Log.i('[Attendance] Updated offline queue for session ${widget.sessionId}');
+    } else {
+      // Create new entry
+      final pending = PendingAttendance()
+        ..sessionId = widget.sessionId
+        ..presentIdsJson = jsonEncode(presentIds)
+        ..absentIdsJson = jsonEncode(absentIds)
+        ..createdAt = DateTime.now()
+        ..retryCount = 0;
+
+      await isar.writeTxn(() async {
+        await isar.pendingAttendances.put(pending);
+      });
+      Log.i('[Attendance] Queued offline for session ${widget.sessionId}');
+    }
+  }
+
+  /// Shows a P2 notification using the existing popdown system.
+  void _showAttendanceNotification({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String subtitle,
+    int autoDismissSeconds = 4,
+  }) {
+    final notification = BoardNotification(
+      id: 'attendance_${DateTime.now().millisecondsSinceEpoch}',
+      title: title,
+      body: subtitle,
+      type: 'attendance',
+      timestamp: DateTime.now(),
+      priority: NotificationPriority.normal,
+    );
+
+    setState(() {
+      _activeNotification = notification;
+    });
+
+    // Auto-dismiss after duration
+    Timer(Duration(seconds: autoDismissSeconds), () {
+      if (mounted && _activeNotification?.id == notification.id) {
+        setState(() {
+          _activeNotification = null;
+        });
+      }
+    });
+  }
+
+  void _navigateToWorkspace() {
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => WorkspaceScreen(
+          sessionId: widget.sessionId,
+          courseName: widget.courseName,
+          facultyName: widget.facultyName,
+          roomName: widget.roomName,
+          slotId: widget.slotId,
+          courseCode: widget.courseCode,
+          presentCount: _presentSeatIndices.length,
+          totalCapacity: widget.capacity,
+          students: _students.map((s) => StudentInfo(
+            rollNumber: s.rollNumber,
+            name: s.name,
+            email: s.studentId,
+            sectionId: '',
+            classId: '',
+          )).toList(),
+          presentIndices: _presentSeatIndices.toList(),
+          absentIndices: _absentSeatIndices.toList(),
+          isAttendanceSubmitted: true,
+        ),
+      ),
+    );
   }
 
   void _onKillSwitchKeyEvent(KeyEvent event) {
@@ -802,6 +946,21 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                 _buildFooter(isDark),
               ],
             ),
+            // P2 Notification popdown (top-sliding banner)
+            if (_activeNotification != null)
+              Positioned(
+                top: 82,
+                right: 40,
+                child: NotificationPopdown(
+                  key: ValueKey(_activeNotification!.id),
+                  notification: _activeNotification!,
+                  onDismiss: () {
+                    if (mounted) {
+                      setState(() => _activeNotification = null);
+                    }
+                  },
+                ),
+              ),
           ],
         ),
       ),

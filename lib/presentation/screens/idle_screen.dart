@@ -162,6 +162,15 @@ class _IdleScreenState extends State<IdleScreen>
   /// When set, an overlay panel with navigation options is shown on idle screen.
   ActiveSession? _activeSession;
 
+  /// Timestamp when the current session actually started (for progress ring).
+  DateTime? _sessionStartTimestamp;
+
+  /// Scheduled end time for the current session (for progress ring).
+  DateTime? _sessionScheduledEnd;
+
+  /// Timer that ticks every second to update the session progress ring.
+  Timer? _sessionProgressTimer;
+
   /// Queue of notifications to show as top-sliding popdown banners.
   /// Drained one-by-one; each popdown auto-dismisses before the next shows.
   final List<BoardNotification> _popdownQueue = [];
@@ -440,15 +449,24 @@ class _IdleScreenState extends State<IdleScreen>
     final service = NetworkInfoService();
     service.startMonitoring(interval: const Duration(seconds: 10));
     _networkSub = service.onChanged.listen((info) {
-      if (mounted) {
-        setState(() {
-          _networkInfo = info;
-          // Emergency minimize: show button when internet is lost
-          if (!info.hasInternet) {
-            _showMinimizeButton = true;
-          }
-          // TEMPORARY: button always visible — no hide on internet restore
-        });
+      if (!mounted) return;
+
+      // Debounce rapid network state changes to prevent UI flickering
+      // Only update if state actually changed
+      final wasOnline = _networkInfo.hasInternet;
+      final isOnline = info.hasInternet;
+
+      setState(() {
+        _networkInfo = info;
+        // Emergency minimize: show button when internet is lost
+        if (!info.hasInternet) {
+          _showMinimizeButton = true;
+        }
+      });
+
+      // Log state transitions
+      if (wasOnline != isOnline) {
+        Log.i('[Idle] Network state changed: ${isOnline ? "ONLINE" : "OFFLINE"}');
       }
     });
     _networkInfo = service.current;
@@ -482,7 +500,30 @@ class _IdleScreenState extends State<IdleScreen>
 
   bool _isAnyBreak() {
     if (!AppConfig.enableVideoBreaks) return false;
-    return _isBioBreak() || _isLunchBreak();
+    return _isCurrentBreak();
+  }
+
+  /// Check if we are currently in a break slot using explicit is_break flag.
+  /// Falls back to time-gap detection if no explicit break entries exist.
+  bool _isCurrentBreak() {
+    final now = TimeSyncService.timeNow;
+    final currentMinutes = now.hour * 60 + now.minute;
+
+    // First, check for explicit break entries
+    for (final entry in _todayTimeline) {
+      if (!entry.isBreak) continue;
+      final startParts = entry.startTime.split(':');
+      final endParts = entry.endTime.split(':');
+      if (startParts.length != 2 || endParts.length != 2) continue;
+      final startMinutes = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
+      final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+      if (currentMinutes >= startMinutes && currentMinutes < endMinutes) {
+        return true;
+      }
+    }
+
+    // Fallback: check time gaps if no explicit break entries exist
+    return _isBreakGap();
   }
 
   /// Independent gap check for the break timer — NOT gated by [enableVideoBreaks]
@@ -518,6 +559,21 @@ class _IdleScreenState extends State<IdleScreen>
     if (_todayTimeline.isEmpty) return 0;
     final now = TimeSyncService.timeNow;
     final nowMinutes = now.hour * 60 + now.minute;
+
+    // First, check for explicit break entries
+    for (final entry in _todayTimeline) {
+      if (!entry.isBreak) continue;
+      final startParts = entry.startTime.split(':');
+      final endParts = entry.endTime.split(':');
+      if (startParts.length != 2 || endParts.length != 2) continue;
+      final startMinutes = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
+      final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+      if (nowMinutes >= startMinutes && nowMinutes < endMinutes) {
+        return endMinutes - startMinutes;
+      }
+    }
+
+    // Fallback: check time gaps if no explicit break entries exist
     final sorted = List<TimetableEntry>.from(_todayTimeline)
       ..sort(
           (a, b) => _toMinutes(a.startTime).compareTo(_toMinutes(b.startTime)));
@@ -534,11 +590,43 @@ class _IdleScreenState extends State<IdleScreen>
   }
 
   bool _isBioBreak() {
+    // Check explicit break entries first
+    final now = TimeSyncService.timeNow;
+    final currentMinutes = now.hour * 60 + now.minute;
+    for (final entry in _todayTimeline) {
+      if (!entry.isBreak) continue;
+      final startParts = entry.startTime.split(':');
+      final endParts = entry.endTime.split(':');
+      if (startParts.length != 2 || endParts.length != 2) continue;
+      final startMinutes = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
+      final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+      if (currentMinutes >= startMinutes && currentMinutes < endMinutes) {
+        final duration = endMinutes - startMinutes;
+        return duration > 0 && duration <= 15;
+      }
+    }
+    // Fallback to gap detection
     final gap = _currentGapMinutes();
     return gap > 0 && gap <= 15;
   }
 
   bool _isLunchBreak() {
+    // Check explicit break entries first
+    final now = TimeSyncService.timeNow;
+    final currentMinutes = now.hour * 60 + now.minute;
+    for (final entry in _todayTimeline) {
+      if (!entry.isBreak) continue;
+      final startParts = entry.startTime.split(':');
+      final endParts = entry.endTime.split(':');
+      if (startParts.length != 2 || endParts.length != 2) continue;
+      final startMinutes = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
+      final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+      if (currentMinutes >= startMinutes && currentMinutes < endMinutes) {
+        final duration = endMinutes - startMinutes;
+        return duration > 15;
+      }
+    }
+    // Fallback to gap detection
     final gap = _currentGapMinutes();
     return gap > 15;
   }
@@ -605,6 +693,9 @@ class _IdleScreenState extends State<IdleScreen>
         if (mounted) {
           setState(() {
             _activeSession = null;
+            _sessionStartTimestamp = null;
+            _sessionScheduledEnd = null;
+            _stopSessionProgressTimer();
             // TEMPORARY: button always visible — do not hide on stale session
           });
         }
@@ -743,6 +834,9 @@ class _IdleScreenState extends State<IdleScreen>
         Log.i('[Idle] Active session ${_activeSession!.sessionId} no longer active — clearing.');
         setState(() {
           _activeSession = null;
+          _sessionStartTimestamp = null;
+          _sessionScheduledEnd = null;
+          _stopSessionProgressTimer();
           // TEMPORARY: button always visible — do not hide when session cleared
         });
       }
@@ -759,7 +853,12 @@ class _IdleScreenState extends State<IdleScreen>
       setState(() {
         _activeSession = session;
         _showMinimizeButton = true;
+        // For resumed sessions, use scheduledEndTime and estimate start
+        _sessionScheduledEnd = session.scheduledEndTime;
+        // Estimate start as (scheduledEnd - slot duration) if we can find it
+        _sessionStartTimestamp = _computeSessionStartTime(session.slotId);
       });
+      _startSessionProgressTimer();
     }
   }
 
@@ -1050,22 +1149,51 @@ class _IdleScreenState extends State<IdleScreen>
       }
 
       // ── Break Timer Management ─────────────────────────────────────────────
-      // Start the break countdown when we are in a gap between classes (minDiff
-      // > 3, so outside the T-3 window). The timer runs continuously through
-      // the T-3 transition so the ring progress carries over without resetting.
+      // Start the break countdown when we are in a break slot or gap between
+      // classes (minDiff > 3, so outside the T-3 window). The timer runs
+      // continuously through the T-3 transition so the ring progress carries
+      // over without resetting.
       if (_bedrockEntry == null &&
           _cooldownState == CooldownState.none &&
           !_showStartingSoon) {
-        if (_isBreakGap() && nextEntry != null) {
-          final nextStartMinutes = _toMinutes(nextEntry.startTime);
-          final remainingSeconds =
-              (nextStartMinutes - currentMinutes) * 60;
-          if (remainingSeconds > 0 && _breakTimer == null) {
-            final totalGapSeconds = _currentGapMinutes() * 60;
-            _startBreakTimer(totalGapSeconds, remainingSeconds);
+        // Use seconds-since-midnight for precise timer calculation
+        final now = TimeSyncService.timeNow;
+        final currentSeconds = now.hour * 3600 + now.minute * 60 + now.second;
+
+        // Check for explicit break entries first
+        bool inExplicitBreak = false;
+        for (final entry in _todayTimeline) {
+          if (!entry.isBreak) continue;
+          final startParts = entry.startTime.split(':');
+          final endParts = entry.endTime.split(':');
+          if (startParts.length < 2 || endParts.length < 2) continue;
+          final startSeconds = int.parse(startParts[0]) * 3600 + int.parse(startParts[1]) * 60;
+          final endSeconds = int.parse(endParts[0]) * 3600 + int.parse(endParts[1]) * 60;
+          if (currentSeconds >= startSeconds && currentSeconds < endSeconds) {
+            inExplicitBreak = true;
+            final totalSeconds = endSeconds - startSeconds;
+            final remainingSeconds = endSeconds - currentSeconds;
+            if (remainingSeconds > 0 && _breakTimer == null) {
+              _startBreakTimer(totalSeconds, remainingSeconds);
+            }
+            break;
           }
-        } else if (_breakTimer != null) {
-          _stopBreakTimer();
+        }
+
+        // Fallback to gap-based detection if no explicit break found
+        if (!inExplicitBreak) {
+          if (_isBreakGap() && nextEntry != null) {
+            final nextStartMinutes = _toMinutes(nextEntry.startTime);
+            final currentMinutes = now.hour * 60 + now.minute;
+            final remainingSeconds =
+                (nextStartMinutes - currentMinutes) * 60 - now.second;
+            if (remainingSeconds > 0 && _breakTimer == null) {
+              final totalGapSeconds = _currentGapMinutes() * 60;
+              _startBreakTimer(totalGapSeconds, remainingSeconds);
+            }
+          } else if (_breakTimer != null) {
+            _stopBreakTimer();
+          }
         }
       }
     }
@@ -1121,8 +1249,8 @@ class _IdleScreenState extends State<IdleScreen>
   }
 
   /// Starts the break timer right now (instead of waiting for the next 10s
-  /// timer tick) when we are in a >=5-minute gap between classes and not
-  /// already in the T-3 window.
+  /// timer tick) when we are in a break slot or >=5-minute gap between classes
+  /// and not already in the T-3 window.
   void _kickstartBreakTimerIfNeeded() {
     if (_showStartingSoon || _breakTimer != null || _todayTimeline.isEmpty) {
       return;
@@ -1131,14 +1259,35 @@ class _IdleScreenState extends State<IdleScreen>
     if (_bedrockEntry != null) return;
 
     final now = TimeSyncService.timeNow;
-    final currentMinutes = now.hour * 60 + now.minute;
+    // Use seconds-since-midnight for precise timer calculation
+    final currentSeconds = now.hour * 3600 + now.minute * 60 + now.second;
 
+    // First, check for explicit break entries
+    for (final entry in _todayTimeline) {
+      if (!entry.isBreak) continue;
+      final startParts = entry.startTime.split(':');
+      final endParts = entry.endTime.split(':');
+      if (startParts.length < 2 || endParts.length < 2) continue;
+      final startSeconds = int.parse(startParts[0]) * 3600 + int.parse(startParts[1]) * 60;
+      final endSeconds = int.parse(endParts[0]) * 3600 + int.parse(endParts[1]) * 60;
+      if (currentSeconds >= startSeconds && currentSeconds < endSeconds) {
+        final totalSeconds = endSeconds - startSeconds;
+        final remainingSeconds = endSeconds - currentSeconds;
+        if (remainingSeconds > 0) {
+          _startBreakTimer(totalSeconds, remainingSeconds);
+          return;
+        }
+      }
+    }
+
+    // Fallback: check time gaps if no explicit break entries exist
     TimetableEntry? nextEntry;
     int minDiff = 9999;
     for (final entry in _todayTimeline) {
       final parts = entry.startTime.split(':');
       if (parts.length != 2) continue;
       int entryMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
+      int currentMinutes = now.hour * 60 + now.minute;
       int diff = entryMinutes - currentMinutes;
       if (diff < _midnightWrapThreshold) diff += _minutesPerDay;
       if (diff > 0 && diff < minDiff) {
@@ -1149,7 +1298,8 @@ class _IdleScreenState extends State<IdleScreen>
 
     if (_isBreakGap() && nextEntry != null && minDiff > 3) {
       final nextStartMinutes = _toMinutes(nextEntry.startTime);
-      final remainingSeconds = (nextStartMinutes - currentMinutes) * 60;
+      final currentMinutes = now.hour * 60 + now.minute;
+      final remainingSeconds = (nextStartMinutes - currentMinutes) * 60 - now.second;
       if (remainingSeconds > 0) {
         final totalGapSeconds = _currentGapMinutes() * 60;
         _startBreakTimer(totalGapSeconds, remainingSeconds);
@@ -1207,6 +1357,73 @@ class _IdleScreenState extends State<IdleScreen>
     _breakTimer = null;
     _breakSecondsRemaining = 0;
     _breakDurationSeconds = 0;
+  }
+
+  // ── Session Progress Timer ────────────────────────────────────────────────
+
+  /// Starts a 1-second periodic timer that triggers setState to update the
+  /// session progress ring. The ring shows how much time has elapsed since
+  /// the session started relative to the scheduled slot duration.
+  void _startSessionProgressTimer() {
+    _sessionProgressTimer?.cancel();
+    _sessionProgressTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      // Just trigger setState — the ring value is computed in build
+      setState(() {});
+    });
+  }
+
+  /// Stops the session progress timer.
+  void _stopSessionProgressTimer() {
+    _sessionProgressTimer?.cancel();
+    _sessionProgressTimer = null;
+  }
+
+  /// Computes the session start time from the timetable slot start time.
+  /// Returns the slot's start time as a DateTime for today.
+  DateTime _computeSessionStartTime(String slotId) {
+    final now = TimeSyncService.timeNow;
+    if (slotId.isNotEmpty) {
+      for (final entry in _todayTimeline) {
+        if (entry.slotId == slotId) {
+          final parts = entry.startTime.split(':');
+          if (parts.length == 2) {
+            return DateTime(now.year, now.month, now.day,
+                int.parse(parts[0]), int.parse(parts[1]));
+          }
+        }
+      }
+    }
+    // Fallback: assume session started 1 hour ago
+    return now.subtract(const Duration(hours: 1));
+  }
+
+  /// Computes the session progress as a value between 0.0 and 1.0.
+  /// Uses actual start time and scheduled end time from the slot.
+  /// Handles late starts correctly — if faculty starts 10 min before end,
+  /// the ring fills from 0% to 100% in those 10 minutes.
+  double _computeSessionProgress() {
+    if (_activeSession == null || _sessionStartTimestamp == null) return 0.0;
+
+    final now = TimeSyncService.timeNow;
+    final scheduledEnd = _sessionScheduledEnd ?? _activeSession!.scheduledEndTime;
+    final start = _sessionStartTimestamp!;
+
+    // Total duration = scheduledEnd - actualStart (handles late starts)
+    final totalDuration = scheduledEnd.difference(start).inSeconds;
+    // Elapsed = now - actualStart
+    final elapsed = now.difference(start).inSeconds;
+
+    if (totalDuration <= 0) return 1.0;
+    return (elapsed / totalDuration).clamp(0.0, 1.0);
+  }
+
+  /// Returns the session progress ring color based on how much time is left.
+  Color _getSessionProgressColor() {
+    final progress = _computeSessionProgress();
+    if (progress >= 1.0) return AppColors.successLime; // Session complete
+    if (progress >= 0.8) return AppColors.warningAmber; // Almost done
+    return AppColors.primaryTeal; // In progress
   }
 
   /// Evaluates the next upcoming class after cooldown and immediately enters
@@ -1489,6 +1706,7 @@ class _IdleScreenState extends State<IdleScreen>
       }
 
       if (mounted) {
+        final now = TimeSyncService.timeNow;
         final activeSession = ActiveSession()
           ..sessionId = sessionId
           ..slotId = slotId ?? ''
@@ -1502,7 +1720,10 @@ class _IdleScreenState extends State<IdleScreen>
           ..verifiedStudentIds = [];
         setState(() {
           _activeSession = activeSession;
+          _sessionStartTimestamp = now;
+          _sessionScheduledEnd = scheduledEndTime;
         });
+        _startSessionProgressTimer();
       }
     } catch (e) {
       if (mounted) {
@@ -1615,7 +1836,7 @@ class _IdleScreenState extends State<IdleScreen>
               (size.width * 0.05).clamp(20.0, 80.0);
           final bool isNarrow = size.width < 1200;
           final double cardMaxWidth =
-              isNarrow ? 320.0 : (size.width * 0.25).clamp(280.0, 400.0);
+              isNarrow ? 280.0 : (size.width * 0.2).clamp(240.0, 340.0);
 
           Widget mainContent;
           if (isNarrow) {
@@ -2141,16 +2362,16 @@ class _IdleScreenState extends State<IdleScreen>
 
   Widget _buildAuthCard(Color bgColor, Color primaryColor, Color secondaryColor,
       bool isVideoActive, double cardWidth) {
-    final double cardPadding = cardWidth < 280 ? 12.0 : 20.0;
-    final double titleFontSize = (cardWidth * 0.05).clamp(12.0, 16.0);
-    final double bodyFontSize = (cardWidth * 0.04).clamp(10.0, 12.0);
-    final double statusFontSize = (cardWidth * 0.033).clamp(8.0, 10.0);
-    final double buttonHeight = cardWidth < 280 ? 38.0 : 44.0;
-    final double buttonFontSize = (cardWidth * 0.045).clamp(11.0, 14.0);
-    final double iconSize = (cardWidth * 0.06).clamp(14.0, 20.0);
-    final double lockIconSize = (cardWidth * 0.065).clamp(14.0, 20.0);
-    final double pinAvailableWidth = (cardWidth - cardPadding * 2 - 16).clamp(120.0, 300.0);
-    final double verticalGap = cardWidth < 280 ? 20.0 : 32.0;
+    final double cardPadding = cardWidth < 260 ? 12.0 : 16.0;
+    final double titleFontSize = (cardWidth * 0.045).clamp(11.0, 14.0);
+    final double bodyFontSize = (cardWidth * 0.035).clamp(9.0, 11.0);
+    final double statusFontSize = (cardWidth * 0.03).clamp(8.0, 10.0);
+    final double buttonHeight = cardWidth < 260 ? 34.0 : 40.0;
+    final double buttonFontSize = (cardWidth * 0.04).clamp(10.0, 13.0);
+    final double iconSize = (cardWidth * 0.05).clamp(12.0, 18.0);
+    final double lockIconSize = (cardWidth * 0.055).clamp(12.0, 18.0);
+    final double pinAvailableWidth = (cardWidth - cardPadding * 2 - 16).clamp(100.0, 260.0);
+    final double verticalGap = cardWidth < 260 ? 16.0 : 24.0;
 
     return GlassContainer(
       padding: EdgeInsets.all(cardPadding),
@@ -2521,11 +2742,10 @@ class _IdleScreenState extends State<IdleScreen>
   Widget _buildActiveSessionOverlay(Color primaryText, Color secondaryText) {
     final session = _activeSession!;
     final size = MediaQuery.of(context).size;
-    final double overlayWidth = (size.width * 0.45).clamp(320.0, 560.0);
-    final double overlayPadding = (size.width * 0.025).clamp(16.0, 32.0);
-    final double titleFontSize = (size.width * 0.014).clamp(14.0, 18.0);
-    final double subtitleFontSize = (size.width * 0.01).clamp(11.0, 13.0);
-    final bool isNarrowOverlay = overlayWidth < 400;
+    final double overlayWidth = (size.width * 0.35).clamp(280.0, 480.0);
+    final double overlayPadding = (size.width * 0.02).clamp(12.0, 24.0);
+    final double titleFontSize = (size.width * 0.012).clamp(12.0, 16.0);
+    final double subtitleFontSize = (size.width * 0.008).clamp(10.0, 12.0);
 
     return Positioned.fill(
       child: Material(
@@ -2580,88 +2800,86 @@ class _IdleScreenState extends State<IdleScreen>
                 const SizedBox(height: 28),
                 Divider(height: 1, color: const Color(0x1A000000)),
                 const SizedBox(height: 24),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
+                // 2x2 grid layout for action cards
+                Column(
                   children: [
-                    SizedBox(
-                      width: isNarrowOverlay
-                          ? overlayWidth - overlayPadding * 2
-                          : (overlayWidth - overlayPadding * 2 - 12) / 2,
-                      child: _buildActionCard(
-                        icon: Icons.dashboard_rounded,
-                        label: 'Workspace',
-                        subtitle: 'Files & session tools',
-                        color: const Color(0xFF14B8A6),
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => WorkspaceScreen(
-                            sessionId: session.sessionId,
-                            courseName: session.courseName,
-                            facultyName: session.facultyName,
-                            roomName: widget.registration.roomName,
-                            sectionId: session.sectionId,
-                            slotId: null,
-                            presentCount: session.presentIndices.length,
-                            totalCapacity: session.rosterCount,
-                          )),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildActionCard(
+                            icon: Icons.dashboard_rounded,
+                            label: 'Workspace',
+                            subtitle: 'Files & session tools',
+                            color: const Color(0xFF14B8A6),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => WorkspaceScreen(
+                                sessionId: session.sessionId,
+                                courseName: session.courseName,
+                                facultyName: session.facultyName,
+                                roomName: widget.registration.roomName,
+                                sectionId: session.sectionId,
+                                slotId: null,
+                                presentCount: session.presentIndices.length,
+                                totalCapacity: session.rosterCount,
+                              )),
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                    SizedBox(
-                      width: isNarrowOverlay
-                          ? overlayWidth - overlayPadding * 2
-                          : (overlayWidth - overlayPadding * 2 - 12) / 2,
-                      child: _buildActionCard(
-                        icon: Icons.people_rounded,
-                        label: 'Attendance',
-                        subtitle: 'Mark present/absent',
-                        color: const Color(0xFF8B5CF6),
-                        onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(builder: (_) => AttendanceScreen(
-                              sessionId: session.sessionId,
-                              capacity: session.rosterCount,
-                              courseName: session.courseName,
-                              facultyName: session.facultyName,
-                              roomName: widget.registration.roomName,
-                              slotId: null,
-                              initialPresentCount: session.presentIndices.length,
-                              boardId: widget.registration.smartBoardId,
-                              onNavigateBack: () => Navigator.of(context).pop(),
-                            )),
-                          );
-                        },
-                      ),
-                    ),
-                    SizedBox(
-                      width: isNarrowOverlay
-                          ? overlayWidth - overlayPadding * 2
-                          : (overlayWidth - overlayPadding * 2 - 12) / 2,
-                      child: _buildActionCard(
-                        icon: Icons.analytics_outlined,
-                        label: 'Analytics',
-                        subtitle: 'Session statistics',
-                        color: const Color(0xFFF59E0B),
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => const AnalyticsScreen()),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _buildActionCard(
+                            icon: Icons.people_rounded,
+                            label: 'Attendance',
+                            subtitle: 'Mark present/absent',
+                            color: const Color(0xFF8B5CF6),
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(builder: (_) => AttendanceScreen(
+                                  sessionId: session.sessionId,
+                                  capacity: session.rosterCount,
+                                  courseName: session.courseName,
+                                  facultyName: session.facultyName,
+                                  roomName: widget.registration.roomName,
+                                  slotId: null,
+                                  initialPresentCount: session.presentIndices.length,
+                                  boardId: widget.registration.smartBoardId,
+                                  onNavigateBack: () => Navigator.of(context).pop(),
+                                )),
+                              );
+                            },
+                          ),
                         ),
-                      ),
+                      ],
                     ),
-                    SizedBox(
-                      width: isNarrowOverlay
-                          ? overlayWidth - overlayPadding * 2
-                          : (overlayWidth - overlayPadding * 2 - 12) / 2,
-                      child: _buildActionCard(
-                        icon: Icons.calendar_month_rounded,
-                        label: 'Timetable',
-                        subtitle: 'View schedule',
-                        color: const Color(0xFF3B82F6),
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => TimetableScreen(
-                            weeklyTimeline: TimetableCache().weeklyTimeline,
-                          )),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildActionCard(
+                            icon: Icons.analytics_outlined,
+                            label: 'Analytics',
+                            subtitle: 'Session statistics',
+                            color: const Color(0xFFF59E0B),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => const AnalyticsScreen()),
+                            ),
+                          ),
                         ),
-                      ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _buildActionCard(
+                            icon: Icons.calendar_month_rounded,
+                            label: 'Timetable',
+                            subtitle: 'View schedule',
+                            color: const Color(0xFF3B82F6),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => TimetableScreen(
+                                weeklyTimeline: TimetableCache().weeklyTimeline,
+                              )),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -2748,9 +2966,14 @@ class _IdleScreenState extends State<IdleScreen>
       ringValue = _cooldownSecondsRemaining / 120.0;
       ringColor = AppColors.error;
       showRing = true;
-    } else if (isSlotCompleted || hasActiveSessionForSlot) {
+    } else if (hasActiveSessionForSlot) {
+      // Session active: show progress based on actual elapsed time
+      ringValue = _computeSessionProgress();
+      ringColor = _getSessionProgressColor();
+      showRing = true;
+    } else if (isSlotCompleted) {
       ringValue = 1.0;
-      ringColor = hasActiveSessionForSlot ? AppColors.primaryTeal : AppColors.warningAmber;
+      ringColor = AppColors.warningAmber;
       showRing = true;
     } else if (isUnlocked || isWarmingUp) {
       // T-3 / Warming-up: continue ring from break timer, or full green if no
@@ -2904,10 +3127,10 @@ class _IdleScreenState extends State<IdleScreen>
 
   Widget _buildNumericKeypad(
       bool isDark, bool isVideoActive, double cardWidth) {
-    final double spacing = cardWidth < 280 ? 4.0 : 8.0;
-    final double aspectRatio = cardWidth < 280 ? 1.3 : 1.6;
-    final double buttonFontSize = (cardWidth * 0.05).clamp(13.0, 16.0);
-    final double backspaceIconSize = (cardWidth * 0.05).clamp(12.0, 16.0);
+    final double spacing = cardWidth < 260 ? 3.0 : 6.0;
+    final double aspectRatio = cardWidth < 260 ? 1.4 : 1.7;
+    final double buttonFontSize = (cardWidth * 0.045).clamp(12.0, 15.0);
+    final double backspaceIconSize = (cardWidth * 0.045).clamp(11.0, 15.0);
 
     return GridView.count(
       shrinkWrap: true,

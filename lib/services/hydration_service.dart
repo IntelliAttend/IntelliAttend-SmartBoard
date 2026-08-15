@@ -197,7 +197,11 @@ class HydrationService {
               []
           ..roomNumber = slot['room_number']?.toString() ?? ''
           ..slotType = slot['slot_type']?.toString() ?? 'regular'
-          ..classType = slot['class_type']?.toString() ?? 'Lecture';
+          ..classType = slot['class_type']?.toString() ?? 'Lecture'
+          ..isBreak = slot['is_break'] == true
+          ..periodNumber = slot['period_number'] as int?
+          ..periodName = slot['period_name']?.toString()
+          ..slotDefinitionId = slot['slot_definition_id'] as int?;
         await isar.timetableEntrys.put(entry);
       }
     });

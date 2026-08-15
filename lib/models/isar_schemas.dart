@@ -73,6 +73,24 @@ class QueuedScan {
 }
 
 
+// ─── Pending Attendance (offline submission queue) ───────────────────────────
+
+
+@collection
+class PendingAttendance {
+  Id id = Isar.autoIncrement;
+
+  @Index(unique: true)
+  late String sessionId;
+
+  late String presentIdsJson;   // JSON-encoded list of present student IDs
+  late String absentIdsJson;    // JSON-encoded list of absent student IDs
+  late DateTime createdAt;
+  int retryCount = 0;
+  String? lastError;
+}
+
+
 // ─── Day name helpers ────────────────────────────────────────────────────────
 
 
@@ -110,6 +128,12 @@ class TimetableEntry {
   String roomNumber = '';
   String slotType = 'regular';
   String classType = 'Lecture';
+
+  // Slot definition fields (from slot_definitions table)
+  bool isBreak = false;
+  int? periodNumber;
+  String? periodName;
+  int? slotDefinitionId;
 }
 
 
