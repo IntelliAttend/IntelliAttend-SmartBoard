@@ -529,12 +529,6 @@ class _IdleScreenState extends State<IdleScreen>
     return null;
   }
 
-  /// Independent gap check for the break timer — NOT gated by [enableVideoBreaks]
-  /// so the timer ring still shows during breaks even when video backgrounds
-  /// are disabled. Returns true whenever we are in a >=5-minute gap between
-  /// consecutive timetable entries.
-  bool _isBreakGap() => _currentGapMinutes() >= 5;
-
   int _toMinutes(String time) {
     final parts = time.split(':');
     if (parts.length != 2) return 0;
@@ -556,40 +550,6 @@ class _IdleScreenState extends State<IdleScreen>
     }
     Log.w('[Idle] _computeSlotEndTime: slot $slotId not found in timetable — falling back to +1h');
     return now.add(const Duration(hours: 1));
-  }
-
-  int _currentGapMinutes() {
-    if (_todayTimeline.isEmpty) return 0;
-    final now = TimeSyncService.timeNow;
-    final nowMinutes = now.hour * 60 + now.minute;
-
-    // First, check for explicit break entries
-    for (final entry in _todayTimeline) {
-      if (!entry.isBreak) continue;
-      final startParts = entry.startTime.split(':');
-      final endParts = entry.endTime.split(':');
-      if (startParts.length != 2 || endParts.length != 2) continue;
-      final startMinutes = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
-      final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
-      if (nowMinutes >= startMinutes && nowMinutes < endMinutes) {
-        return endMinutes - startMinutes;
-      }
-    }
-
-    // Fallback: check time gaps if no explicit break entries exist
-    final sorted = List<TimetableEntry>.from(_todayTimeline)
-      ..sort(
-          (a, b) => _toMinutes(a.startTime).compareTo(_toMinutes(b.startTime)));
-    for (int i = 0; i < sorted.length - 1; i++) {
-      final prevEnd = _toMinutes(sorted[i].endTime);
-      final nextStart = _toMinutes(sorted[i + 1].startTime);
-      int gap = nextStart - prevEnd;
-      if (gap < _midnightWrapThreshold) gap += _minutesPerDay;
-      if (gap >= 5 && nowMinutes >= prevEnd && nowMinutes < nextStart) {
-        return gap;
-      }
-    }
-    return 0;
   }
 
   bool _isPreBootPhase() {
@@ -1119,19 +1079,16 @@ class _IdleScreenState extends State<IdleScreen>
       }
 
       // ── Break Timer Management ─────────────────────────────────────────────
-      // Start the break countdown when we are in a break slot or gap between
-      // classes (minDiff > 3, so outside the T-3 window). The timer runs
-      // continuously through the T-3 transition so the ring progress carries
-      // over without resetting.
+      // Start the break countdown when we are in an explicit break slot from
+      // the timetable. Only uses slot_definitions data — no gap detection.
       if (_bedrockEntry == null &&
           _cooldownState == CooldownState.none &&
           !_showStartingSoon) {
-        // Use seconds-since-midnight for precise timer calculation
         final now = TimeSyncService.timeNow;
         final currentSeconds = now.hour * 3600 + now.minute * 60 + now.second;
 
-        // Check for explicit break entries first
-        bool inExplicitBreak = false;
+        // Check for explicit break entries from timetable
+        bool inBreak = false;
         for (final entry in _todayTimeline) {
           if (!entry.isBreak) continue;
           final startParts = entry.startTime.split(':');
@@ -1140,7 +1097,7 @@ class _IdleScreenState extends State<IdleScreen>
           final startSeconds = int.parse(startParts[0]) * 3600 + int.parse(startParts[1]) * 60;
           final endSeconds = int.parse(endParts[0]) * 3600 + int.parse(endParts[1]) * 60;
           if (currentSeconds >= startSeconds && currentSeconds < endSeconds) {
-            inExplicitBreak = true;
+            inBreak = true;
             final totalSeconds = endSeconds - startSeconds;
             final remainingSeconds = endSeconds - currentSeconds;
             if (remainingSeconds > 0 && _breakTimer == null) {
@@ -1150,20 +1107,9 @@ class _IdleScreenState extends State<IdleScreen>
           }
         }
 
-        // Fallback to gap-based detection if no explicit break found
-        if (!inExplicitBreak) {
-          if (_isBreakGap() && nextEntry != null) {
-            final nextStartMinutes = _toMinutes(nextEntry.startTime);
-            final currentMinutes = now.hour * 60 + now.minute;
-            final remainingSeconds =
-                (nextStartMinutes - currentMinutes) * 60 - now.second;
-            if (remainingSeconds > 0 && _breakTimer == null) {
-              final totalGapSeconds = _currentGapMinutes() * 60;
-              _startBreakTimer(totalGapSeconds, remainingSeconds);
-            }
-          } else if (_breakTimer != null) {
-            _stopBreakTimer();
-          }
+        // If not in a break and timer exists, stop it
+        if (!inBreak && _breakTimer != null) {
+          _stopBreakTimer();
         }
       }
     }
@@ -1218,19 +1164,18 @@ class _IdleScreenState extends State<IdleScreen>
     Log.i('[Idle] Cooldown complete. Cache cleansed, next-link evaluated.');
   }
 
-  /// Starts the break timer right now (instead of waiting for the next 10s
-  /// timer tick) when we are in a break slot or >=5-minute gap between classes.
-  /// This method is called after cooldown completes to ensure the break timer
-  /// is running even during T-3 window, providing continuous ring progress.
+  /// Starts the break timer right now when we are in an explicit break slot
+  /// from the timetable. Called after cooldown completes to ensure the break
+  /// timer is running even during T-3 window, providing continuous ring progress.
+  /// Only uses explicit break entries from slot_definitions — no gap detection.
   void _kickstartBreakTimerIfNeeded() {
     if (_breakTimer != null || _todayTimeline.isEmpty) return;
     if (_bedrockEntry != null) return;
 
     final now = TimeSyncService.timeNow;
-    // Use seconds-since-midnight for precise timer calculation
     final currentSeconds = now.hour * 3600 + now.minute * 60 + now.second;
 
-    // First, check for explicit break entries
+    // Check for explicit break entries from timetable only
     for (final entry in _todayTimeline) {
       if (!entry.isBreak) continue;
       final startParts = entry.startTime.split(':');
@@ -1247,33 +1192,7 @@ class _IdleScreenState extends State<IdleScreen>
         }
       }
     }
-
-    // Fallback: check time gaps if no explicit break entries exist
-    TimetableEntry? nextEntry;
-    int minDiff = 9999;
-    for (final entry in _todayTimeline) {
-      if (entry.isBreak) continue;  // Skip breaks for gap detection
-      final parts = entry.startTime.split(':');
-      if (parts.length != 2) continue;
-      int entryMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
-      int currentMinutes = now.hour * 60 + now.minute;
-      int diff = entryMinutes - currentMinutes;
-      if (diff < _midnightWrapThreshold) diff += _minutesPerDay;
-      if (diff > 0 && diff < minDiff) {
-        minDiff = diff;
-        nextEntry = entry;
-      }
-    }
-
-    if (_isBreakGap() && nextEntry != null && minDiff > 3) {
-      final nextStartMinutes = _toMinutes(nextEntry.startTime);
-      final currentMinutes = now.hour * 60 + now.minute;
-      final remainingSeconds = (nextStartMinutes - currentMinutes) * 60 - now.second;
-      if (remainingSeconds > 0) {
-        final totalGapSeconds = _currentGapMinutes() * 60;
-        _startBreakTimer(totalGapSeconds, remainingSeconds);
-      }
-    }
+    // No fallback — if no explicit break exists, don't start timer
   }
 
   /// Full cache cleanse — wipes all warm-up state, session IDs, and tracking
