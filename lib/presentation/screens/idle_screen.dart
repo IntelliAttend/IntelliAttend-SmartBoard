@@ -613,27 +613,6 @@ class _IdleScreenState extends State<IdleScreen>
     return gap > 0 && gap <= 15;
   }
 
-  bool _isLunchBreak() {
-    // Check explicit break entries first
-    final now = TimeSyncService.timeNow;
-    final currentMinutes = now.hour * 60 + now.minute;
-    for (final entry in _todayTimeline) {
-      if (!entry.isBreak) continue;
-      final startParts = entry.startTime.split(':');
-      final endParts = entry.endTime.split(':');
-      if (startParts.length != 2 || endParts.length != 2) continue;
-      final startMinutes = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
-      final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
-      if (currentMinutes >= startMinutes && currentMinutes < endMinutes) {
-        final duration = endMinutes - startMinutes;
-        return duration > 15;
-      }
-    }
-    // Fallback to gap detection
-    final gap = _currentGapMinutes();
-    return gap > 15;
-  }
-
   bool _isPreBootPhase() {
     if (_bedrockEntry != null || _todayTimeline.isEmpty) return false;
     final now = TimeSyncService.timeNow;
@@ -2555,21 +2534,6 @@ class _IdleScreenState extends State<IdleScreen>
     );
   }
 
-  Widget _buildTimelineSlot(int index) {
-    final entry = _todayTimeline[index];
-    final live = entry.slotId == _bedrockEntry?.slotId;
-    Log.iOnChange('timeline_strip_$index', live,
-        '[TimelineStrip] idx=$index slot=${entry.slotId} bedrock.slot=${_bedrockEntry?.slotId} isLive=$live');
-    final isCompleted = _completedSlotIds.contains(entry.slotId);
-    final isFailed = _failedSlotIds.contains(entry.slotId);
-    return TimelineSlot(
-      entry: entry,
-      isLive: live,
-      isCompleted: isCompleted,
-      isFailed: isFailed,
-    );
-  }
-
   Widget _buildFooter(Color bgColor, Color primaryColor, Color secondaryColor,
       bool isVideoActive) {
     final size = MediaQuery.of(context).size;
@@ -2639,7 +2603,7 @@ class _IdleScreenState extends State<IdleScreen>
       width: hasBreakBetween ? 2 : 1,
       height: 30,
       color: hasBreakBetween
-          ? AppColors.successLime.withValues(alpha: 0.6)
+          ? AppColors.primaryTeal.withValues(alpha: 0.6)
           : AppColors.textSecondaryDark.withValues(alpha: 0.1),
     );
   }
