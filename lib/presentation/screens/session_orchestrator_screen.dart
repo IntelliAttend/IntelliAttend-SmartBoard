@@ -41,6 +41,7 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
 
   // Runtime session objects — populated on ACTIVE transition
   WebsocketService? _wsService;
+  String? _cachedSlotId;
 
 
   @override
@@ -190,6 +191,7 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
 
   void _handleStateChange(SessionState state) {
     if (state.isActive) {
+      _cachedSlotId = TimetableCache().currentSlot?.slotId;
       _prepareActiveSession(state);
     }
   }
@@ -214,6 +216,7 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
   }
 
   void _returnToIdle() {
+    _cachedSlotId = null;
     _sessionState.reset();
   }
 
@@ -254,6 +257,7 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
           totalCapacity: widget.registration.capacity,
           courseName: state.courseName ?? 'Class',
           facultyName: state.facultyName ?? 'Professor',
+          slotId: _cachedSlotId,
           onReturnToIdle: _returnToIdle,
         );
     }

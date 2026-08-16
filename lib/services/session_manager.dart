@@ -131,6 +131,8 @@ class SessionManager {
   /// Check if there's an active session that hasn't expired.
   /// If [currentSlotId] is provided, only returns a session matching that slot.
   /// Uses lifecycle as the primary authority: only 'active' sessions are returned.
+  /// Also deduplicates: if multiple active sessions exist for the same slot,
+  /// keeps only the newest and clears the rest.
   static Future<ActiveSession?> getResumeableSession({String? currentSlotId}) async {
     ActiveSession? session;
 
@@ -147,6 +149,27 @@ class SessionManager {
         .filter()
         .lifecycleEqualTo('active')
         .findFirst();
+
+    // Deduplicate: if multiple active sessions exist for the same slot,
+    // keep only the newest (highest ID) and clear the rest.
+    if (session != null) {
+      final allActive = await _isar!.activeSessions
+          .filter()
+          .lifecycleEqualTo('active')
+          .slotIdEqualTo(session.slotId)
+          .findAll();
+      if (allActive.length > 1) {
+        // Sort by ID descending — keep the newest
+        allActive.sort((a, b) => b.id.compareTo(a.id));
+        final keep = allActive.first;
+        final discard = allActive.skip(1).toList();
+        await _isar!.writeTxn(() async {
+          await _isar!.activeSessions.deleteAll(discard.map((s) => s.id).toList());
+        });
+        Log.w('[SessionManager] Deduplicated ${discard.length} stale session(s) for slot ${session.slotId}');
+        session = keep;
+      }
+    }
 
     if (session != null) {
       Log.i('[SessionManager] Found resumeable session: ${session.sessionId} (slot: ${session.slotId})');

@@ -145,6 +145,8 @@ class DeviceRepository implements IDeviceRepository {
     final today = await getTodayTimeline();
 
     for (final entry in today) {
+      if (entry.isBreak) continue;
+      if (entry.slotType != 'regular') continue;
       if (entry.startTime.compareTo(timeStr) <= 0 &&
           timeStr.compareTo(entry.endTime) < 0) {
         return entry;

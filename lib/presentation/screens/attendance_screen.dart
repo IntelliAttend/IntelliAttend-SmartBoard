@@ -10,6 +10,7 @@ import '../../models/board_notification.dart';
 import '../../services/api_service.dart';
 import '../../services/network_info_service.dart';
 import '../../services/session_manager.dart';
+import '../../services/heartbeat_service.dart';
 import '../../services/student_service.dart';
 import '../../core/platform/kiosk_service.dart';
 import '../../core/utils/roll_number_utils.dart';
@@ -858,6 +859,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       await ApiService.terminateSession(widget.sessionId);
     } catch (e) {
       Log.e('[Attendance] Error ending session: $e');
+      HeartbeatService.enqueuePendingTermination(widget.sessionId);
     }
 
     if (!mounted) return;

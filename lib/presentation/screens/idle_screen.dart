@@ -556,8 +556,8 @@ class _IdleScreenState extends State<IdleScreen>
     if (_bedrockEntry != null || _todayTimeline.isEmpty) return false;
     final now = TimeSyncService.timeNow;
     final currentMinutes = now.hour * 60 + now.minute;
-    // Find first class slot (skip breaks)
-    final classSlots = _todayTimeline.where((e) => !e.isBreak).toList();
+    // Find first class slot (skip breaks, tutorial, library)
+    final classSlots = _todayTimeline.where((e) => !e.isBreak && e.slotType == 'regular').toList();
     if (classSlots.isEmpty) return false;
     final firstEntry = classSlots.first;
     final parts = firstEntry.startTime.split(':');
@@ -572,8 +572,8 @@ class _IdleScreenState extends State<IdleScreen>
     if (_todayTimeline.isEmpty || _bedrockEntry != null) return false;
     final now = TimeSyncService.timeNow;
     final currentMinutes = now.hour * 60 + now.minute;
-    // Find last class slot (skip breaks)
-    final classSlots = _todayTimeline.where((e) => !e.isBreak).toList();
+    // Find last class slot (skip breaks, tutorial, library)
+    final classSlots = _todayTimeline.where((e) => !e.isBreak && e.slotType == 'regular').toList();
     if (classSlots.isEmpty) return false;
     for (final entry in classSlots) {
       final parts = entry.startTime.split(':');
@@ -789,12 +789,38 @@ class _IdleScreenState extends State<IdleScreen>
     }
   }
 
-  void _checkUpcomingClass() {
+  Future<void> _checkUpcomingClass() async {
     _checkActiveSession();
     if (_todayTimeline.isEmpty) return;
 
     final now = TimeSyncService.timeNow;
     final currentMinutes = now.hour * 60 + now.minute;
+
+    // ── Next upcoming class ───────────────────────────────────────────────────
+    // Computed early so class-end cooldown, T-5 cooldown, and T-3 warm-up
+    // can all reference minDiff. Only consider class/lab slots — never break
+    // or tutorial/library slots.
+    TimetableEntry? nextEntry;
+    int minDiff = 9999;
+
+    for (final entry in _todayTimeline) {
+      if (entry.isBreak) continue;
+      if (entry.slotType != 'regular') continue;
+      final parts = entry.startTime.split(':');
+      if (parts.length != 2) continue;
+
+      int entryMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
+      int diff = entryMinutes - currentMinutes;
+
+      if (diff < _midnightWrapThreshold) {
+        diff += _minutesPerDay;
+      }
+
+      if (diff > 0 && diff < minDiff) {
+        minDiff = diff;
+        nextEntry = entry;
+      }
+    }
 
     // ── Slot Transition Detection ─────────────────────────────────────────
     // When the active slot changes (e.g. P2 ends, P3 begins), reset warm-up
@@ -853,6 +879,19 @@ class _IdleScreenState extends State<IdleScreen>
       _lastBedrockSlotId = null;
       _preFlightSessionSubscription?.cancel();
 
+      // Skip cooldown entirely when the next class starts within 2 minutes.
+      // This prevents the 2-minute hard freeze from blocking the incoming
+      // class's T-3 warm-up window (back-to-back classes scenario).
+      if (minDiff <= 2) {
+        Log.i('[Idle] Class ended but next class in $minDiff min — skipping cooldown.');
+        // Essential cleanup only: wipe completed sessions, reset tracking.
+        await SessionManager.clearCompletedSessionsForDay(TimeSyncService.timeNow.weekday);
+        WindowOrchestratorService().resetAttendanceTracking();
+        _evaluateNextClass();
+        if (mounted) setState(() {});
+        return;
+      }
+
       // Start 2-minute hard cooldown only if attendance was NOT taken and
       // the cooldown hasn't already fired for this slot (prevents T-5 + class-end
       // double-fire and guards against 10s-timer re-entry after the first cycle).
@@ -872,30 +911,6 @@ class _IdleScreenState extends State<IdleScreen>
       _lastBedrockSlotId = null;
     }
 
-    // ── Next upcoming class ───────────────────────────────────────────────────
-    // Computed early so both T-5 cooldown and T-3 warm-up can reference it.
-    // Only consider class/lab slots — never break slots.
-    TimetableEntry? nextEntry;
-    int minDiff = 9999;
-
-    for (final entry in _todayTimeline) {
-      if (entry.isBreak) continue;  // Skip break slots
-      final parts = entry.startTime.split(':');
-      if (parts.length != 2) continue;
-
-      int entryMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
-      int diff = entryMinutes - currentMinutes;
-
-      if (diff < _midnightWrapThreshold) {
-        diff += _minutesPerDay;
-      }
-
-      if (diff > 0 && diff < minDiff) {
-        minDiff = diff;
-        nextEntry = entry;
-      }
-    }
-
     // ── T-5 proactive cooldown ──────────────────────────────────────────────
     // If the current class is within 5 minutes of its scheduled end time and
     // attendance has NOT been taken locally, start the 2-minute hard cooldown
@@ -912,8 +927,8 @@ class _IdleScreenState extends State<IdleScreen>
     // already succeeded for the next class; starting a cooldown would wipe
     // that pre-allocated session and force a redundant re-warm-up cycle.
     //
-    // Also skip when minDiff <= 3 — the next class T-3 window is active or
-    // imminent; the cooldown would block the warm-up and create a loop.
+    // Also skip when minDiff <= 2 — the next class is imminent; starting a
+    // cooldown would block the warm-up and create a loop.
     // FIX: Also skip when _activeSession is non-null — the session is still
     // in progress and starting cooldown would destroy crash-recovery state.
     Log.iThrottled('t5_check',
@@ -923,7 +938,7 @@ class _IdleScreenState extends State<IdleScreen>
         _preAllocatedSessionId == null &&
         _upcomingAllocatedSessionId == null &&
         _activeSession == null &&
-        minDiff > 3) {
+        minDiff > 2) {
       final endParts = _bedrockEntry!.endTime.split(':');
       if (endParts.length == 2) {
         final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
@@ -1050,7 +1065,7 @@ class _IdleScreenState extends State<IdleScreen>
       _isReadyCheckDone = false;
 
       if (nextEntry != null && minDiff <= 10) {
-        final classSlots = _todayTimeline.where((e) => !e.isBreak).toList();
+        final classSlots = _todayTimeline.where((e) => !e.isBreak && e.slotType == 'regular').toList();
         final bool isFirstClass = classSlots.isNotEmpty &&
             classSlots.first.slotId == nextEntry.slotId;
         if (isFirstClass) {
@@ -1232,6 +1247,7 @@ class _IdleScreenState extends State<IdleScreen>
         _breakSecondsRemaining--;
         if (_breakSecondsRemaining <= 0) {
           _breakTimer?.cancel();
+          _breakTimer = null;
           _breakSecondsRemaining = 0;
         }
       });
@@ -1326,7 +1342,8 @@ class _IdleScreenState extends State<IdleScreen>
     int minDiff = 9999;
 
     for (final entry in _todayTimeline) {
-      if (entry.isBreak) continue;  // Skip break slots
+      if (entry.isBreak) continue;
+      if (entry.slotType != 'regular') continue;
       final parts = entry.startTime.split(':');
       if (parts.length != 2) continue;
       int entryMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
@@ -1343,7 +1360,7 @@ class _IdleScreenState extends State<IdleScreen>
 
     // T-10 daily boot (first class only)
     if (minDiff <= 10) {
-      final classSlots = _todayTimeline.where((e) => !e.isBreak).toList();
+      final classSlots = _todayTimeline.where((e) => !e.isBreak && e.slotType == 'regular').toList();
       final bool isFirstClass = classSlots.isNotEmpty &&
           classSlots.first.slotId == nextEntry.slotId;
       if (isFirstClass) {
@@ -1364,6 +1381,14 @@ class _IdleScreenState extends State<IdleScreen>
   }
 
   void _triggerWarmUp(String slotId, {bool force = false}) async {
+    // Guard: don't trigger another warm-up if a session is already allocated
+    // for any slot. This prevents race conditions where multiple timer ticks
+    // allocate duplicate sessions for the same or different slots.
+    if (!force && (_preAllocatedSessionId != null || _upcomingAllocatedSessionId != null)) {
+      Log.i('[Idle] Warm-up skipped for $slotId — session already allocated (preAlloc=$_preAllocatedSessionId upAlloc=$_upcomingAllocatedSessionId)');
+      return;
+    }
+
     final isForUpcoming =
         slotId == _upcomingSlot?.slotId && slotId != _bedrockEntry?.slotId;
     final currentId = _bedrockEntry?.slotId;
@@ -2450,8 +2475,8 @@ class _IdleScreenState extends State<IdleScreen>
     final double footerHeight = (size.height * 0.1).clamp(70.0, 100.0);
     final double hPad = (size.width * 0.03).clamp(16.0, 40.0);
 
-    // Filter to only class/lab slots (no breaks)
-    final classSlots = _todayTimeline.where((e) => !e.isBreak).toList();
+    // Filter to only class/lab slots (no breaks, tutorial, library)
+    final classSlots = _todayTimeline.where((e) => !e.isBreak && e.slotType == 'regular').toList();
 
     return Container(
       height: footerHeight,

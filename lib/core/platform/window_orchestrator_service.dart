@@ -5,6 +5,8 @@ import 'notification_service.dart';
 import '../../services/time_sync_service.dart';
 import '../../services/api_service.dart';
 import '../../services/session_state_service.dart';
+import '../../services/session_manager.dart';
+import '../state/board_state_machine.dart';
 import '../utils/logger.dart';
 import '../../main.dart';
 
@@ -97,7 +99,10 @@ class WindowOrchestratorService {
       //     Flutter engine on Windows.
       await KioskService.ensureFullscreen();
 
-      final todaySlots = await globalDeviceRepository.getTodayTimeline();
+      final allTodaySlots = await globalDeviceRepository.getTodayTimeline();
+      if (allTodaySlots.isEmpty) return;
+      // Filter to only regular class/lab slots — skip breaks, tutorial, library
+      final todaySlots = allTodaySlots.where((s) => !s.isBreak && s.slotType == 'regular').toList();
       if (todaySlots.isEmpty) return;
 
       // ── First-class pre-boot at T-3 (not T-10) ──────────────────────────
@@ -202,6 +207,33 @@ class WindowOrchestratorService {
               await ApiService.terminateSession(sessionState.sessionId);
             } catch (e) {
               Log.e('[Orchestrator] Auto-close API failed: $e');
+            }
+          }
+        }
+      }
+
+      // ── Safety net: auto-terminate if currentSlot is null (break period)
+      //    but a session is still active past its scheduled end time.
+      //    This handles the case where getCurrentSlot() returns null because
+      //    we're in a break/tutorial/library slot, but a session from the
+      //    previous class was never ended.
+      //    Guard: skip if BoardState is active — the user is on AttendanceScreen
+      //    actively marking attendance; terminating would interrupt them.
+      if (currentSlot == null) {
+        final sessionState = SessionStateService().currentState;
+        final boardState = BoardStateMachine().currentState;
+        if (sessionState.isActive && boardState != BoardState.active) {
+          // Look up the session's scheduled end time from Isar
+          final session = await SessionManager.getResumeableSession();
+          if (session != null && now.isAfter(session.scheduledEndTime)) {
+            if (!_autoClosedSlots.contains(session.slotId)) {
+              _autoClosedSlots.add(session.slotId);
+              Log.i('[Orchestrator] Safety-net auto-closing session ${session.sessionId} — past scheduled end during break');
+              try {
+                await ApiService.terminateSession(session.sessionId);
+              } catch (e) {
+                Log.e('[Orchestrator] Safety-net auto-close API failed: $e');
+              }
             }
           }
         }

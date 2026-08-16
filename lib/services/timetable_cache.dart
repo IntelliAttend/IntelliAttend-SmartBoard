@@ -25,9 +25,10 @@ class TimetableCache extends ChangeNotifier {
     final now = TimeSyncService.timeNow;
     final currentMinutes = now.hour * 60 + now.minute;
 
-    // Only return class/lab slots — never break slots
+    // Only return regular class/lab slots — never break, tutorial, or library slots
     for (final entry in todayTimeline) {
       if (entry.isBreak) continue;
+      if (entry.slotType != 'regular') continue;
       final startParts = entry.startTime.split(':');
       final endParts = entry.endTime.split(':');
       if (startParts.length != 2 || endParts.length != 2) continue;
