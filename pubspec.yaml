@@ -54,7 +54,7 @@ dependencies:
   logger: ^2.0.2+1
 
   # Observability (crash reporting + performance monitoring)
-  sentry: ^8.14.2
+  sentry: ">=8.14.2 <10.0.0"
 
   # Audio
   audioplayers: ^6.4.0
