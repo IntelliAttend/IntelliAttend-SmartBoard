@@ -557,7 +557,7 @@ class _IdleScreenState extends State<IdleScreen>
     final now = TimeSyncService.timeNow;
     final currentMinutes = now.hour * 60 + now.minute;
     // Find first class slot (skip breaks, tutorial, library)
-    final classSlots = _todayTimeline.where((e) => !e.isBreak && e.slotType == 'regular').toList();
+    final classSlots = _todayTimeline.where((e) => !e.isBreak && e.slotType != 'tutorial' && e.slotType != 'library').toList();
     if (classSlots.isEmpty) return false;
     final firstEntry = classSlots.first;
     final parts = firstEntry.startTime.split(':');
@@ -573,7 +573,7 @@ class _IdleScreenState extends State<IdleScreen>
     final now = TimeSyncService.timeNow;
     final currentMinutes = now.hour * 60 + now.minute;
     // Find last class slot (skip breaks, tutorial, library)
-    final classSlots = _todayTimeline.where((e) => !e.isBreak && e.slotType == 'regular').toList();
+    final classSlots = _todayTimeline.where((e) => !e.isBreak && e.slotType != 'tutorial' && e.slotType != 'library').toList();
     if (classSlots.isEmpty) return false;
     for (final entry in classSlots) {
       final parts = entry.startTime.split(':');
@@ -805,7 +805,7 @@ class _IdleScreenState extends State<IdleScreen>
 
     for (final entry in _todayTimeline) {
       if (entry.isBreak) continue;
-      if (entry.slotType != 'regular') continue;
+      if (entry.slotType == 'tutorial' || entry.slotType == 'library') continue;
       final parts = entry.startTime.split(':');
       if (parts.length != 2) continue;
 
@@ -1065,7 +1065,7 @@ class _IdleScreenState extends State<IdleScreen>
       _isReadyCheckDone = false;
 
       if (nextEntry != null && minDiff <= 10) {
-        final classSlots = _todayTimeline.where((e) => !e.isBreak && e.slotType == 'regular').toList();
+        final classSlots = _todayTimeline.where((e) => !e.isBreak && e.slotType != 'tutorial' && e.slotType != 'library').toList();
         final bool isFirstClass = classSlots.isNotEmpty &&
             classSlots.first.slotId == nextEntry.slotId;
         if (isFirstClass) {
@@ -1343,7 +1343,7 @@ class _IdleScreenState extends State<IdleScreen>
 
     for (final entry in _todayTimeline) {
       if (entry.isBreak) continue;
-      if (entry.slotType != 'regular') continue;
+      if (entry.slotType == 'tutorial' || entry.slotType == 'library') continue;
       final parts = entry.startTime.split(':');
       if (parts.length != 2) continue;
       int entryMinutes = int.parse(parts[0]) * 60 + int.parse(parts[1]);
@@ -1360,7 +1360,7 @@ class _IdleScreenState extends State<IdleScreen>
 
     // T-10 daily boot (first class only)
     if (minDiff <= 10) {
-      final classSlots = _todayTimeline.where((e) => !e.isBreak && e.slotType == 'regular').toList();
+      final classSlots = _todayTimeline.where((e) => !e.isBreak && e.slotType != 'tutorial' && e.slotType != 'library').toList();
       final bool isFirstClass = classSlots.isNotEmpty &&
           classSlots.first.slotId == nextEntry.slotId;
       if (isFirstClass) {
@@ -2476,7 +2476,7 @@ class _IdleScreenState extends State<IdleScreen>
     final double hPad = (size.width * 0.03).clamp(16.0, 40.0);
 
     // Filter to only class/lab slots (no breaks, tutorial, library)
-    final classSlots = _todayTimeline.where((e) => !e.isBreak && e.slotType == 'regular').toList();
+    final classSlots = _todayTimeline.where((e) => !e.isBreak && e.slotType != 'tutorial' && e.slotType != 'library').toList();
 
     return Container(
       height: footerHeight,

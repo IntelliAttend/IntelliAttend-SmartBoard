@@ -102,7 +102,7 @@ class WindowOrchestratorService {
       final allTodaySlots = await globalDeviceRepository.getTodayTimeline();
       if (allTodaySlots.isEmpty) return;
       // Filter to only regular class/lab slots — skip breaks, tutorial, library
-      final todaySlots = allTodaySlots.where((s) => !s.isBreak && s.slotType == 'regular').toList();
+      final todaySlots = allTodaySlots.where((s) => !s.isBreak && s.slotType != 'tutorial' && s.slotType != 'library').toList();
       if (todaySlots.isEmpty) return;
 
       // ── First-class pre-boot at T-3 (not T-10) ──────────────────────────

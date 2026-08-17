@@ -107,7 +107,7 @@ class PreFlightService {
           "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
 
       final nextSlot = todaySlots
-          .where((s) => s.startTime.compareTo(timeStr) > 0 && !s.isBreak && s.slotType == 'regular')
+          .where((s) => s.startTime.compareTo(timeStr) > 0 && !s.isBreak && s.slotType != 'tutorial' && s.slotType != 'library')
           .firstOrNull;
       if (nextSlot == null) return;
 

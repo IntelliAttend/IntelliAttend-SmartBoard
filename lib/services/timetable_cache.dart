@@ -28,7 +28,7 @@ class TimetableCache extends ChangeNotifier {
     // Only return regular class/lab slots — never break, tutorial, or library slots
     for (final entry in todayTimeline) {
       if (entry.isBreak) continue;
-      if (entry.slotType != 'regular') continue;
+      if (entry.slotType == 'tutorial' || entry.slotType == 'library') continue;
       final startParts = entry.startTime.split(':');
       final endParts = entry.endTime.split(':');
       if (startParts.length != 2 || endParts.length != 2) continue;
