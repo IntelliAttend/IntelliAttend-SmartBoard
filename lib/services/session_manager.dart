@@ -203,6 +203,57 @@ class SessionManager {
     Log.i('[SessionManager] Session $sessionId lifecycle set to completed');
   }
 
+  /// Resume a session from server state when Isar is empty (e.g. after restart).
+  /// Creates an ActiveSession in Isar with data from the server.
+  static Future<void> resumeFromServer({
+    required String sessionId,
+    String sectionId = '',
+    String courseCode = '',
+    String facultyId = '',
+    String roomId = '',
+    String slotId = '',
+  }) async {
+    try {
+      // Check if already exists in Isar
+      final existing = await _isar!.activeSessions
+          .filter()
+          .sessionIdEqualTo(sessionId)
+          .findFirst();
+      if (existing != null) {
+        Log.i('[SessionManager] Session $sessionId already in Isar — skipping resume.');
+        return;
+      }
+
+      // Calculate scheduled end time from slot
+      final scheduledEnd = _computeScheduledEndTime(slotId);
+
+      final session = ActiveSession()
+        ..sessionId = sessionId
+        ..slotId = slotId
+        ..scheduledEndTime = scheduledEnd
+        ..facultyName = facultyId
+        ..courseName = courseCode
+        ..sectionId = sectionId
+        ..rosterCount = 0
+        ..lifecycle = 'active';
+
+      await _isar!.writeTxn(() async {
+        await _isar!.activeSessions.put(session);
+      });
+
+      Log.i('[SessionManager] Resumed session $sessionId from server (slot: $slotId)');
+    } catch (e) {
+      Log.e('[SessionManager] Failed to resume from server: $e');
+    }
+  }
+
+  /// Compute scheduled end time from slot ID (approximate).
+  static DateTime _computeScheduledEndTime(String slotId) {
+    // Default: 60 minutes from now if we can't determine the slot
+    final now = DateTime.now();
+    return now.add(const Duration(minutes: 60));
+  }
+
   // REPLACED BY VOLATILE MEMORY LOGIC in v5.2
   // static Future<String?> getSessionSecret(String sessionId) async { ... }
 

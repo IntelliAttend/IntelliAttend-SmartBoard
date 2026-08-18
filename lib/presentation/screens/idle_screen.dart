@@ -787,6 +787,83 @@ class _IdleScreenState extends State<IdleScreen>
         _sessionStartTimestamp = _computeSessionStartTime(session.slotId);
       });
       _startSessionProgressTimer();
+
+      // Verify with server in background — if server closed this session,
+      // clear local state. Non-blocking so board works offline.
+      _verifySessionWithServer(session.sessionId);
+    } else if (mounted) {
+      // Isar empty — check server for active session (server restart recovery)
+      _discoverSessionFromServer();
+    }
+  }
+
+  /// Check server for active session when Isar has none (e.g. after restart).
+  /// If server has an active session for this board, resume it locally.
+  Future<void> _discoverSessionFromServer() async {
+    try {
+      final response = await ApiService.getActiveSession();
+      if (!mounted) return;
+
+      final serverActive = response['active'] as bool? ?? false;
+      final serverSessionId = response['session_id'] as String?;
+
+      if (serverActive && serverSessionId != null) {
+        Log.i('[Idle] Server has active session $serverSessionId — resuming locally.');
+        // Re-create the session in Isar from server state
+        await SessionManager.resumeFromServer(
+          sessionId: serverSessionId,
+          sectionId: response['section_id'] as String? ?? '',
+          courseCode: response['course_code'] as String? ?? '',
+          facultyId: response['faculty_id'] as String? ?? '',
+          roomId: response['room_id'] as String? ?? '',
+          slotId: response['slot_id']?.toString() ?? '',
+        );
+        final session = await SessionManager.getResumeableSession(
+          currentSlotId: _bedrockEntry?.slotId,
+        );
+        if (session != null && mounted) {
+          setState(() {
+            _activeSession = session;
+            _showMinimizeButton = true;
+            _sessionScheduledEnd = session.scheduledEndTime;
+            _sessionStartTimestamp = _computeSessionStartTime(session.slotId);
+          });
+          _startSessionProgressTimer();
+        }
+      }
+    } catch (e) {
+      // Network unavailable — board works offline, no session to resume
+      Log.d('[Idle] Server discovery skipped (offline): $e');
+    }
+  }
+
+  /// Verify resumed session with server. If server says no active session,
+  /// clear local state. Non-blocking — fails silently for offline boards.
+  Future<void> _verifySessionWithServer(String sessionId) async {
+    try {
+      final response = await ApiService.getActiveSession();
+      if (!mounted) return;
+
+      final serverActive = response['active'] as bool? ?? false;
+      final serverSessionId = response['session_id'] as String?;
+
+      if (!serverActive || serverSessionId != sessionId) {
+        Log.i('[Idle] Server has no active session for this board (server=$serverSessionId, local=$sessionId) — clearing local.');
+        await SessionManager.markSessionCompleted(sessionId);
+        if (mounted) {
+          setState(() {
+            _activeSession = null;
+            _sessionStartTimestamp = null;
+            _sessionScheduledEnd = null;
+            _stopSessionProgressTimer();
+          });
+        }
+      } else {
+        Log.i('[Idle] Server confirmed session $sessionId is active.');
+      }
+    } catch (e) {
+      // Network unavailable or error — trust local state (offline-first)
+      Log.d('[Idle] Server verification skipped (offline): $e');
     }
   }
 
