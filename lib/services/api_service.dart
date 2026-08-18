@@ -305,8 +305,6 @@ class ApiService {
 
   static Future<Map<String, dynamic>> initiateSessionWithPin({
     required String pin,
-    required String facultyId,
-    required String slotId,
   }) async {
     final response = await _request(
       'POST',
@@ -314,8 +312,6 @@ class ApiService {
       headers: await _authHeaders(),
       body: jsonEncode({
         'pin': pin,
-        'faculty_id': facultyId,
-        'slot_id': slotId,
       }),
     );
 

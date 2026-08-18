@@ -93,7 +93,6 @@ class _IdleScreenState extends State<IdleScreen>
       {}; // Subset of completed slots where the session failed
   bool _isKeypadExpanded = false; // Controls OTP keypad expansion state
   bool _isPinMode = true; // true = faculty PIN (6 digits), false = OTP (4 digits)
-  final TextEditingController _facultyIdController = TextEditingController();
 
   NetworkInfo _networkInfo = NetworkInfo(isConnected: false, lastChecked: DateTime.now());
   StreamSubscription<NetworkInfo>? _networkSub;
@@ -1518,19 +1517,9 @@ class _IdleScreenState extends State<IdleScreen>
     final code = _otpController.text.trim();
 
     if (_isPinMode) {
-      // PIN mode: 6-digit faculty PIN + faculty ID + slot ID
+      // PIN mode: 6-digit faculty PIN (server resolves faculty + slot)
       if (code.length != 6) {
         setState(() => _errorMessage = 'Please enter a valid 6-digit PIN');
-        return;
-      }
-      final facultyId = _facultyIdController.text.trim();
-      if (facultyId.isEmpty) {
-        setState(() => _errorMessage = 'Please enter your Faculty ID');
-        return;
-      }
-      final slotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
-      if (slotId == null) {
-        setState(() => _errorMessage = 'No active class found. Please wait for the scheduled time.');
         return;
       }
 
@@ -1546,14 +1535,12 @@ class _IdleScreenState extends State<IdleScreen>
       });
       try {
         _otpController.clear();
-        _facultyIdController.clear();
 
         final result = await ApiService.initiateSessionWithPin(
           pin: code,
-          facultyId: facultyId,
-          slotId: slotId,
         );
         RateLimiter.reset(rateKey);
+        final slotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
         await _processSessionResponse(result, slotId);
       } catch (e) {
         if (mounted) {
@@ -2398,45 +2385,6 @@ class _IdleScreenState extends State<IdleScreen>
             ),
           ),
           SizedBox(height: verticalGap),
-          // Faculty ID input (PIN mode only)
-          if (_isPinMode) ...[
-            SizedBox(
-              width: double.infinity,
-              height: buttonHeight,
-              child: TextField(
-                controller: _facultyIdController,
-                style: GoogleFonts.jetBrainsMono(
-                  fontSize: buttonFontSize,
-                  color: primaryColor,
-                ),
-                decoration: InputDecoration(
-                  hintText: 'Faculty ID (e.g. s_shekar)',
-                  hintStyle: TextStyle(
-                    color: secondaryColor.withValues(alpha: 0.5),
-                    fontSize: bodyFontSize,
-                  ),
-                  prefixIcon: Icon(Icons.person_outline,
-                      size: iconSize, color: secondaryColor),
-                  filled: true,
-                  fillColor: bgColor.withValues(alpha: 0.5),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: primaryColor.withValues(alpha: 0.1)),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: primaryColor.withValues(alpha: 0.1)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: AppColors.primaryTeal, width: 1.5),
-                  ),
-                ),
-              ),
-            ),
-            SizedBox(height: verticalGap),
-          ],
           GestureDetector(
             onTap: () {
               setState(() => _isKeypadExpanded = !_isKeypadExpanded);
@@ -2537,7 +2485,6 @@ class _IdleScreenState extends State<IdleScreen>
                 setState(() {
                   _isPinMode = !_isPinMode;
                   _otpController.clear();
-                  _facultyIdController.clear();
                   _errorMessage = null;
                 });
               },
