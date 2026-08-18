@@ -303,6 +303,40 @@ class ApiService {
     throw ApiException(userMessage, response.statusCode);
   }
 
+  static Future<Map<String, dynamic>> initiateSessionWithPin({
+    required String pin,
+    required String facultyId,
+    required String slotId,
+  }) async {
+    final response = await _request(
+      'POST',
+      'api/v1/board/session/initiate',
+      headers: await _authHeaders(),
+      body: jsonEncode({
+        'pin': pin,
+        'faculty_id': facultyId,
+        'slot_id': slotId,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    String? serverMessage;
+    try {
+      final data = jsonDecode(response.body);
+      serverMessage = data['message']?.toString() ??
+          data['error']?.toString() ??
+          data['error_code']?.toString();
+    } catch (_) {}
+
+    final userMessage =
+        serverMessage ?? _userFriendlyMessage(response.statusCode);
+    Log.e('PIN session initiation failed (${response.statusCode}): $userMessage');
+    throw ApiException(userMessage, response.statusCode);
+  }
+
   // ─── Recovery & Boot (Session Orchestration) ────────────────────────────
 
   static Future<Map<String, dynamic>> getCurrentState() async {

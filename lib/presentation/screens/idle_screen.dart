@@ -92,6 +92,8 @@ class _IdleScreenState extends State<IdleScreen>
   final Set<String> _failedSlotIds =
       {}; // Subset of completed slots where the session failed
   bool _isKeypadExpanded = false; // Controls OTP keypad expansion state
+  bool _isPinMode = true; // true = faculty PIN (6 digits), false = OTP (4 digits)
+  final TextEditingController _facultyIdController = TextEditingController();
 
   NetworkInfo _networkInfo = NetworkInfo(isConnected: false, lastChecked: DateTime.now());
   StreamSubscription<NetworkInfo>? _networkSub;
@@ -1513,153 +1515,223 @@ class _IdleScreenState extends State<IdleScreen>
   }
 
   Future<void> _handleVerifyOtp() async {
-    final otp = _otpController.text.trim();
-    if (otp.length != 4) {
-      setState(() => _errorMessage = 'Please enter a valid 4-digit PIN');
-      return;
-    }
+    final code = _otpController.text.trim();
 
-    // Try pre-flight warm-up once if session ID is missing. If retries
-    // exhausted, fall back to the session ID from the initiateSession API.
-    if (_preAllocatedSessionId == null && _upcomingAllocatedSessionId == null) {
-      if (_upcomingSlot != null) {
-        _triggerWarmUp(_upcomingSlot!.slotId, force: true);
+    if (_isPinMode) {
+      // PIN mode: 6-digit faculty PIN + faculty ID + slot ID
+      if (code.length != 6) {
+        setState(() => _errorMessage = 'Please enter a valid 6-digit PIN');
+        return;
       }
-      if (_preAllocatedSessionId == null &&
-          _upcomingAllocatedSessionId == null) {
-        Log.w(
-            '[Idle] Pre-flight unavailable. Faculty may proceed with API-provided session ID.');
+      final facultyId = _facultyIdController.text.trim();
+      if (facultyId.isEmpty) {
+        setState(() => _errorMessage = 'Please enter your Faculty ID');
+        return;
       }
-    }
-
-    final rateKey = 'session_pin_${widget.registration.smartBoardId}';
-    if (!RateLimiter.isAllowed(rateKey)) {
-      setState(() => _errorMessage =
-          'Too many attempts. Please wait before trying again.');
-      return;
-    }
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-    try {
-      // Strict OTP Protocol: OTP must never be stored. The text controller is
-      // cleared the instant the API call fires — before waiting for a response.
-      _otpController.clear();
-
-      final result = await ApiService.initiateSession(otp);
-      RateLimiter.reset(rateKey);
-      final data = result['data'] ?? result;
-
-      // Pre-allocated session ID from warm-up is authoritative if available.
-      // Fall back to the API response when retries were exhausted.
-      final sessionId = _preAllocatedSessionId ??
-          _upcomingAllocatedSessionId ??
-          data['session_id']?.toString();
-
-      final sessionSecret = await _deriveSecret(data);
-
-      final rosterCount = data['roster_count'] is int
-          ? data['roster_count']
-          : int.tryParse(data['roster_count']?.toString() ?? '0') ?? 0;
-      final facultyName = data['faculty_name']?.toString() ?? 'Professor';
-      final courseName = data['course_name']?.toString() ?? 'Active Class';
-      final sectionId =
-          data['section_id']?.toString() ?? data['context_ids']?['section_id']?.toString() ?? widget.registration.smartBoardId;
-      if (sessionId == null || sessionSecret == null) {
-        setState(() => _errorMessage =
-            'Invalid server response: missing session data. Please try again with a new PIN.');
+      final slotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
+      if (slotId == null) {
+        setState(() => _errorMessage = 'No active class found. Please wait for the scheduled time.');
         return;
       }
 
-      final slotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
+      final rateKey = 'session_pin_${widget.registration.smartBoardId}';
+      if (!RateLimiter.isAllowed(rateKey)) {
+        setState(() => _errorMessage =
+            'Too many attempts. Please wait before trying again.');
+        return;
+      }
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+      try {
+        _otpController.clear();
+        _facultyIdController.clear();
 
-      final scheduledEndTime = _computeSlotEndTime(slotId);
-
-      await SessionManager.saveSession(
-        sessionId: sessionId,
-        rosterCount: rosterCount,
-        facultyName: facultyName,
-        courseName: courseName,
-        sectionId: sectionId,
-        endTime: scheduledEndTime,
-        slotId: slotId ?? '',
-      );
-
-      // Persist a CompletedSession record immediately so the slot is marked
-      // as attended even if the app is killed mid-QR-rotation. Prevents a
-      // second OTP entry for the same slot on restart. The actual attendee
-      // count is updated when SummaryScreen._persistCompletedSession runs.
-      if (slotId != null) {
-        await SessionManager.recordCompletedSession(
+        final result = await ApiService.initiateSessionWithPin(
+          pin: code,
+          facultyId: facultyId,
           slotId: slotId,
-          sessionId: sessionId,
-          courseName: courseName,
-          facultyName: facultyName,
-          attendeeCount: 0,
         );
-        WindowOrchestratorService().markAttendanceTaken(slotId);
+        RateLimiter.reset(rateKey);
+        await _processSessionResponse(result, slotId);
+      } catch (e) {
         if (mounted) {
-          setState(() => _completedSlotIds.add(slotId));
-        }
-      }
-
-      MetricsCollector().recordSessionStart();
-      await SecureStorageService.storeSessionSecret(sessionId, sessionSecret);
-
-      // Session is now live — clear the in-memory pre-allocated IDs so they
-      // cannot be accidentally reused if the board returns to IdleScreen.
-      if (mounted) {
-        setState(() {
-          _preAllocatedSessionId = null;
-          _upcomingAllocatedSessionId = null;
-          _showMinimizeButton = true;
-          _forceShowCard = false;
-          _isKeypadExpanded = false;
-          _showSessionMenu = false;
-        });
-      }
-
-      if (mounted) {
-        final now = TimeSyncService.timeNow;
-        final activeSession = ActiveSession()
-          ..sessionId = sessionId
-          ..slotId = slotId ?? ''
-          ..courseName = courseName
-          ..facultyName = facultyName
-          ..sectionId = sectionId
-          ..rosterCount = rosterCount
-          ..scheduledEndTime = scheduledEndTime
-          ..presentIndices = []
-          ..absentIndices = []
-          ..verifiedStudentIds = [];
-        setState(() {
-          _activeSession = activeSession;
-          _sessionStartTimestamp = now;
-          _sessionScheduledEnd = scheduledEndTime;
-        });
-        _startSessionProgressTimer();
-      }
-    } catch (e) {
-      if (mounted) {
-        if (e is UnregisteredException) {
-          Log.w(
-              '🚨 [IdleScreen] Device unregistered on server. Redirecting to Registration...');
-          await context.read<IDeviceRepository>().clearRegistration();
-          if (mounted) {
-            Navigator.of(context).pushAndRemoveUntil(
-              MaterialPageRoute(
-                  builder: (context) => const RegistrationScreen()),
-              (route) => false,
-            );
+          if (e is UnregisteredException) {
+            Log.w(
+                '🚨 [IdleScreen] Device unregistered on server. Redirecting to Registration...');
+            await context.read<IDeviceRepository>().clearRegistration();
+            if (mounted) {
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(
+                    builder: (context) => const RegistrationScreen()),
+                (route) => false,
+              );
+            }
+          } else {
+            setState(() =>
+                _errorMessage = e.toString().replaceFirst('Exception: ', ''));
           }
-        } else {
-          setState(() =>
-              _errorMessage = e.toString().replaceFirst('Exception: ', ''));
+        }
+      } finally {
+        if (mounted) setState(() => _isLoading = false);
+      }
+    } else {
+      // OTP mode: 4-digit OTP (existing flow)
+      if (code.length != 4) {
+        setState(() => _errorMessage = 'Please enter a valid 4-digit PIN');
+        return;
+      }
+
+      // Try pre-flight warm-up once if session ID is missing. If retries
+      // exhausted, fall back to the session ID from the initiateSession API.
+      if (_preAllocatedSessionId == null && _upcomingAllocatedSessionId == null) {
+        if (_upcomingSlot != null) {
+          _triggerWarmUp(_upcomingSlot!.slotId, force: true);
+        }
+        if (_preAllocatedSessionId == null &&
+            _upcomingAllocatedSessionId == null) {
+          Log.w(
+              '[Idle] Pre-flight unavailable. Faculty may proceed with API-provided session ID.');
         }
       }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
+
+      final rateKey = 'session_pin_${widget.registration.smartBoardId}';
+      if (!RateLimiter.isAllowed(rateKey)) {
+        setState(() => _errorMessage =
+            'Too many attempts. Please wait before trying again.');
+        return;
+      }
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+      try {
+        // Strict OTP Protocol: OTP must never be stored. The text controller is
+        // cleared the instant the API call fires — before waiting for a response.
+        _otpController.clear();
+
+        final result = await ApiService.initiateSession(code);
+        RateLimiter.reset(rateKey);
+        final slotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
+        await _processSessionResponse(result, slotId);
+      } catch (e) {
+        if (mounted) {
+          if (e is UnregisteredException) {
+            Log.w(
+                '🚨 [IdleScreen] Device unregistered on server. Redirecting to Registration...');
+            await context.read<IDeviceRepository>().clearRegistration();
+            if (mounted) {
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(
+                    builder: (context) => const RegistrationScreen()),
+                (route) => false,
+              );
+            }
+          } else {
+            setState(() =>
+                _errorMessage = e.toString().replaceFirst('Exception: ', ''));
+          }
+        }
+      } finally {
+        if (mounted) setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  /// Process the session initiation response (shared by OTP and PIN flows).
+  Future<void> _processSessionResponse(
+    Map<String, dynamic> result,
+    String? slotId,
+  ) async {
+    final data = result['data'] ?? result;
+
+    // Pre-allocated session ID from warm-up is authoritative if available.
+    // Fall back to the API response when retries were exhausted.
+    final sessionId = _preAllocatedSessionId ??
+        _upcomingAllocatedSessionId ??
+        data['session_id']?.toString();
+
+    final sessionSecret = await _deriveSecret(data);
+
+    final rosterCount = data['roster_count'] is int
+        ? data['roster_count']
+        : int.tryParse(data['roster_count']?.toString() ?? '0') ?? 0;
+    final facultyName = data['faculty_name']?.toString() ?? 'Professor';
+    final courseName = data['course_name']?.toString() ?? 'Active Class';
+    final sectionId =
+        data['section_id']?.toString() ?? data['context_ids']?['section_id']?.toString() ?? widget.registration.smartBoardId;
+    if (sessionId == null || sessionSecret == null) {
+      setState(() => _errorMessage =
+          'Invalid server response: missing session data. Please try again with a new code.');
+      return;
+    }
+
+    final scheduledEndTime = _computeSlotEndTime(slotId);
+
+    await SessionManager.saveSession(
+      sessionId: sessionId,
+      rosterCount: rosterCount,
+      facultyName: facultyName,
+      courseName: courseName,
+      sectionId: sectionId,
+      endTime: scheduledEndTime,
+      slotId: slotId ?? '',
+    );
+
+    // Persist a CompletedSession record immediately so the slot is marked
+    // as attended even if the app is killed mid-QR-rotation. Prevents a
+    // second OTP entry for the same slot on restart. The actual attendee
+    // count is updated when SummaryScreen._persistCompletedSession runs.
+    if (slotId != null) {
+      await SessionManager.recordCompletedSession(
+        slotId: slotId,
+        sessionId: sessionId,
+        courseName: courseName,
+        facultyName: facultyName,
+        attendeeCount: 0,
+      );
+      WindowOrchestratorService().markAttendanceTaken(slotId);
+      if (mounted) {
+        setState(() => _completedSlotIds.add(slotId));
+      }
+    }
+
+    MetricsCollector().recordSessionStart();
+    await SecureStorageService.storeSessionSecret(sessionId, sessionSecret);
+
+    // Session is now live — clear the in-memory pre-allocated IDs so they
+    // cannot be accidentally reused if the board returns to IdleScreen.
+    if (mounted) {
+      setState(() {
+        _preAllocatedSessionId = null;
+        _upcomingAllocatedSessionId = null;
+        _showMinimizeButton = true;
+        _forceShowCard = false;
+        _isKeypadExpanded = false;
+        _showSessionMenu = false;
+      });
+    }
+
+    if (mounted) {
+      final now = TimeSyncService.timeNow;
+      final activeSession = ActiveSession()
+        ..sessionId = sessionId
+        ..slotId = slotId ?? ''
+        ..courseName = courseName
+        ..facultyName = facultyName
+        ..sectionId = sectionId
+        ..rosterCount = rosterCount
+        ..scheduledEndTime = scheduledEndTime
+        ..presentIndices = []
+        ..absentIndices = []
+        ..verifiedStudentIds = [];
+      setState(() {
+        _activeSession = activeSession;
+        _sessionStartTimestamp = now;
+        _sessionScheduledEnd = scheduledEndTime;
+      });
+      _startSessionProgressTimer();
     }
   }
 
@@ -2317,13 +2389,54 @@ class _IdleScreenState extends State<IdleScreen>
           ),
           const SizedBox(height: 12),
           Text(
-            'Enter the session code displayed on your mobile device to begin Session.',
+            _isPinMode
+                ? 'Enter your 6-digit Faculty PIN to begin Session.'
+                : 'Enter the session code displayed on your mobile device to begin Session.',
             style: TextStyle(
               fontSize: bodyFontSize,
               color: secondaryColor,
             ),
           ),
           SizedBox(height: verticalGap),
+          // Faculty ID input (PIN mode only)
+          if (_isPinMode) ...[
+            SizedBox(
+              width: double.infinity,
+              height: buttonHeight,
+              child: TextField(
+                controller: _facultyIdController,
+                style: GoogleFonts.jetBrainsMono(
+                  fontSize: buttonFontSize,
+                  color: primaryColor,
+                ),
+                decoration: InputDecoration(
+                  hintText: 'Faculty ID (e.g. s_shekar)',
+                  hintStyle: TextStyle(
+                    color: secondaryColor.withValues(alpha: 0.5),
+                    fontSize: bodyFontSize,
+                  ),
+                  prefixIcon: Icon(Icons.person_outline,
+                      size: iconSize, color: secondaryColor),
+                  filled: true,
+                  fillColor: bgColor.withValues(alpha: 0.5),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: primaryColor.withValues(alpha: 0.1)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: primaryColor.withValues(alpha: 0.1)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: AppColors.primaryTeal, width: 1.5),
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(height: verticalGap),
+          ],
           GestureDetector(
             onTap: () {
               setState(() => _isKeypadExpanded = !_isKeypadExpanded);
@@ -2333,6 +2446,7 @@ class _IdleScreenState extends State<IdleScreen>
               cursor: SystemMouseCursors.click,
               child: PinInput(
                 value: _otpController.text,
+                length: _isPinMode ? 6 : 4,
                 obscureText: true,
                 availableWidth: pinAvailableWidth,
               ),
@@ -2413,6 +2527,28 @@ class _IdleScreenState extends State<IdleScreen>
                                 letterSpacing: 1.2)),
                       ],
                     ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          // Mode toggle: PIN vs OTP
+          Center(
+            child: GestureDetector(
+              onTap: () {
+                setState(() {
+                  _isPinMode = !_isPinMode;
+                  _otpController.clear();
+                  _facultyIdController.clear();
+                  _errorMessage = null;
+                });
+              },
+              child: Text(
+                _isPinMode ? 'Use OTP instead' : 'Use Faculty PIN instead',
+                style: TextStyle(
+                  fontSize: statusFontSize,
+                  color: AppColors.primaryTeal,
+                  decoration: TextDecoration.underline,
+                ),
+              ),
             ),
           ),
           const SizedBox(height: 24),
@@ -3109,7 +3245,8 @@ class _IdleScreenState extends State<IdleScreen>
             });
           }
         } else {
-          if (_otpController.text.length < 4) {
+          final maxLen = _isPinMode ? 6 : 4;
+          if (_otpController.text.length < maxLen) {
             setState(() {
               _otpController.text += label;
               _resetInactivityTimer();
