@@ -217,7 +217,7 @@ class ScheduleUpdateEvent {
       slotType: json['slot_type'] as String? ?? 'regular',
       timestamp: json['timestamp'] != null
           ? DateTime.parse(json['timestamp'] as String)
-          : DateTime.now(),
+          : TimeSyncService.timeNow,
       overrideDate: json['override_date'] as String?,
       newFacultyId: json['new_faculty_id'] as String?,
     );

@@ -12,6 +12,7 @@ import '../../services/network_info_service.dart';
 import '../../services/session_manager.dart';
 import '../../services/heartbeat_service.dart';
 import '../../services/student_service.dart';
+import '../../services/time_sync_service.dart';
 import '../../core/platform/kiosk_service.dart';
 import '../../core/utils/roll_number_utils.dart';
 import '../../core/utils/logger.dart';
@@ -397,7 +398,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       await isar.writeTxn(() async {
         existing.presentIdsJson = jsonEncode(presentIds);
         existing.absentIdsJson = jsonEncode(absentIds);
-        existing.createdAt = DateTime.now();
+        existing.createdAt = TimeSyncService.timeNow;
         existing.retryCount = 0;
         existing.lastError = null;
         await isar.pendingAttendances.put(existing);
@@ -409,7 +410,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         ..sessionId = widget.sessionId
         ..presentIdsJson = jsonEncode(presentIds)
         ..absentIdsJson = jsonEncode(absentIds)
-        ..createdAt = DateTime.now()
+        ..createdAt = TimeSyncService.timeNow
         ..retryCount = 0;
 
       await isar.writeTxn(() async {

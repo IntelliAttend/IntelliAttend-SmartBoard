@@ -250,7 +250,7 @@ class SessionManager {
   /// Compute scheduled end time from slot ID (approximate).
   static DateTime _computeScheduledEndTime(String slotId) {
     // Default: 60 minutes from now if we can't determine the slot
-    final now = DateTime.now();
+    final now = TimeSyncService.timeNow;
     return now.add(const Duration(minutes: 60));
   }
 

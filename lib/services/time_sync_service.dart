@@ -27,6 +27,16 @@ class TimeSyncService {
   /// When the last auto-correct was attempted.
   static int? _lastAutoCorrectAt;
 
+  /// When the last timezone check was attempted.
+  static int? _lastTimezoneCheckAt;
+
+  /// Minimum interval between timezone check attempts (24 hours).
+  static const int _minTimezoneCheckIntervalMs = 24 * Duration.millisecondsPerHour;
+
+  /// Skew threshold (30 minutes) above which the offset is likely a timezone
+  /// mismatch rather than simple clock drift.
+  static const int _timezoneMismatchThresholdMs = 30 * 60 * 1000;
+
   /// Initializes the service by loading the last known skew from secure storage.
   static Future<void> init() async {
     final cached = await SecureStorageService.getClockSkew();
@@ -74,6 +84,7 @@ class TimeSyncService {
     final offset = serverReceivedAtMs - (t0 + rtt ~/ 2);
     _timeDriftOffset = offset;
     _persistSkew();
+    _tryAutoCorrectTimezone();
     _tryAutoCorrectSystemClock();
 
     if (kDebugMode) {
@@ -94,6 +105,7 @@ class TimeSyncService {
     final int localTimeAtArrival = responseReceivedAt.millisecondsSinceEpoch;
     _timeDriftOffset = trueTimeAtArrival - localTimeAtArrival;
     _persistSkew();
+    _tryAutoCorrectTimezone();
     _tryAutoCorrectSystemClock();
 
     if (kDebugMode) {
@@ -105,8 +117,75 @@ class TimeSyncService {
   static void setSkew(int skewMs) {
     _timeDriftOffset = skewMs;
     _persistSkew();
+    _tryAutoCorrectTimezone();
     _tryAutoCorrectSystemClock();
     Log.i('[TimeSyncService] Clock skew updated & persisted: ${_timeDriftOffset}ms');
+  }
+
+  /// Attempt to correct the Windows timezone if the drift offset suggests a
+  /// timezone mismatch (>30 minutes). The drift offset compensates at the
+  /// application level, but a wrong timezone breaks `DateTime.now()` for any
+  /// code that bypasses `TimeSyncService.timeNow`.
+  ///
+  /// Uses `tzutil /s "India Standard Time"` (Windows only). Requires admin
+  /// rights; silently falls back on failure.
+  static Future<void> _tryAutoCorrectTimezone() async {
+    if (!Platform.isWindows) return;
+    if (_timeDriftOffset.abs() < _timezoneMismatchThresholdMs) return;
+
+    // Rate-limit timezone checks to once per 24 hours
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_lastTimezoneCheckAt != null &&
+        (now - _lastTimezoneCheckAt!) < _minTimezoneCheckIntervalMs) {
+      return;
+    }
+    _lastTimezoneCheckAt = now;
+
+    // Detect local UTC offset from the OS timezone
+    final localUtcOffset = DateTime.now().timeZoneOffset;
+    final expectedOffset = const Duration(hours: 5, minutes: 30); // IST
+    final offsetDiff = (localUtcOffset - expectedOffset).inMinutes.abs();
+
+    if (offsetDiff < 30) {
+      // Timezone appears correct — the drift is likely pure clock drift
+      Log.d('[TimeSyncService] Timezone check: local UTC offset '
+          '${localUtcOffset.inHours}h${localUtcOffset.inMinutes.remainder(60)}m '
+          'matches expected IST (diff=${offsetDiff}min)');
+      return;
+    }
+
+    Log.w('[TimeSyncService] Timezone mismatch detected: '
+        'local UTC offset is ${localUtcOffset.inHours}h'
+        '${localUtcOffset.inMinutes.remainder(60)}m, '
+        'expected IST (UTC+5:30). '
+        'Drift offset=${_timeDriftOffset}ms. '
+        'Attempting to correct Windows timezone...');
+
+    try {
+      final result = await Process.run(
+        'tzutil',
+        ['/s', 'India Standard Time'],
+      ).timeout(const Duration(seconds: 10));
+
+      if (result.exitCode == 0) {
+        Log.i('[TimeSyncService] Windows timezone corrected to '
+            '"India Standard Time". '
+            'Resetting drift offset — time is now correct. '
+            'Next pre-flight call will recalibrate precisely.');
+        // The cached drift offset was computed against the WRONG timezone.
+        // Reset to 0 so TimeSyncService.timeNow uses the corrected local
+        // clock. With the correct timezone + offset 0, time is accurate.
+        // The next pre-flight call will recalibrate to sub-second precision.
+        _timeDriftOffset = 0;
+        _persistSkew();
+      } else {
+        Log.w('[TimeSyncService] Timezone correction failed '
+            '(exit ${result.exitCode}): ${result.stderr}');
+      }
+    } catch (e) {
+      Log.w('[TimeSyncService] Timezone correction not available '
+          '(admin rights may be required): $e');
+    }
   }
 
   /// Attempt to correct the Windows system clock via PowerShell if skew exceeds

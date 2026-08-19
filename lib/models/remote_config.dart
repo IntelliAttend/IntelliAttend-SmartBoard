@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import '../core/utils/version.dart';
+import '../services/time_sync_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // UpdateManifest v2
@@ -239,7 +240,7 @@ class UpdateManifest {
     if (expiresAt == null) return false;
     try {
       final expiry = DateTime.parse(expiresAt!);
-      return DateTime.now().isAfter(expiry);
+      return TimeSyncService.timeNow.isAfter(expiry);
     } catch (_) {
       return false;
     }

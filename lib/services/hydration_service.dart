@@ -3,6 +3,7 @@ import '../core/security/secure_storage_service.dart';
 import '../models/isar_schemas.dart';
 import 'api_service.dart';
 import 'package:isar/isar.dart';
+import 'time_sync_service.dart';
 
 /// Result of a hydration cycle.
 class HydrationResult {
@@ -241,9 +242,9 @@ class HydrationService {
         'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4,
         'friday': 5, 'saturday': 6, 'sunday': 7,
       };
-      return dayNames[value.toLowerCase()] ?? DateTime.now().weekday;
+      return dayNames[value.toLowerCase()] ?? TimeSyncService.timeNow.weekday;
     }
-    return DateTime.now().weekday;
+    return TimeSyncService.timeNow.weekday;
   }
 
   /// Truncate HH:MM:SS to HH:MM for backward compatibility with Isar fields.

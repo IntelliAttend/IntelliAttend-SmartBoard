@@ -79,7 +79,7 @@ class TokenManager {
   Future<String> getValidToken({bool forceRefresh = false}) async {
     // ── 1. Memory cache ─────────────────────────────────────────────────
     if (!forceRefresh && _cachedAccessToken != null && _tokenExpiryTime != null) {
-      if (_tokenExpiryTime!.isAfter(DateTime.now().add(_buffer))) {
+      if (_tokenExpiryTime!.isAfter(TimeSyncService.timeNow.add(_buffer))) {
         return _cachedAccessToken!;
       }
     }
@@ -216,7 +216,7 @@ class TokenManager {
 
     // Refresh 5 minutes before expiry
     final refreshAt = _tokenExpiryTime!.subtract(_buffer);
-    final delay = refreshAt.difference(DateTime.now());
+    final delay = refreshAt.difference(TimeSyncService.timeNow);
     if (delay.isNegative) {
       // Already expired, refresh now
       _scheduleRefresh(const Duration(seconds: 5));
@@ -338,7 +338,7 @@ class TokenManager {
     if (refreshToken != null) _cachedRefreshToken = refreshToken;
     if (idToken != null && expiresInStr != null) {
       final expiresIn = int.parse(expiresInStr);
-      _tokenExpiryTime = DateTime.now().add(Duration(seconds: expiresIn));
+      _tokenExpiryTime = TimeSyncService.timeNow.add(Duration(seconds: expiresIn));
     }
   }
 }

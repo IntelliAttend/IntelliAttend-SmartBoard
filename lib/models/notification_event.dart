@@ -1,3 +1,5 @@
+import '../services/time_sync_service.dart';
+
 class NotificationEvent {
   final String eventId;
   final String eventType;
@@ -25,7 +27,7 @@ class NotificationEvent {
       institutionId: json['institution_id'] as String? ?? '',
       timestamp: json['timestamp'] != null
           ? DateTime.parse(json['timestamp'] as String)
-          : DateTime.now(),
+          : TimeSyncService.timeNow,
       payload: payload,
     );
   }
