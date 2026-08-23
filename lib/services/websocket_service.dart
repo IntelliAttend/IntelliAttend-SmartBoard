@@ -706,12 +706,15 @@ class WebsocketService with WidgetsBindingObserver {
           break;
 
         case 'attendance_closed':
-          Log.i('[WS] attendance_closed');
-          _sessionState.applyState(SessionState(
-            sessionId: _sessionState.currentState.sessionId,
-            state: 'CLOSED',
-            presentCount: message['present'] as int? ?? _sessionState.currentState.presentCount,
-          ));
+          // NOTE: attendance_closed means the student marking window has closed
+          // on the server. It does NOT mean the session is ended. The session
+          // remains ACTIVE until session_ended arrives. Setting CLOSED here
+          // would rip the orchestrator away from AttendanceScreen mid-submit.
+          Log.i('[WS] attendance_closed — updating counts (session stays active)');
+          final presentCount = message['present'] as int?;
+          if (presentCount != null) {
+            _sessionState.updateCounts(presentCount, _sessionState.currentState.absentCount);
+          }
           break;
 
         case 'system_command':
@@ -1002,6 +1005,16 @@ class WebsocketService with WidgetsBindingObserver {
 
   void _handleAppResumed() {
     if (_disposed) return;
+
+    // Re-sync clock if the skew is stale (app was suspended for >1 hour).
+    // This must happen before any time-dependent logic runs.
+    if (TimeSyncService.isSkewStale) {
+      Log.i('[WS] Clock skew stale after resume — triggering re-sync');
+      ApiService.syncTime().catchError((e) {
+        Log.w('[WS] Re-sync on resume failed: $e');
+        return 0;
+      });
+    }
 
     // If the socket is null (cleanly closed or never connected), reconnect now.
     if (_channel == null) {

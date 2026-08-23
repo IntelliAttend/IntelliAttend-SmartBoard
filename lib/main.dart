@@ -28,6 +28,7 @@ import 'core/platform/kiosk_service.dart';
 import 'core/platform/window_orchestrator_service.dart';
 import 'services/pre_flight_service.dart';
 import 'services/sync_manager.dart';
+import 'services/network_info_service.dart';
 import 'services/time_sync_service.dart';
 import 'services/notification_listener_service.dart';
 import 'services/auto_updater.dart' hide UpdateState;
@@ -489,6 +490,11 @@ Future<void> startBackgroundProtocols() async {
     if (registration == null) return;
 
     final queryId = registration.classroomId ?? registration.smartBoardId;
+
+    // Start network monitoring early so hasInternet is accurate
+    // before SyncManager or attendance submission checks it.
+    NetworkInfoService().startMonitoring();
+
     SyncManager().init(queryId);
     final boardId = registration.smartBoardId;
 
@@ -576,16 +582,10 @@ void _startPeriodicTimeSync() {
 
 Future<void> _doTimeSync() async {
   try {
-    final result = await ApiService.syncTime();
-    // Feed the server timestamp back into TimeSyncService to update drift
-    if (result > 0) {
-      final now = DateTime.now();
-      TimeSyncService.synchronizeWithServerLegacy(
-        now.subtract(const Duration(seconds: 2)),
-        now,
-        result,
-      );
-    }
+    // syncTime() already computes NTP offset and calls TimeSyncService.setSkew().
+    // No need to call synchronizeWithServerLegacy — it would overwrite the
+    // more accurate NTP offset with the less accurate legacy formula.
+    await ApiService.syncTime();
   } catch (e) {
     Log.w('[TimeSync] Periodic sync failed: $e');
   }

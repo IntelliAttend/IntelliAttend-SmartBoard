@@ -21,6 +21,7 @@ import 'attendance_screen.dart';
 import '../../services/time_sync_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/student_service.dart';
+import '../../services/sync_manager.dart';
 
 
 enum _WorkspaceTab { resources, topics, calendar }
@@ -205,6 +206,24 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
       });
     }
     _loadTopics();
+
+    // Subscribe to background attendance sync for UI feedback
+    SyncManager().onAttendanceSynced = _onAttendanceSynced;
+  }
+
+  void _onAttendanceSynced(String sessionId) {
+    if (!mounted) return;
+    if (sessionId != widget.sessionId) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Attendance synced to server',
+            style: TextStyle(fontWeight: FontWeight.w500)),
+        backgroundColor: AppColors.successLime,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   Future<void> _loadTopics() async {
@@ -329,6 +348,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
     _resourceTabController.dispose();
     _pulseController.dispose();
     _topicSearchController.dispose();
+    // Unsubscribe from sync callback
+    if (SyncManager().onAttendanceSynced == _onAttendanceSynced) {
+      SyncManager().onAttendanceSynced = null;
+    }
     super.dispose();
   }
 

@@ -236,6 +236,7 @@ class SessionStateService {
         machine.transitionTo(BoardState.active);
         break;
       case 'CLOSED':
+        Log.i('[Sync] Board → CLOSED (current: ${machine.currentState.name})');
         machine.transitionTo(BoardState.closed);
         break;
       default:

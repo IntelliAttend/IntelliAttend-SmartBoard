@@ -37,6 +37,11 @@ class TimeSyncService {
   /// mismatch rather than simple clock drift.
   static const int _timezoneMismatchThresholdMs = 30 * 60 * 1000;
 
+  /// Maximum sane clock drift (5 minutes). Offsets larger than this are
+  /// likely caused by a network error or misconfigured server and should
+  /// be rejected to prevent corrupting timeNow across the entire app.
+  static const int _maxSaneOffsetMs = 5 * 60 * 1000;
+
   /// Initializes the service by loading the last known skew from secure storage.
   static Future<void> init() async {
     final cached = await SecureStorageService.getClockSkew();
@@ -82,6 +87,15 @@ class TimeSyncService {
   ) {
     final rtt = t3 - t0;
     final offset = serverReceivedAtMs - (t0 + rtt ~/ 2);
+
+    // Sanity check: reject offsets larger than 5 minutes — likely a network
+    // error or misconfigured server response.
+    if (offset.abs() > _maxSaneOffsetMs) {
+      Log.w('[TimeSyncService] NTP sync rejected: offset ${offset}ms '
+          'exceeds ${_maxSaneOffsetMs}ms max. Keeping previous offset ${_timeDriftOffset}ms.');
+      return;
+    }
+
     _timeDriftOffset = offset;
     _persistSkew();
     _tryAutoCorrectTimezone();
@@ -103,7 +117,16 @@ class TimeSyncService {
     final roundTripTime = responseReceivedAt.difference(requestSentAt).inMilliseconds;
     final int trueTimeAtArrival = serverTimestampMs + (roundTripTime ~/ 2);
     final int localTimeAtArrival = responseReceivedAt.millisecondsSinceEpoch;
-    _timeDriftOffset = trueTimeAtArrival - localTimeAtArrival;
+    final int offset = trueTimeAtArrival - localTimeAtArrival;
+
+    // Sanity check: reject offsets larger than 5 minutes.
+    if (offset.abs() > _maxSaneOffsetMs) {
+      Log.w('[TimeSyncService] Legacy sync rejected: offset ${offset}ms '
+          'exceeds ${_maxSaneOffsetMs}ms max. Keeping previous offset ${_timeDriftOffset}ms.');
+      return;
+    }
+
+    _timeDriftOffset = offset;
     _persistSkew();
     _tryAutoCorrectTimezone();
     _tryAutoCorrectSystemClock();
@@ -115,6 +138,11 @@ class TimeSyncService {
 
   /// Manually sets the clock skew.
   static void setSkew(int skewMs) {
+    if (skewMs.abs() > _maxSaneOffsetMs) {
+      Log.w('[TimeSyncService] setSkew rejected: ${skewMs}ms '
+          'exceeds ${_maxSaneOffsetMs}ms max. Keeping previous offset ${_timeDriftOffset}ms.');
+      return;
+    }
     _timeDriftOffset = skewMs;
     _persistSkew();
     _tryAutoCorrectTimezone();

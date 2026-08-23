@@ -26,8 +26,8 @@ class WindowOrchestratorService {
   DateTime _lastTickDate = DateTime(0);
   bool _isFirstClassPreBootDone = false;
 
-  final Set<String> _t3FiredSlots = {};
   final Set<String> _t0FiredSlots = {};
+  final Set<String> _t1FiredSlots = {};
   final Set<String> _backPressureFiredSlots = {};
   final Set<String> _endOfClassFiredSlots = {};
 
@@ -54,8 +54,8 @@ class WindowOrchestratorService {
   void resetAttendanceTracking() {
     _attendanceTakenSlots.clear();
     _autoClosedSlots.clear();
-    _t3FiredSlots.clear();
     _t0FiredSlots.clear();
+    _t1FiredSlots.clear();
     _backPressureFiredSlots.clear();
     _endOfClassFiredSlots.clear();
     Log.i('[Orchestrator] All attendance & slot tracking reset for cooldown.');
@@ -63,8 +63,8 @@ class WindowOrchestratorService {
 
   void start() {
     _monitorTimer?.cancel();
-    // Increased from 60s to 10s so T-3 / T-0 window events fire with
-    // sub-minute precision — critical for restoring from minimized state.
+    // 10s interval so T-0 / T-1 events fire with sub-minute precision —
+    // critical for auto-terminate when app is minimized.
     _monitorTimer = Timer.periodic(const Duration(seconds: 10), (_) => _tick());
     _tick();
   }
@@ -85,8 +85,8 @@ class WindowOrchestratorService {
           now.year != _lastTickDate.year) {
         Log.i('📅 [Orchestrator] New day detected. Resetting all daily flags.');
         _isFirstClassPreBootDone = false;
-        _t3FiredSlots.clear();
         _t0FiredSlots.clear();
+        _t1FiredSlots.clear();
         _backPressureFiredSlots.clear();
         _endOfClassFiredSlots.clear();
         _autoClosedSlots.clear();
@@ -118,7 +118,7 @@ class WindowOrchestratorService {
         }
       }
 
-      // ── Next-slot checks (T-3 / T-0) ────────────────────────────────────
+      // ── Next-slot checks (T-1 auto-terminate / T-0) ────────────────────
       final timeStr = _formatHHMM(now);
       final nextSlot = todaySlots
           .where((s) => s.startTime.compareTo(timeStr) > 0)
@@ -128,20 +128,6 @@ class WindowOrchestratorService {
         final nextStart = _parseTime(nextSlot.startTime, now);
         final diffSec = nextStart.difference(now).inSeconds;
         final slotKey = nextSlot.slotId;
-
-        // T-3 window: restore window + notification (if currently minimized)
-        if (diffSec <= 180 && diffSec > 0 && !_t3FiredSlots.contains(slotKey)) {
-          _t3FiredSlots.add(slotKey);
-          Log.i('📺 [Orchestrator] T-3 Slot[$slotKey] — Restoring window (diffSec=$diffSec).');
-          await KioskService.setMode(KioskMode.fullscreen);
-          final isMinimized = await windowManager.isMinimized();
-          if (isMinimized) {
-            await NotificationService.showWarning(
-              'Class Starting Soon',
-              '${nextSlot.courseName} starts in ~3 minutes. Please return to SmartBoard.',
-            );
-          }
-        }
 
         // T-0: ensure window is restored + show OTP card (safety net —
         // IdleScreen handles the card via its own 10s timer).
@@ -176,6 +162,42 @@ class WindowOrchestratorService {
         }
       }
 
+      // ── T-1: Auto-terminate when minimized (1 min before slot end) ─────
+      // Only fires if app is minimized — don't interrupt active marking.
+      if (currentSlot != null) {
+        final slotEnd = _parseTime(currentSlot.endTime, now);
+        final diffSec = slotEnd.difference(now).inSeconds;
+        final t1Key = '${currentSlot.slotId}_t1';
+
+        if (diffSec <= 60 && diffSec > 0 && !_t1FiredSlots.contains(t1Key)) {
+          _t1FiredSlots.add(t1Key);
+
+          final sessionState = SessionStateService().currentState;
+          final boardState = BoardStateMachine().currentState;
+
+          // Only fire if session is active AND board is NOT on AttendanceScreen
+          if (sessionState.isActive && boardState != BoardState.active) {
+            final isMinimized = await windowManager.isMinimized();
+            if (isMinimized) {
+              Log.i('[Orchestrator] T-1: Auto-terminating session ${sessionState.sessionId} — app minimized, slot ending in ${diffSec}s');
+              await KioskService.setMode(KioskMode.fullscreen);
+
+              // Force board to CLOSED immediately to show SummaryScreen
+              BoardStateMachine().forceTransitionTo(BoardState.closed);
+
+              // Terminate on server (best-effort, for cleanup)
+              try {
+                await ApiService.terminateSession(sessionState.sessionId);
+              } catch (e) {
+                Log.e('[Orchestrator] T-1 terminate API failed: $e');
+              }
+            } else {
+              Log.i('[Orchestrator] T-1: Session ending in ${diffSec}s but app not minimized — skipping auto-terminate');
+            }
+          }
+        }
+      }
+
       // ── End-of-class check (T-5, no attendance taken) ────────────────────
       // Uses local _attendanceTakenSlots set — zero Firestore queries.
       if (currentSlot != null) {
@@ -198,11 +220,22 @@ class WindowOrchestratorService {
         }
 
         // ── Auto-close session when slot endTime passes ──────────────────
-        if (now.isAfter(slotEnd) && !_autoClosedSlots.contains(currentSlot.slotId)) {
+        // Skip if T-1 already terminated this session.
+        if (!_t1FiredSlots.contains('${currentSlot.slotId}_t1') &&
+            now.isAfter(slotEnd) && !_autoClosedSlots.contains(currentSlot.slotId)) {
           _autoClosedSlots.add(currentSlot.slotId);
           final sessionState = SessionStateService().currentState;
+          final boardState = BoardStateMachine().currentState;
           if (sessionState.isActive) {
             Log.i('[Orchestrator] Auto-closing session ${sessionState.sessionId} — slot ${currentSlot.slotId} ended');
+
+            // If board is NOT on AttendanceScreen, force CLOSED immediately
+            // so SummaryScreen appears without waiting for server round-trip.
+            if (boardState != BoardState.active) {
+              BoardStateMachine().forceTransitionTo(BoardState.closed);
+            }
+
+            // Terminate on server (best-effort)
             try {
               await ApiService.terminateSession(sessionState.sessionId);
             } catch (e) {
@@ -229,6 +262,10 @@ class WindowOrchestratorService {
             if (!_autoClosedSlots.contains(session.slotId)) {
               _autoClosedSlots.add(session.slotId);
               Log.i('[Orchestrator] Safety-net auto-closing session ${session.sessionId} — past scheduled end during break');
+
+              // Force CLOSED immediately (board is already not on AttendanceScreen)
+              BoardStateMachine().forceTransitionTo(BoardState.closed);
+
               try {
                 await ApiService.terminateSession(session.sessionId);
               } catch (e) {

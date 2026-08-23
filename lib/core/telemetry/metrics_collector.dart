@@ -6,7 +6,7 @@ class MetricsCollector {
   factory MetricsCollector() => _instance;
   MetricsCollector._();
 
-  final DateTime _startedAt = DateTime.now();
+  final DateTime _startedAt = TimeSyncService.timeNow;
 
   int totalScans = 0;
   int sessionsStarted = 0;
@@ -21,7 +21,7 @@ class MetricsCollector {
   }
 
   int get currentSessionDurationSec => _currentSessionStart != null
-      ? DateTime.now().difference(_currentSessionStart!).inSeconds
+      ? TimeSyncService.timeNow.difference(_currentSessionStart!).inSeconds
       : 0;
 
   void recordScan() {
@@ -30,7 +30,7 @@ class MetricsCollector {
 
   void recordSessionStart() {
     sessionsStarted++;
-    _currentSessionStart = DateTime.now();
+    _currentSessionStart = TimeSyncService.timeNow;
   }
 
   void recordSessionEnd() {
@@ -39,19 +39,19 @@ class MetricsCollector {
   }
 
   void recordApiError() {
-    _apiErrorTimes.add(DateTime.now());
+    _apiErrorTimes.add(TimeSyncService.timeNow);
     _pruneApiErrors();
   }
 
   void _pruneApiErrors() {
-    final cutoff = DateTime.now().subtract(const Duration(minutes: 5));
+    final cutoff = TimeSyncService.timeNow.subtract(const Duration(minutes: 5));
     while (_apiErrorTimes.isNotEmpty && _apiErrorTimes.first.isBefore(cutoff)) {
       _apiErrorTimes.removeFirst();
     }
   }
 
   Map<String, dynamic> toJson() {
-    final elapsedMin = DateTime.now().difference(_startedAt).inMinutes;
+    final elapsedMin = TimeSyncService.timeNow.difference(_startedAt).inMinutes;
     final rate = elapsedMin > 0
         ? (totalScans / elapsedMin).toStringAsFixed(1)
         : '0.0';

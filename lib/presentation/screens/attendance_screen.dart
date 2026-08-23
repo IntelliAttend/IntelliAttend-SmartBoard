@@ -429,11 +429,11 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     int autoDismissSeconds = 4,
   }) {
     final notification = BoardNotification(
-      id: 'attendance_${DateTime.now().millisecondsSinceEpoch}',
+      id: 'attendance_${TimeSyncService.timeNow.millisecondsSinceEpoch}',
       title: title,
       body: subtitle,
       type: 'attendance',
-      timestamp: DateTime.now(),
+      timestamp: TimeSyncService.timeNow,
       priority: NotificationPriority.normal,
     );
 

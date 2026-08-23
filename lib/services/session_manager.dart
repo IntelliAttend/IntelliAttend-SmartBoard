@@ -29,6 +29,7 @@ class SessionManager {
       HydrationProfileSchema,
       HydrationRosterSchema,
       StoredNotificationSchema,
+      PendingAttendanceSchema,
     ];
 
     try {
@@ -247,10 +248,35 @@ class SessionManager {
     }
   }
 
-  /// Compute scheduled end time from slot ID (approximate).
+  /// Compute scheduled end time from slot ID by looking up the actual
+  /// timetable entry. Falls back to 60 minutes from now if the slot
+  /// can't be found (e.g. timetable not yet hydrated).
   static DateTime _computeScheduledEndTime(String slotId) {
-    // Default: 60 minutes from now if we can't determine the slot
     final now = TimeSyncService.timeNow;
+
+    if (_isar != null) {
+      try {
+        final entry = _isar!.timetableEntrys
+            .filter()
+            .slotIdEqualTo(slotId)
+            .findFirstSync();
+        if (entry != null) {
+          final parts = entry.endTime.split(':');
+          final endHour = int.parse(parts[0]);
+          final endMin = int.parse(parts[1]);
+          final scheduledEnd = DateTime(now.year, now.month, now.day, endHour, endMin);
+          // If the end time is already past today (shouldn't happen for active
+          // sessions), fall back to now + 60 min rather than a negative duration.
+          if (scheduledEnd.isAfter(now)) {
+            return scheduledEnd;
+          }
+        }
+      } catch (e) {
+        Log.w('[SessionManager] Failed to look up slot endTime for $slotId: $e');
+      }
+    }
+
+    Log.d('[SessionManager] Fallback: scheduledEndTime = now + 60 min');
     return now.add(const Duration(minutes: 60));
   }
 

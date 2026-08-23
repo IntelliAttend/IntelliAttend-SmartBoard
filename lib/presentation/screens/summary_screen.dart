@@ -6,6 +6,7 @@ import '../../core/platform/kiosk_service.dart';
 import '../../core/utils/logger.dart';
 import '../../main.dart';
 import '../../services/session_manager.dart';
+import '../../services/session_state_service.dart';
 import '../../services/student_service.dart';
 import 'session_orchestrator_screen.dart';
 import 'registration_screen.dart';
@@ -94,14 +95,23 @@ class _SummaryScreenState extends State<SummaryScreen> {
   Future<void> _legacyReturnToIdle() async {
     final registration = await globalDeviceRepository.getRegistration();
     if (!mounted) return;
+
+    // Reset session state BEFORE navigating so the new orchestrator
+    // doesn't re-discover a stale active/closed session during boot.
+    SessionStateService().reset();
+
     if (registration != null) {
-      Navigator.of(context).pushReplacement(
+      if (!mounted) return;
+      // Use pushAndRemoveUntil to clear ALL routes, preventing duplicate
+      // orchestrators from stacking up in the Navigator.
+      Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
           builder: (context) => SessionOrchestratorScreen(
             registration: registration,
             completedSession: true,
           ),
         ),
+        (route) => false,
       );
     } else {
       Log.w('[Summary] No registration found — navigating to registration screen.');

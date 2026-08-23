@@ -19,6 +19,12 @@ class SyncManager {
   bool _isSyncing = false;
   late Isar _isar;
 
+  /// Max retries before giving up on a pending attendance item.
+  static const int _maxRetries = 10;
+
+  /// Max age (24 hours) before a pending item is considered stale and removed.
+  static const int _maxStaleAgeMs = 24 * 60 * 60 * 1000;
+
   /// Callback fired when pending attendance is successfully synced.
   /// Used by UI to show sync status.
   void Function(String sessionId)? onAttendanceSynced;
@@ -68,8 +74,30 @@ class SyncManager {
     Log.i('[SyncManager] Found $pendingCount pending attendance submissions. Syncing...');
 
     final allPending = await _isar.pendingAttendances.where().findAll();
+    final now = DateTime.now().millisecondsSinceEpoch;
 
     for (final pending in allPending) {
+      // Skip items that exceeded max retries
+      if (pending.retryCount >= _maxRetries) {
+        Log.w('[SyncManager] Dropping stale attendance for ${pending.sessionId} '
+            '(exceeded $_maxRetries retries, last error: ${pending.lastError})');
+        await _isar.writeTxn(() async {
+          await _isar.pendingAttendances.delete(pending.id);
+        });
+        continue;
+      }
+
+      // Skip items older than 24 hours
+      final age = now - pending.createdAt.millisecondsSinceEpoch;
+      if (age > _maxStaleAgeMs) {
+        Log.w('[SyncManager] Dropping expired attendance for ${pending.sessionId} '
+            '(age ${(age ~/ 3600000)}h > 24h)');
+        await _isar.writeTxn(() async {
+          await _isar.pendingAttendances.delete(pending.id);
+        });
+        continue;
+      }
+
       try {
         final presentIds = (jsonDecode(pending.presentIdsJson) as List)
             .map((e) => e.toString())
