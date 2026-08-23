@@ -165,6 +165,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
   static Color get _amber => AppColors.warningAmber;
   static Color get _purple => const Color(0xFFA78BFA);
 
+  // ── Pending sync state ──
+  int _pendingSyncCount = 0;
 
   List<_TimelineEvent> _todayTimeline = [];
   List<_FlashbackDay> _flashbackDays = [];
@@ -209,6 +211,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
 
     // Subscribe to background attendance sync for UI feedback
     SyncManager().onAttendanceSynced = _onAttendanceSynced;
+    SyncManager().onAttendanceDropped = _onAttendanceDropped;
+    SyncManager().onPendingCountChanged = _onPendingCountChanged;
+
+    // Check initial pending count
+    SyncManager().getPendingCount().then((count) {
+      if (mounted) setState(() => _pendingSyncCount = count);
+    });
   }
 
   void _onAttendanceSynced(String sessionId) {
@@ -224,6 +233,26 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
         duration: const Duration(seconds: 3),
       ),
     );
+  }
+
+  void _onAttendanceDropped(String sessionId, String reason) {
+    if (!mounted) return;
+    if (sessionId != widget.sessionId) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Attendance sync failed: $reason',
+            style: const TextStyle(fontWeight: FontWeight.w500)),
+        backgroundColor: AppColors.error,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  }
+
+  void _onPendingCountChanged(int count) {
+    if (!mounted) return;
+    setState(() => _pendingSyncCount = count);
   }
 
   Future<void> _loadTopics() async {
@@ -348,9 +377,15 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
     _resourceTabController.dispose();
     _pulseController.dispose();
     _topicSearchController.dispose();
-    // Unsubscribe from sync callback
+    // Unsubscribe from sync callbacks
     if (SyncManager().onAttendanceSynced == _onAttendanceSynced) {
       SyncManager().onAttendanceSynced = null;
+    }
+    if (SyncManager().onAttendanceDropped == _onAttendanceDropped) {
+      SyncManager().onAttendanceDropped = null;
+    }
+    if (SyncManager().onPendingCountChanged == _onPendingCountChanged) {
+      SyncManager().onPendingCountChanged = null;
     }
     super.dispose();
   }
@@ -769,10 +804,43 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
               ],
             ),
           ),
-          // Date + Time — flush to far right edge, no box
+          // Pending sync indicator + Date + Time
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (_pendingSyncCount > 0) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: AppColors.warningAmber.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppColors.warningAmber.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.warningAmber,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '$_pendingSyncCount pending',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.warningAmber,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+              ],
               Icon(Icons.calendar_today_rounded, size: 14, color: _teal),
               const SizedBox(width: 8),
               Text(

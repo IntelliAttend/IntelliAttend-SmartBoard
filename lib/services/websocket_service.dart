@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../core/platform/power_command_service.dart';
+import '../core/state/board_state_machine.dart';
 import '../core/utils/logger.dart';
 import '../models/media_push_event.dart';
 import '../models/notification_event.dart';
@@ -915,10 +916,23 @@ class WebsocketService with WidgetsBindingObserver {
   void _handleSessionEnded(Map<String, dynamic> message) {
     final event = SessionEndedEvent.fromJson(message);
     _sessionEndedController.add(event);
-    _sessionState.applyState(SessionState(
+
+    // If the user is actively marking attendance (BoardState.active),
+    // don't force BoardState.closed — that would rip them to SummaryScreen
+    // mid-submission. Record the CLOSED state without board state sync.
+    final boardState = BoardStateMachine().currentState;
+    final closedState = SessionState(
       sessionId: event.sessionId,
       state: 'CLOSED',
-    ));
+    );
+
+    if (boardState == BoardState.active) {
+      Log.i('[WS] session_ended while on AttendanceScreen — deferring board transition');
+      _sessionState.applyStateDeferred(closedState);
+    } else {
+      _sessionState.applyState(closedState);
+    }
+
     // Clear session targeting so reconnects go back to board channel (Fix B3)
     _sessionId = null;
     Log.i('[WS] session_ended: ${event.sessionId} status=${event.status}');

@@ -146,6 +146,18 @@ class SessionStateService {
     Log.i('[SessionState] Applied: ${newState.state} sid=${newState.sessionId} v=${newState.version}');
   }
 
+  /// Updates session state WITHOUT transitioning the BoardStateMachine.
+  /// Used when the server ends a session while the user is actively marking
+  /// attendance — we record the server's CLOSED state but don't rip the user
+  /// to SummaryScreen mid-submission.
+  void applyStateDeferred(SessionState newState) {
+    if (!_shouldApply(newState)) return;
+
+    _sessionState = newState;
+    _stateController.add(newState);
+    Log.i('[SessionState] Applied (deferred board sync): ${newState.state} sid=${newState.sessionId}');
+  }
+
   void applyFromRecovery(Map<String, dynamic> json) {
     final serverState = SessionState.fromJson(json);
     if (!_shouldApply(serverState)) return;

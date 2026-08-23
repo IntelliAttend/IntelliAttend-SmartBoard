@@ -192,6 +192,11 @@ class HeartbeatService {
         _sessionController.add(HeartbeatSessionInfo());
         final machine = BoardStateMachine();
         if (machine.currentState == BoardState.active) {
+          // Don't force-end while user is actively marking attendance.
+          // The server will eventually send session_ended or the slot
+          // auto-close will handle it.
+          Log.w('[Heartbeat] $_consecutiveNullSessions consecutive null sessions — deferring (user on AttendanceScreen)');
+        } else {
           Log.w('[Heartbeat] $_consecutiveNullSessions consecutive null sessions — force-ending');
           machine.forceTransitionTo(BoardState.closed);
         }
@@ -258,9 +263,16 @@ class HeartbeatService {
     } else if (info.isActive && current == BoardState.active) {
       Log.d('[Heartbeat] Session active on server, board already active — no change');
     } else if (info.isCompleted && current == BoardState.active) {
+      // Don't transition to CLOSED while user is actively marking attendance.
+      // Record the completion but let the user finish their submission.
+      Log.i('[Heartbeat] Session completed on server — deferring (user on AttendanceScreen)');
+    } else if (info.isCompleted && current != BoardState.active) {
       Log.i('[Heartbeat] Session completed — transitioning to CLOSED');
       machine.transitionTo(BoardState.closed);
     } else if (info.isEmpty && current == BoardState.active) {
+      // Don't force-end while user is actively marking attendance.
+      Log.w('[Heartbeat] Session null on server — deferring (user on AttendanceScreen)');
+    } else if (info.isEmpty && current != BoardState.active) {
       Log.w('[Heartbeat] Session null on server — force-ending');
       machine.forceTransitionTo(BoardState.closed);
     }

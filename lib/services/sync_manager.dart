@@ -29,6 +29,14 @@ class SyncManager {
   /// Used by UI to show sync status.
   void Function(String sessionId)? onAttendanceSynced;
 
+  /// Callback fired when a pending attendance item is dropped (max retries
+  /// or expired). Used by UI to warn the user.
+  void Function(String sessionId, String reason)? onAttendanceDropped;
+
+  /// Callback fired when the pending count changes. Used by UI to show
+  /// a persistent pending-sync indicator.
+  void Function(int count)? onPendingCountChanged;
+
   /// Initializes the SyncManager to watch for connectivity changes
   /// and flush queued data.
   void init(String smartBoardId) {
@@ -69,12 +77,16 @@ class SyncManager {
   /// Flushes pending attendance submissions that were queued while offline.
   Future<void> _flushPendingAttendance() async {
     final pendingCount = await _isar.pendingAttendances.count();
-    if (pendingCount == 0) return;
+    if (pendingCount == 0) {
+      onPendingCountChanged?.call(0);
+      return;
+    }
 
     Log.i('[SyncManager] Found $pendingCount pending attendance submissions. Syncing...');
 
     final allPending = await _isar.pendingAttendances.where().findAll();
     final now = DateTime.now().millisecondsSinceEpoch;
+    int remaining = pendingCount;
 
     for (final pending in allPending) {
       // Skip items that exceeded max retries
@@ -84,6 +96,9 @@ class SyncManager {
         await _isar.writeTxn(() async {
           await _isar.pendingAttendances.delete(pending.id);
         });
+        remaining--;
+        onAttendanceDropped?.call(pending.sessionId,
+            'Exceeded $_maxRetries retries. Last error: ${pending.lastError ?? "unknown"}');
         continue;
       }
 
@@ -95,6 +110,9 @@ class SyncManager {
         await _isar.writeTxn(() async {
           await _isar.pendingAttendances.delete(pending.id);
         });
+        remaining--;
+        onAttendanceDropped?.call(pending.sessionId,
+            'Expired after ${(age ~/ 3600000)} hours.');
         continue;
       }
 
@@ -117,6 +135,7 @@ class SyncManager {
           await _isar.pendingAttendances.delete(pending.id);
         });
 
+        remaining--;
         Log.i('[SyncManager] Synced attendance for session ${pending.sessionId}');
         onAttendanceSynced?.call(pending.sessionId);
       } catch (e) {
@@ -129,6 +148,8 @@ class SyncManager {
         Log.w('[SyncManager] Failed to sync attendance for ${pending.sessionId}: $e');
       }
     }
+
+    onPendingCountChanged?.call(remaining);
   }
 
   /// Flushes legacy queued QR scans.

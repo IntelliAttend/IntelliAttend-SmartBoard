@@ -297,34 +297,44 @@ class _AttendanceScreenState extends State<AttendanceScreen>
           absentEmails: absentIds,
         );
 
-        // Persist snapshot after successful submit
-        if (!kPreviewAttendance) {
-          await SessionManager.saveAttendanceSnapshot(
-            sessionId: widget.sessionId,
-            presentIndices: _presentSeatIndices.toList(),
-            absentIndices: _absentSeatIndices.toList(),
-          );
+        // Persist snapshot after successful submit (best-effort — don't
+        // let a snapshot failure trigger the offline fallback queue).
+        try {
+          if (!kPreviewAttendance) {
+            await SessionManager.saveAttendanceSnapshot(
+              sessionId: widget.sessionId,
+              presentIndices: _presentSeatIndices.toList(),
+              absentIndices: _absentSeatIndices.toList(),
+            );
+          }
+        } catch (snapshotError) {
+          Log.e('[Attendance] Snapshot save failed after successful submit: $snapshotError');
         }
 
-        setState(() => _isAttendanceSubmitted = true);
+        if (mounted) setState(() => _isAttendanceSubmitted = true);
         if (!mounted) return;
 
         // Online success — navigate directly, no notification needed
         _navigateToWorkspace();
       } else {
-        // Offline: queue attendance for later sync
-        await _queueAttendanceOffline(presentIds, absentIds);
+        // Offline: queue attendance for later sync.
+        // Wrap in try-catch to prevent Isar errors from tearing down kiosk.
+        try {
+          await _queueAttendanceOffline(presentIds, absentIds);
 
-        // Persist snapshot locally
-        if (!kPreviewAttendance) {
-          await SessionManager.saveAttendanceSnapshot(
-            sessionId: widget.sessionId,
-            presentIndices: _presentSeatIndices.toList(),
-            absentIndices: _absentSeatIndices.toList(),
-          );
+          // Persist snapshot locally
+          if (!kPreviewAttendance) {
+            await SessionManager.saveAttendanceSnapshot(
+              sessionId: widget.sessionId,
+              presentIndices: _presentSeatIndices.toList(),
+              absentIndices: _absentSeatIndices.toList(),
+            );
+          }
+        } catch (offlineError) {
+          Log.e('[Attendance] Offline queue failed: $offlineError');
         }
 
-        setState(() => _isAttendanceSubmitted = true);
+        if (mounted) setState(() => _isAttendanceSubmitted = true);
         if (!mounted) return;
 
         // Show prominent offline notification banner
@@ -343,25 +353,33 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     } catch (e) {
       Log.e('[Attendance] Error submitting attendance: $e');
 
-      // If server submit failed, queue offline as fallback
-      final presentIds =
-          _presentSeatIndices.map((i) => _students[i].studentId).toList();
-      final absentIds = _students
-          .where((s) => !_presentSeatIndices.contains(_students.indexOf(s)))
-          .map((s) => s.studentId)
-          .toList();
+      // If server submit failed, queue offline as fallback.
+      // Wrap in try-catch to prevent secondary failures (Isar write errors)
+      // from propagating to the global error handler and tearing down kiosk.
+      try {
+        final presentIds =
+            _presentSeatIndices.map((i) => _students[i].studentId).toList();
+        final absentIds = _students
+            .where((s) => !_presentSeatIndices.contains(_students.indexOf(s)))
+            .map((s) => s.studentId)
+            .toList();
 
-      await _queueAttendanceOffline(presentIds, absentIds);
+        await _queueAttendanceOffline(presentIds, absentIds);
 
-      if (!kPreviewAttendance) {
-        await SessionManager.saveAttendanceSnapshot(
-          sessionId: widget.sessionId,
-          presentIndices: _presentSeatIndices.toList(),
-          absentIndices: _absentSeatIndices.toList(),
-        );
+        if (!kPreviewAttendance) {
+          await SessionManager.saveAttendanceSnapshot(
+            sessionId: widget.sessionId,
+            presentIndices: _presentSeatIndices.toList(),
+            absentIndices: _absentSeatIndices.toList(),
+          );
+        }
+      } catch (recoveryError) {
+        Log.e('[Attendance] Offline queue fallback also failed: $recoveryError');
+        // Attendance data is lost — but do NOT propagate. Breaking kiosk
+        // mode is worse than losing one submission.
       }
 
-      setState(() => _isAttendanceSubmitted = true);
+      if (mounted) setState(() => _isAttendanceSubmitted = true);
       if (!mounted) return;
 
       // Show prominent offline notification banner
