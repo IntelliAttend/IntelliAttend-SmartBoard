@@ -19,10 +19,14 @@ class SecurityInterceptor extends Interceptor {
     if (err.response?.statusCode == 403) {
       final data = err.response?.data;
       final message = data is Map ? (data['message'] ?? data['detail']) : err.message;
-      
-      Log.e('🚨 [SecurityInterceptor] Security violation: $message');
-      
-      // In a kiosk app, we might want to alert IT or show a lockdown screen
+      final errorCode = data is Map ? (data['error_code'] ?? 'UNKNOWN') : 'UNKNOWN';
+
+      Log.e('[SecurityInterceptor] 403 FORBIDDEN: $errorCode — $message');
+      Log.e('[SecurityInterceptor] URL: ${err.requestOptions.uri}');
+      Log.e('[SecurityInterceptor] Method: ${err.requestOptions.method}');
+
+      // Log the violation for audit — the server already recorded it,
+      // but local logging helps with offline debugging on the board.
     }
 
     return handler.next(err);
