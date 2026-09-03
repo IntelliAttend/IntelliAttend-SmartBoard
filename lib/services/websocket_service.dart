@@ -921,9 +921,14 @@ class WebsocketService with WidgetsBindingObserver {
     // don't force BoardState.closed — that would rip them to SummaryScreen
     // mid-submission. Record the CLOSED state without board state sync.
     final boardState = BoardStateMachine().currentState;
+    // Use version higher than current state so _shouldApply() doesn't reject it.
+    // The server's session_ended event may not carry a version, defaulting to 0,
+    // which would be rejected if the current state version is >= 1.
+    final currentVersion = _sessionState.currentState.version;
     final closedState = SessionState(
       sessionId: event.sessionId,
       state: 'CLOSED',
+      version: currentVersion + 1,
     );
 
     if (boardState == BoardState.active) {

@@ -162,8 +162,10 @@ class WindowOrchestratorService {
         }
       }
 
-      // ── T-1: Auto-terminate when minimized (1 min before slot end) ─────
-      // Only fires if app is minimized — don't interrupt active marking.
+      // ── T-1: Auto-terminate 1 min before slot end ─────────────────────
+      // Fires regardless of whether app is minimized or in foreground.
+      // If app is minimized, force CLOSED immediately.
+      // If user is on AttendanceScreen (foreground), defer — let them finish.
       if (currentSlot != null) {
         final slotEnd = _parseTime(currentSlot.endTime, now);
         final diffSec = slotEnd.difference(now).inSeconds;
@@ -175,24 +177,34 @@ class WindowOrchestratorService {
           final sessionState = SessionStateService().currentState;
           final boardState = BoardStateMachine().currentState;
 
-          // Only fire if session is active AND board is NOT on AttendanceScreen
-          if (sessionState.isActive && boardState != BoardState.active) {
+          if (sessionState.isActive) {
             final isMinimized = await windowManager.isMinimized();
+
             if (isMinimized) {
+              // App is minimized — force CLOSED immediately regardless of BoardState
               Log.i('[Orchestrator] T-1: Auto-terminating session ${sessionState.sessionId} — app minimized, slot ending in ${diffSec}s');
               await KioskService.setMode(KioskMode.fullscreen);
-
-              // Force board to CLOSED immediately to show SummaryScreen
               BoardStateMachine().forceTransitionTo(BoardState.closed);
 
-              // Terminate on server (best-effort, for cleanup)
+              try {
+                await ApiService.terminateSession(sessionState.sessionId);
+              } catch (e) {
+                Log.e('[Orchestrator] T-1 terminate API failed: $e');
+              }
+            } else if (boardState != BoardState.active) {
+              // App is in foreground but NOT on AttendanceScreen — force CLOSED
+              Log.i('[Orchestrator] T-1: Auto-terminating session ${sessionState.sessionId} — slot ending in ${diffSec}s');
+              await KioskService.setMode(KioskMode.fullscreen);
+              BoardStateMachine().forceTransitionTo(BoardState.closed);
+
               try {
                 await ApiService.terminateSession(sessionState.sessionId);
               } catch (e) {
                 Log.e('[Orchestrator] T-1 terminate API failed: $e');
               }
             } else {
-              Log.i('[Orchestrator] T-1: Session ending in ${diffSec}s but app not minimized — skipping auto-terminate');
+              // User is on AttendanceScreen in foreground — defer termination
+              Log.i('[Orchestrator] T-1: Session ending in ${diffSec}s — user on AttendanceScreen, deferring termination');
             }
           }
         }
@@ -225,15 +237,14 @@ class WindowOrchestratorService {
             now.isAfter(slotEnd) && !_autoClosedSlots.contains(currentSlot.slotId)) {
           _autoClosedSlots.add(currentSlot.slotId);
           final sessionState = SessionStateService().currentState;
-          final boardState = BoardStateMachine().currentState;
           if (sessionState.isActive) {
             Log.i('[Orchestrator] Auto-closing session ${sessionState.sessionId} — slot ${currentSlot.slotId} ended');
 
-            // If board is NOT on AttendanceScreen, force CLOSED immediately
-            // so SummaryScreen appears without waiting for server round-trip.
-            if (boardState != BoardState.active) {
-              BoardStateMachine().forceTransitionTo(BoardState.closed);
-            }
+            // Force CLOSED immediately regardless of board state.
+            // If user is on AttendanceScreen, they can finish their current
+            // action — the server's session_ended WS event will be deferred.
+            // This ensures the session always terminates when the slot ends.
+            BoardStateMachine().forceTransitionTo(BoardState.closed);
 
             // Terminate on server (best-effort)
             try {

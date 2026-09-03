@@ -215,7 +215,18 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
     }
   }
 
-  void _returnToIdle() {
+  Future<void> _returnToIdle() async {
+    // Clean up Isar session before resetting state to prevent phantom sessions
+    // on next boot (crash recovery would otherwise find lifecycle='active').
+    final currentSessionId = _sessionState.currentState.sessionId;
+    if (currentSessionId.isNotEmpty) {
+      try {
+        await SessionManager.markSessionCompleted(currentSessionId);
+        await SessionManager.clearSession(currentSessionId);
+      } catch (e) {
+        Log.w('[Orchestrator] Failed to cleanup Isar session on back navigation: $e');
+      }
+    }
     _cachedSlotId = null;
     _sessionState.reset();
   }

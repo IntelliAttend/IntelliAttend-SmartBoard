@@ -44,7 +44,7 @@ class SummaryScreen extends StatefulWidget {
 }
 
 class _SummaryScreenState extends State<SummaryScreen> {
-  int _secondsRemaining = 30;
+  int _secondsRemaining = 20;
   Timer? _countdownTimer;
 
   @override
@@ -198,7 +198,7 @@ class _SummaryScreenState extends State<SummaryScreen> {
             SizedBox(
               width: 200,
               child: LinearProgressIndicator(
-                value: _secondsRemaining / 30,
+                value: _secondsRemaining / 20,
                 backgroundColor: isDark ? Colors.white10 : Colors.black12,
                 color: AppColors.primaryTeal,
               ),
