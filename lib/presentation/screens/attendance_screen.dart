@@ -14,12 +14,12 @@ import '../../services/heartbeat_service.dart';
 import '../../services/student_service.dart';
 import '../../services/time_sync_service.dart';
 import '../../core/platform/kiosk_service.dart';
+import '../../core/state/board_state_machine.dart';
 import '../../core/utils/roll_number_utils.dart';
 import '../../core/utils/logger.dart';
 import '../../models/isar_schemas.dart';
 import '../../main.dart' show kPreviewAttendance;
 import '../widgets/notification_popdown.dart';
-import 'summary_screen.dart';
 import 'workspace_screen.dart';
 import '../widgets/glass_container.dart';
 
@@ -882,28 +882,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     }
 
     if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (context) => SummaryScreen(
-          sessionId: widget.sessionId,
-          presentCount: _presentCount,
-          totalCapacity: widget.capacity,
-          courseName: widget.courseName,
-          facultyName: widget.facultyName,
-          slotId: widget.slotId,
-          students: _students.map((s) => StudentInfo(
-            rollNumber: s.rollNumber,
-            name: s.name,
-            email: s.studentId,
-            sectionId: '',
-            classId: '',
-          )).toList(),
-          presentIndices: _presentSeatIndices.toList(),
-          absentIndices: _absentSeatIndices.toList(),
-          isAttendanceSubmitted: _isAttendanceSubmitted,
-        ),
-      ),
-    );
+    // Trigger state machine → SessionOrchestratorScreen renders SummaryScreen
+    BoardStateMachine().forceTransitionTo(BoardState.closed);
   }
 
   void _startEndSessionCooldown() {

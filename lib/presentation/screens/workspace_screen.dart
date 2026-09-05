@@ -14,7 +14,6 @@ import '../../services/notification_listener_service.dart';
 import '../../services/resource_service.dart';
 import '../../services/syllabus_service.dart';
 import '../../services/document_service.dart';
-import 'summary_screen.dart';
 import 'document_viewer_screen.dart';
 import 'file_viewer_screen.dart';
 import 'attendance_screen.dart';
@@ -22,6 +21,7 @@ import '../../services/time_sync_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/student_service.dart';
 import '../../services/sync_manager.dart';
+import '../../core/state/board_state_machine.dart';
 
 
 enum _WorkspaceTab { resources, topics, calendar }
@@ -652,20 +652,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
       HeartbeatService.enqueuePendingTermination(widget.sessionId);
     }
     if (!mounted) return;
-    Navigator.of(context).pushReplacement(MaterialPageRoute(
-      builder: (_) => SummaryScreen(
-        sessionId: widget.sessionId,
-        presentCount: widget.presentCount,
-        totalCapacity: widget.totalCapacity,
-        courseName: widget.courseName,
-        facultyName: widget.facultyName,
-        slotId: widget.slotId,
-        students: widget.students,
-        presentIndices: widget.presentIndices,
-        absentIndices: widget.absentIndices,
-        isAttendanceSubmitted: widget.isAttendanceSubmitted,
-      ),
-    ));
+    // Trigger state machine → SessionOrchestratorScreen renders SummaryScreen
+    BoardStateMachine().forceTransitionTo(BoardState.closed);
   }
 
   static Widget _buildCardStat(String label, String value, Color color) {

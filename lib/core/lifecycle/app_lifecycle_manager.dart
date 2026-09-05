@@ -126,7 +126,7 @@ class AppLifecycleManager {
       _trace('configuration: environment loaded');
 
       if (!kIsWeb && Platform.isWindows) {
-        unawaited(LifecyclePhases.registerAutoStart().catchError((e) {
+        unawaited(StartupService.register().catchError((e) {
           Log.e('[Lifecycle] Auto-start registration failed: $e');
         }));
       }

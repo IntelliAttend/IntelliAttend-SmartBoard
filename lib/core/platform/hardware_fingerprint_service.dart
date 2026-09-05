@@ -1,10 +1,8 @@
-import 'dart:ffi';
 import 'dart:io';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:window_manager/window_manager.dart';
 import '../utils/logger.dart';
 
 class HardwareFingerprintService {
@@ -151,132 +149,92 @@ class HardwareFingerprintService {
       return _cachedMetadata!;
     }
 
-    // Run independent queries in parallel
-    final results = await Future.wait([
-      _getMotherboardSerial(), // 0
-      _getCpuId(), // 1
-      _getMacAddress(), // 2
-      _runPowerShell(
-          r'(Get-CimInstance Win32_OperatingSystem).Caption'), // 3 os_version
-      _runPowerShell(
-          r'(Get-CimInstance Win32_ComputerSystem).Manufacturer'), // 4 brand
-      _runPowerShell(
-          r'(Get-CimInstance Win32_ComputerSystem).Model'), // 5 model
-      _runPowerShell(
-          r'(Get-CimInstance Win32_Processor | Select-Object -First 1).Name'), // 6 cpu_model
-      _runPowerShell(
-          r'(Get-CimInstance Win32_Processor | Select-Object -First 1).NumberOfCores'), // 7 cpu_cores
-      _runPowerShell(
-          r'(Get-CimInstance Win32_Processor | Select-Object -First 1).Architecture'), // 8 cpu_arch_code
-      _runPowerShell(
-          r'$d=Get-PSDrive C; "$([math]::Round(($d.Used+$d.Free)/1GB,1)),$([math]::Round($d.Free/1GB,1))"'), // 9 storage
-      _runPowerShell(
-          r'$o=Get-CimInstance Win32_OperatingSystem; "$([math]::Round($o.TotalVisibleMemorySize/1MB,1)),$([math]::Round($o.FreePhysicalMemory/1MB,1))"'), // 10 ram
-      _runPowerShell(
-          r'(Get-PhysicalDisk | Where-Object {$_.DeviceId -eq 0}).MediaType'), // 11 storage_type
-      _runPowerShell(
-          r'$v=Get-CimInstance Win32_VideoController|Select-Object -First 1; "$($v.CurrentHorizontalResolution)x$($v.CurrentVerticalResolution)"'), // 12 screen_resolution
-      _runPowerShell(
-          r'(Get-CimInstance Win32_BIOS).SMBIOSBIOSVersion'), // 13 firmware_version
-      _runPowerShell(
-          r"(Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -notlike '*Loopback*' -and $_.IPAddress -notlike '169.*'} | Select-Object -First 1).IPAddress"), // 14 network_ip
-      _runPowerShell(
-          r"(Get-NetAdapter | Where-Object {$_.InterfaceDescription -like '*Wi-Fi*' -or $_.InterfaceDescription -like '*Wireless*'} | Select-Object -First 1).MacAddress"), // 15 network_wifi_mac
-      _runPowerShell(
-          r'(Get-CimInstance Win32_DiskDrive | Select-Object -First 1).SerialNumber'), // 16 disk_serial
-      _runPowerShell(
-          r"(Get-PnpDevice -Class 'HIDClass' | Where-Object {$_.FriendlyName -like '*touch*'}).Count -gt 0"), // 17 touch_capable
+    // Single PowerShell script to collect ALL hardware info (1 PS call instead of 18)
+    final script = r'''
+$mb = Get-CimInstance Win32_BaseBoard
+$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+$os = Get-CimInstance Win32_OperatingSystem
+$cs = Get-CimInstance Win32_ComputerSystem
+$disk = Get-CimInstance Win32_DiskDrive | Select-Object -First 1
+$pd = Get-PhysicalDisk | Where-Object {$_.DeviceId -eq 0} | Select-Object -First 1
+$vc = Get-CimInstance Win32_VideoController | Select-Object -First 1
+$bios = Get-CimInstance Win32_BIOS
+$d = Get-PSDrive C
+$net = Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -notlike '*Loopback*' -and $_.IPAddress -notlike '169.*'} | Select-Object -First 1
+$wifi = Get-NetAdapter | Where-Object {$_.InterfaceDescription -like '*Wi-Fi*' -or $_.InterfaceDescription -like '*Wireless*'} | Select-Object -First 1
+
+@{
+  motherboard_serial = $mb.SerialNumber
+  cpu_id = $cpu.ProcessorId
+  mac_address = ($net.MacAddress -replace '-', ':')
+  os_version = $os.Caption
+  brand = $cs.Manufacturer
+  model = $cs.Model
+  cpu_model = $cpu.Name
+  cpu_cores = $cpu.NumberOfCores
+  cpu_arch_code = $cpu.Architecture
+  storage_total_gb = [math]::Round(($d.Used+$d.Free)/1GB,1)
+  storage_free_gb = [math]::Round($d.Free/1GB,1)
+  ram_total_gb = [math]::Round($os.TotalVisibleMemorySize/1MB,1)
+  ram_free_gb = [math]::Round($os.FreePhysicalMemory/1MB,1)
+  storage_type = if ($pd.MediaType -match 'SSD') {'SSD'} elseif ($pd.MediaType -match 'HDD') {'HDD'} else {'Unknown'}
+  screen_resolution = "$($vc.CurrentHorizontalResolution)x$($vc.CurrentVerticalResolution)"
+  firmware_version = $bios.SMBIOSBIOSVersion
+  network_ip = $net.IPAddress
+  network_wifi_mac = $wifi.MacAddress
+  disk_serial = $disk.SerialNumber
+} | ConvertTo-Json -Compress
+''';
+
+    final result = await _runSafeCommand('powershell', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      script,
     ]);
 
-    // cpu_cores
-    int? cpuCores;
-    try {
-      cpuCores = int.parse(results[7] ?? '');
-    } catch (e) {
-      Log.d('[Hardware] Could not parse CPU cores: $e');
+    Map<String, dynamic> data = {};
+    if (result != null && result.exitCode == 0) {
+      try {
+        data = jsonDecode(result.stdout.toString().trim()) as Map<String, dynamic>;
+      } catch (e) {
+        Log.d('[Hardware] Could not parse batch result: $e');
+      }
     }
 
-    // cpu_arch
+    int? cpuCores = data['cpu_cores'];
     String cpuArch = 'x86_64';
-    try {
-      final archCode = int.parse(results[8] ?? '');
-      if (archCode == 12) {
-        cpuArch = 'arm64';
-      } else if (archCode == 0) {
-        cpuArch = 'x86';
-      } else {
-        cpuArch = 'x86_64';
-      }
-    } catch (e) {
-      Log.d('[Hardware] Could not parse CPU arch: $e');
-    }
-
-    // storage
-    double? storageTotalGb, storageFreeGb;
-    try {
-      final parts = (results[9] ?? '').split(',');
-      if (parts.length == 2) {
-        storageTotalGb = double.parse(parts[0].trim());
-        storageFreeGb = double.parse(parts[1].trim());
-      }
-    } catch (e) {
-      Log.d('[Hardware] Could not parse storage: $e');
-    }
-
-    // ram
-    double? ramTotalGb, ramFreeGb;
-    try {
-      final parts = (results[10] ?? '').split(',');
-      if (parts.length == 2) {
-        ramTotalGb = double.parse(parts[0].trim());
-        ramFreeGb = double.parse(parts[1].trim());
-      }
-    } catch (e) {
-      Log.d('[Hardware] Could not parse RAM: $e');
-    }
-
-    // storage_type
-    String storageType = 'Unknown';
-    final mediaType = results[11] ?? '';
-    if (mediaType.contains('SSD')) {
-      storageType = 'SSD';
-    } else if (mediaType.contains('HDD')) {
-      storageType = 'HDD';
-    }
-
-    // touch_capable
-    bool? touchCapable;
-    final touchRaw = (results[17] ?? '').toLowerCase();
-    if (touchRaw == 'true') {
-      touchCapable = true;
-    } else if (touchRaw == 'false') {
-      touchCapable = false;
+    final archCode = data['cpu_arch_code'];
+    if (archCode == 12) {
+      cpuArch = 'arm64';
+    } else if (archCode == 0) {
+      cpuArch = 'x86';
     }
 
     _cachedMetadata = {
-      'motherboard_serial': results[0],
-      'cpu_id': results[1],
-      'mac_address': results[2],
+      'motherboard_serial': data['motherboard_serial'] ?? 'UNKNOWN_MB',
+      'cpu_id': data['cpu_id'] ?? 'UNKNOWN_CPU',
+      'mac_address': data['mac_address'] ?? 'UNKNOWN_MAC',
       'os_name': 'Windows',
-      'os_version': results[3],
-      'brand': results[4],
-      'model': results[5],
-      'cpu_model': results[6],
+      'os_version': data['os_version'],
+      'brand': data['brand'],
+      'model': data['model'],
+      'cpu_model': data['cpu_model'],
       'cpu_cores': cpuCores,
       'cpu_arch': cpuArch,
-      'storage_total_gb': storageTotalGb,
-      'storage_free_gb': storageFreeGb,
-      'ram_total_gb': ramTotalGb,
-      'ram_free_gb': ramFreeGb,
-      // Contract v1.1: ram_gb (integer, Required) — total RAM rounded to nearest GB.
-      'ram_gb': ramTotalGb != null ? ramTotalGb.round() : 0,
-      'storage_type': storageType,
-      'screen_resolution': results[12],
-      'firmware_version': results[13],
-      'network_ip': results[14],
-      'network_wifi_mac': results[15],
-      'disk_serial': results[16],
-      'touch_capable': touchCapable,
+      'storage_total_gb': data['storage_total_gb'],
+      'storage_free_gb': data['storage_free_gb'],
+      'ram_total_gb': data['ram_total_gb'],
+      'ram_free_gb': data['ram_free_gb'],
+      'ram_gb': data['ram_total_gb'] != null
+          ? (data['ram_total_gb'] as num).round()
+          : 0,
+      'storage_type': data['storage_type'] ?? 'Unknown',
+      'screen_resolution': data['screen_resolution'],
+      'firmware_version': data['firmware_version'],
+      'network_ip': data['network_ip'],
+      'network_wifi_mac': data['network_wifi_mac'],
+      'disk_serial': data['disk_serial'],
       'app_version': appVersion,
       'screen_size_inch': null,
     };
@@ -356,50 +314,4 @@ class HardwareFingerprintService {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Screen capture prevention (Windows only)
-  //
-  // Uses SetWindowDisplayAffinity via Win32 FFI to block screenshots, screen
-  // recording, and screen sharing of the HWND. WDA_MONITOR makes captured
-  // content appear black/blank.
-  // ---------------------------------------------------------------------------
-
-  static const int _wdaNone = 0x00000000;
-  static const int _wdaMonitor = 0x00000001;
-
-  static DynamicLibrary? _user32;
-  static int Function(int, int)? _setWindowDisplayAffinity;
-
-  static void _ensureScreenCaptureApi() {
-    if (_user32 != null) return;
-    if (kIsWeb || !Platform.isWindows) return;
-    _user32 = DynamicLibrary.open('user32.dll');
-    _setWindowDisplayAffinity = _user32!
-        .lookupFunction<Int32 Function(IntPtr, Uint32), int Function(int, int)>(
-      'SetWindowDisplayAffinity',
-    );
-  }
-
-  /// Prevents the window from being captured in screenshots, recordings, and
-  /// screen sharing. Captured content will appear black/blank.
-  static Future<void> preventScreenCapture() async {
-    if (kIsWeb || !Platform.isWindows) return;
-    _ensureScreenCaptureApi();
-    final hwnd = await windowManager.getId();
-    final result = _setWindowDisplayAffinity!(hwnd, _wdaMonitor);
-    if (result == 0) {
-      throw Exception('SetWindowDisplayAffinity(WDA_MONITOR) failed');
-    }
-  }
-
-  /// Restores normal screen capture behavior for the window.
-  static Future<void> allowScreenCapture() async {
-    if (kIsWeb || !Platform.isWindows) return;
-    _ensureScreenCaptureApi();
-    final hwnd = await windowManager.getId();
-    final result = _setWindowDisplayAffinity!(hwnd, _wdaNone);
-    if (result == 0) {
-      throw Exception('SetWindowDisplayAffinity(WDA_NONE) failed');
-    }
-  }
 }

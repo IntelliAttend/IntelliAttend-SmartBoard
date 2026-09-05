@@ -5,7 +5,6 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:isar/isar.dart';
-import 'package:win32_registry/win32_registry.dart';
 
 import '../security/integrity_verifier.dart';
 import '../security/secure_storage_service.dart';
@@ -125,24 +124,6 @@ class LifecyclePhases {
       Log.w('[Lifecycle] No .env file found - using dart-define fallbacks');
     }
     AppConfig.validate();
-  }
-
-  /// Register auto-start in Windows registry.
-  static Future<void> registerAutoStart() async {
-    if (!kIsWeb && Platform.isWindows) {
-      try {
-        final appPath = Platform.resolvedExecutable;
-        final quotedPath = '"$appPath" --intelliattend-autostart';
-        final key = Registry.currentUser.createKey(
-            r'Software\Microsoft\Windows\CurrentVersion\Run');
-        key.createValue(
-            RegistryValue.string('IntelliAttendSmartBoard', quotedPath));
-        key.close();
-        Log.i('[Lifecycle] Auto-start registered: $quotedPath');
-      } catch (e) {
-        Log.e('[Lifecycle] Auto-start registration failed: $e');
-      }
-    }
   }
 
   // ── DATABASE ──────────────────────────────────────────────────────────────

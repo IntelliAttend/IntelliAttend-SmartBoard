@@ -284,20 +284,8 @@ class UpdateHealthMonitor {
 
         _reportUpdateStatus(UpdateReportStatus.rolledBack);
 
-        final script = await _writeRollbackScript(appDir, backupDir);
-        Log.i('[UpdateHealth] Starting rollback helper: ${script.path}');
-        await Process.start(
-          'powershell.exe',
-          [
-            '-NoProfile',
-            '-ExecutionPolicy',
-            'Bypass',
-            '-File',
-            script.path,
-            '$pid',
-          ],
-          mode: ProcessStartMode.detached,
-        );
+        // Perform rollback directly in Dart (no PowerShell spawned)
+        await _performRollbackDirect(appDir, backupDir);
 
         Log.i('[UpdateHealth] Rollback to v$_previousVersion scheduled '
             '(rollback #$_rollbackCount). Exiting so files can be restored.');
@@ -413,45 +401,43 @@ class UpdateHealthMonitor {
     }
   }
 
-  static Future<File> _writeRollbackScript(
-      Directory appDir, Directory backupDir) async {
+  /// Performs rollback directly in Dart without spawning PowerShell.
+  /// Moves current app to failed dir, restores backup, launches restored exe.
+  static Future<void> _performRollbackDirect(Directory appDir, Directory backupDir) async {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final scriptPath =
-        '${Directory.systemTemp.path}\\intelliattend_rollback_$timestamp.ps1';
     final failedDir =
         '${appDir.parent.path}\\${appDir.uri.pathSegments.last}_failed_$timestamp';
     final exeName =
         Platform.resolvedExecutable.split(Platform.pathSeparator).last;
     final restoredExe = '${appDir.path}\\$exeName';
-    final script = '''
-param([int]\$OldPid)
-\$ErrorActionPreference = 'Stop'
-\$appDir = ${_psQuote(appDir.path)}
-\$backupDir = ${_psQuote(backupDir.path)}
-\$failedDir = ${_psQuote(failedDir)}
-\$restoredExe = ${_psQuote(restoredExe)}
-try {
-  Wait-Process -Id \$OldPid -Timeout 20 -ErrorAction SilentlyContinue
-  if (Test-Path -LiteralPath \$appDir) {
-    Move-Item -LiteralPath \$appDir -Destination \$failedDir -Force
-  }
-  Move-Item -LiteralPath \$backupDir -Destination \$appDir -Force
-  if (Test-Path -LiteralPath \$restoredExe) {
-    Start-Process -FilePath \$restoredExe -ArgumentList '--rollback-recovered'
-  }
-} catch {
-  \$log = Join-Path \$env:TEMP 'intelliattend_rollback_error.log'
-  "[\$(Get-Date -Format o)] \$(\$_.Exception.Message)" | Add-Content -LiteralPath \$log
-  throw
-}
-''';
-    final file = File(scriptPath);
-    await file.writeAsString(script);
-    return file;
-  }
 
-  static String _psQuote(String value) {
-    return "'${value.replaceAll("'", "''")}'";
+    // Wait a moment for current process to be ready for file operations
+    await Future.delayed(const Duration(seconds: 2));
+
+    try {
+      // Move current app directory to failed dir
+      if (await appDir.exists()) {
+        await appDir.rename(failedDir);
+        Log.i('[UpdateHealth] Moved current app to: $failedDir');
+      }
+
+      // Restore backup to app directory
+      if (await backupDir.exists()) {
+        await backupDir.rename(appDir.path);
+        Log.i('[UpdateHealth] Restored backup to: ${appDir.path}');
+      }
+
+      // Launch the restored executable
+      if (await File(restoredExe).exists()) {
+        await Process.start(restoredExe, ['--rollback-recovered']);
+        Log.i('[UpdateHealth] Launched restored executable: $restoredExe');
+      }
+    } catch (e) {
+      Log.e('[UpdateHealth] Rollback failed: $e');
+      // Log error to temp file for diagnostics
+      final logFile = File('${Directory.systemTemp.path}\\intelliattend_rollback_error.log');
+      await logFile.writeAsString('[$timestamp] $e\n', mode: FileMode.append);
+    }
   }
 
   /// Recursive directory copy.

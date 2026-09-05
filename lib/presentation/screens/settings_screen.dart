@@ -7,6 +7,8 @@ import '../../core/security/secure_storage_service.dart';
 import '../../core/config/app_config.dart';
 import '../../core/network/api_client.dart';
 import '../../core/utils/logger.dart';
+import '../../core/platform/power_command_service.dart';
+import '../../services/websocket_service.dart';
 import '../../data/repositories/auth_repository.dart';
 import '../../models/isar_schemas.dart';
 import '../../models/remote_config.dart';
@@ -1112,11 +1114,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _executePowerAction(String action) async {
     try {
-      if (action == 'shutdown') {
-        await Process.run('shutdown', ['/s', '/t', '0']);
-      } else if (action == 'restart') {
-        await Process.run('shutdown', ['/r', '/t', '0']);
-      }
+      // Delegate to PowerCommandService — single source of truth for power actions.
+      // This avoids duplicate shutdown/restart logic and ensures consistent behavior.
+      PowerCommandService().handleSystemCommand(
+        SystemCommandEvent(
+          command: action,
+          commandId: 'local_${action}_${DateTime.now().millisecondsSinceEpoch}',
+          reason: 'Manual $action from settings',
+          delaySeconds: 5,
+        ),
+      );
     } catch (e) {
       Log.e('[Settings] Power action failed: $e');
       if (mounted) {

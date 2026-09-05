@@ -24,9 +24,13 @@ class HotspotService {
   static final HotspotService _instance = HotspotService._();
   factory HotspotService() => _instance;
 
+  // WinRT type loading preamble — loaded once per PowerShell session.
+  // Simplified: only loads what's needed, no reflection for async.
   static const _winrtPreamble = r'''
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
-[Windows.ApplicationModel.Package, Windows.ApplicationModel, ContentType=WindowsRuntime] | Out-Null
+[Windows.Networking.Connectivity.NetworkInformation, Windows.Networking.Connectivity, ContentType=WindowsRuntime] | Out-Null
+[Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager, Windows.Networking.NetworkOperators, ContentType=WindowsRuntime] | Out-Null
+[Windows.Networking.NetworkOperators.NetworkOperatorTetheringAccessPointConfiguration, Windows.Networking.NetworkOperators, ContentType=WindowsRuntime] | Out-Null
 $asTaskOp = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
     $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
     $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
@@ -39,107 +43,66 @@ function AwaitOp($task, $type) {
 }
 ''';
 
+  /// Runs a PowerShell script inline (no temp file).
   Future<String> _runPowerShell(String script) async {
     final fullScript = '$_winrtPreamble\n$script';
-    final tempFile = '${Directory.systemTemp.path}\\hotspot_cmd.ps1';
-    await File(tempFile).writeAsString(fullScript, encoding: utf8);
+    final result = await Process.run('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      fullScript,
+    ]);
 
-    try {
-      final result = await Process.run('powershell.exe', [
-        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-        '-File', tempFile,
-      ]);
-
-      if (result.exitCode != 0) {
-        final stderr = result.stderr.toString().trim();
-        if (stderr.isNotEmpty) {
-          Log.w('[Hotspot] PowerShell stderr: $stderr');
-        }
+    if (result.exitCode != 0) {
+      final stderr = result.stderr.toString().trim();
+      if (stderr.isNotEmpty) {
+        Log.w('[Hotspot] PowerShell stderr: $stderr');
       }
-
-      return result.stdout.toString().trim();
-    } finally {
-      try { await File(tempFile).delete(); } catch (_) {}
     }
+
+    return result.stdout.toString().trim();
   }
 
-  Future<bool> isEnabled() async {
+  /// Checks if the device supports WinRT tethering.
+  Future<bool> isSupported() async {
     if (!Platform.isWindows) return false;
-
-    // Check netsh hosted network first
-    final netshEnabled = await _isEnabledNetsh();
-    if (netshEnabled) return true;
-
-    // Check WinRT system hotspot
-    return _isEnabledWinRt();
-  }
-
-  Future<bool> _isEnabledNetsh() async {
     try {
-      final result = await Process.run('netsh', ['wlan', 'show', 'hostednetwork']);
-      return result.stdout.toString().contains('Status                  : Started');
+      final output = await _runPowerShell(r'''
+$cp = [Windows.Networking.Connectivity.NetworkInformation, Windows.Networking.Connectivity, ContentType=WindowsRuntime]::GetInternetConnectionProfile()
+if ($null -eq $cp) { Write-Output "False"; exit }
+$mgr = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager, Windows.Networking.NetworkOperators, ContentType=WindowsRuntime]::CreateFromConnectionProfile($cp)
+Write-Output $mgr.IsTetheringSupported
+''');
+      return output.trim() == 'True';
     } catch (e) {
+      Log.w('[Hotspot] Support check failed: $e');
       return false;
     }
   }
 
-  Future<bool> _isEnabledWinRt() async {
+  /// Checks if the hotspot is currently running.
+  Future<bool> isEnabled() async {
+    if (!Platform.isWindows) return false;
     try {
       final output = await _runPowerShell(r'''
 $cp = [Windows.Networking.Connectivity.NetworkInformation, Windows.Networking.Connectivity, ContentType=WindowsRuntime]::GetInternetConnectionProfile()
+if ($null -eq $cp) { Write-Output "Unknown"; exit }
 $mgr = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager, Windows.Networking.NetworkOperators, ContentType=WindowsRuntime]::CreateFromConnectionProfile($cp)
 Write-Output $mgr.TetheringOperationalState
 ''');
-      return output == 'On';
+      return output.trim() == 'On';
     } catch (e) {
       return false;
     }
   }
 
+  /// Gets the current hotspot configuration.
   Future<HotspotConfig?> getConfig() async {
     if (!Platform.isWindows) return null;
-
-    final netshConfig = await _getConfigNetsh();
-    if (netshConfig != null) return netshConfig;
-
-    return _getConfigWinRt();
-  }
-
-  Future<HotspotConfig?> _getConfigNetsh() async {
-    try {
-      final result = await Process.run('netsh', ['wlan', 'show', 'hostednetwork']);
-      final output = result.stdout.toString();
-
-      String ssid = '';
-      String password = '';
-      String status = 'Stopped';
-
-      for (final line in output.split('\n')) {
-        final trimmed = line.trim();
-        if (trimmed.startsWith('SSID name')) {
-          ssid = trimmed.split(':').last.trim();
-        }
-        if (trimmed.startsWith('Key content')) {
-          password = trimmed.split(':').last.trim();
-        }
-        if (trimmed.startsWith('Status')) {
-          status = trimmed.split(':').last.trim();
-        }
-      }
-
-      if (ssid.isNotEmpty) {
-        return HotspotConfig(ssid: ssid, password: password, isRunning: status == 'Started');
-      }
-    } catch (e) {
-      Log.w('[Hotspot] netsh config failed: $e');
-    }
-    return null;
-  }
-
-  Future<HotspotConfig?> _getConfigWinRt() async {
     try {
       final output = await _runPowerShell(r'''
 $cp = [Windows.Networking.Connectivity.NetworkInformation, Windows.Networking.Connectivity, ContentType=WindowsRuntime]::GetInternetConnectionProfile()
+if ($null -eq $cp) { exit }
 $mgr = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager, Windows.Networking.NetworkOperators, ContentType=WindowsRuntime]::CreateFromConnectionProfile($cp)
 $config = $mgr.GetCurrentAccessPointConfiguration()
 $state = $mgr.TetheringOperationalState
@@ -156,24 +119,18 @@ $state = $mgr.TetheringOperationalState
         );
       }
     } catch (e) {
-      Log.w('[Hotspot] WinRT config failed: $e');
+      Log.w('[Hotspot] getConfig failed: $e');
     }
     return null;
   }
 
+  /// Gets connected clients.
   Future<List<Map<String, String>>> getConnectedClients() async {
     if (!Platform.isWindows) return [];
-
-    final netshClients = await _getClientsNetsh();
-    if (netshClients.isNotEmpty) return netshClients;
-
-    return _getClientsWinRt();
-  }
-
-  Future<List<Map<String, String>>> _getClientsWinRt() async {
     try {
       final output = await _runPowerShell(r'''
 $cp = [Windows.Networking.Connectivity.NetworkInformation, Windows.Networking.Connectivity, ContentType=WindowsRuntime]::GetInternetConnectionProfile()
+if ($null -eq $cp) { exit }
 $mgr = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager, Windows.Networking.NetworkOperators, ContentType=WindowsRuntime]::CreateFromConnectionProfile($cp)
 $clients = AwaitOp $mgr.GetTetheringClients() ([System.Collections.Generic.IReadOnlyList`1[Windows.Networking.NetworkOperators.TetheringClient], System.Collections.Generic.IReadOnlyList`1, ContentType=WindowsRuntime])
 $jsonArr = @()
@@ -192,50 +149,25 @@ $jsonArr | ConvertTo-Json -Compress
         }
       }
     } catch (e) {
-      Log.w('[Hotspot] WinRT clients failed: $e');
+      Log.w('[Hotspot] getConnectedClients failed: $e');
     }
     return [];
   }
 
-  Future<List<Map<String, String>>> _getClientsNetsh() async {
-    try {
-      final result = await Process.run('netsh', ['wlan', 'show', 'hostednetwork']);
-      final output = result.stdout.toString();
-      final clients = <Map<String, String>>[];
-
-      final lines = output.split('\n');
-      var inClientSection = false;
-      for (final line in lines) {
-        final trimmed = line.trim();
-        if (trimmed.contains('Number of clients')) {
-          inClientSection = true;
-          continue;
-        }
-        if (inClientSection && trimmed.contains(':')) {
-          final parts = trimmed.split(':').map((s) => s.trim()).toList();
-          if (parts.length >= 2 && parts[0].isNotEmpty) {
-            clients.add({'identifier': parts[0], 'value': parts[1]});
-          }
-        }
-      }
-      return clients;
-    } catch (e) {
-      return [];
-    }
-  }
-
   /// Starts the hotspot with the given SSID and password.
-  /// 1. Tries WinRT with ConfigureAccessPointAsync (sets custom SSID/password, then starts)
-  /// 2. Falls back to netsh hosted network (legacy, custom SSID/password)
-  /// 3. Falls back to WinRT StartTetheringAsync (system default config)
+  /// Uses WinRT ConfigureAccessPointAsync (sets custom SSID/password, then starts).
   Future<bool> start({required String ssid, required String password}) async {
     if (!Platform.isWindows) {
       throw UnsupportedError('Hotspot is only supported on Windows');
     }
 
+    // Check support first
+    if (!await isSupported()) {
+      throw HotspotException('Hotspot is not supported on this device');
+    }
+
     Log.i('[Hotspot] Starting hotspot: $ssid');
 
-    // Strategy 1: WinRT with ConfigureAccessPointAsync (sets custom SSID/password)
     try {
       final result = await _startWinRtConfigured(ssid: ssid, password: password);
       Log.i('[Hotspot] WinRT configured start succeeded');
@@ -244,16 +176,7 @@ $jsonArr | ConvertTo-Json -Compress
       Log.w('[Hotspot] WinRT configured start failed: $e');
     }
 
-    // Strategy 2: netsh hosted network (legacy, custom SSID/password)
-    try {
-      await _startNetsh(ssid: ssid, password: password);
-      Log.i('[Hotspot] netsh start succeeded');
-      return true;
-    } catch (e) {
-      Log.w('[Hotspot] netsh start failed: $e');
-    }
-
-    // Strategy 3: WinRT StartTetheringAsync (system default config)
+    // Fallback: WinRT StartTetheringAsync (system default config)
     try {
       await _startWinRtDefault();
       Log.i('[Hotspot] WinRT default start succeeded');
@@ -264,9 +187,8 @@ $jsonArr | ConvertTo-Json -Compress
     }
   }
 
-  /// WinRT: Configure custom SSID/password, then start
+  /// WinRT: Configure custom SSID/password, then start.
   Future<bool> _startWinRtConfigured({required String ssid, required String password}) async {
-    // Use single-quote escaping (safest PowerShell context) for user values.
     final safeSsid = PowerShellEscape.singleQuote(ssid);
     final safePass = PowerShellEscape.singleQuote(password);
 
@@ -278,11 +200,9 @@ $jsonArr | ConvertTo-Json -Compress
 \$cp = [Windows.Networking.Connectivity.NetworkInformation, Windows.Networking.Connectivity, ContentType=WindowsRuntime]::GetInternetConnectionProfile()
 \$mgr = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager, Windows.Networking.NetworkOperators, ContentType=WindowsRuntime]::CreateFromConnectionProfile(\$cp)
 
-Write-Output "Configuring..."
 \$task = \$mgr.ConfigureAccessPointAsync(\$config)
 \$task.Wait()
 
-Write-Output "Starting..."
 \$result = AwaitOp \$mgr.StartTetheringAsync() ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult, Windows.Networking.NetworkOperators, ContentType=WindowsRuntime])
 Write-Output "Result:\$(\$result.Status)"
 ''');
@@ -302,7 +222,7 @@ Write-Output "Result:\$(\$result.Status)"
     throw HotspotException('WinRT configure failed: $output');
   }
 
-  /// WinRT: Start with system default config
+  /// WinRT: Start with system default config.
   Future<void> _startWinRtDefault() async {
     final output = await _runPowerShell(r'''
 $cp = [Windows.Networking.Connectivity.NetworkInformation, Windows.Networking.Connectivity, ContentType=WindowsRuntime]::GetInternetConnectionProfile()
@@ -325,80 +245,27 @@ Write-Output $opResult.Status
     throw HotspotException('WinRT start failed: $output');
   }
 
-  /// netsh: Legacy hosted network with custom SSID/password
-  Future<void> _startNetsh({required String ssid, required String password}) async {
-    // Validate SSID/password before passing to netsh.
-    final safeSsid = PowerShellEscape.forNetsh(ssid, field: 'SSID');
-    final safePassword = PowerShellEscape.forNetsh(password, field: 'Password');
-    final configResult = await Process.run('netsh', [
-      'wlan', 'set', 'hostednetwork', 'mode=allow',
-      'ssid=$safeSsid', 'key=$safePassword',
-    ]);
-    Log.i('[Hotspot] netsh config: ${configResult.stdout}');
-
-    if (_isAdminError(configResult.stdout.toString(), configResult.stderr.toString())) {
-      throw HotspotException('Administrator privileges required');
-    }
-
-    final output = configResult.stdout.toString().toLowerCase();
-    if (output.contains('not supported') || output.contains('cannot be set')) {
-      throw HotspotException('Hosted network not supported');
-    }
-
-    final startResult = await Process.run('netsh', ['wlan', 'start', 'hostednetwork']);
-    Log.i('[Hotspot] netsh start: ${startResult.stdout}');
-
-    if (_isAdminError(startResult.stdout.toString(), startResult.stderr.toString())) {
-      throw HotspotException('Administrator privileges required');
-    }
-
-    final startOutput = startResult.stdout.toString();
-    if (startOutput.toLowerCase().contains('not supported')) {
-      throw HotspotException('Hosted network not supported');
-    }
-    if (!startOutput.contains('started') && !startOutput.contains('Started')) {
-      throw HotspotException('netsh start failed: $startOutput');
-    }
-  }
-
-  /// Stops the hotspot (both netsh and WinRT).
+  /// Stops the hotspot.
   Future<bool> stop() async {
     if (!Platform.isWindows) {
       throw UnsupportedError('Hotspot is only supported on Windows');
     }
 
     Log.i('[Hotspot] Stopping hotspot');
-    var anyStopped = false;
-
-    // Stop netsh hosted network
-    try {
-      final result = await Process.run('netsh', ['wlan', 'stop', 'hostednetwork']);
-      Log.i('[Hotspot] netsh stop: ${result.stdout}');
-      anyStopped = true;
-    } catch (e) {
-      Log.w('[Hotspot] netsh stop failed: $e');
-    }
-
-    // Stop WinRT system hotspot
     try {
       final output = await _runPowerShell(r'''
 $cp = [Windows.Networking.Connectivity.NetworkInformation, Windows.Networking.Connectivity, ContentType=WindowsRuntime]::GetInternetConnectionProfile()
+if ($null -eq $cp) { Write-Output "NoConnection"; exit }
 $mgr = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager, Windows.Networking.NetworkOperators, ContentType=WindowsRuntime]::CreateFromConnectionProfile($cp)
 $opResult = AwaitOp $mgr.StopTetheringAsync() ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult, Windows.Networking.NetworkOperators, ContentType=WindowsRuntime])
 Write-Output $opResult.Status
 ''');
       Log.i('[Hotspot] WinRT stop: $output');
-      anyStopped = true;
+      return true;
     } catch (e) {
-      Log.w('[Hotspot] WinRT stop failed: $e');
+      Log.w('[Hotspot] stop failed: $e');
+      return false;
     }
-
-    return anyStopped;
-  }
-
-  bool _isAdminError(String stdout, String stderr) {
-    return stdout.toLowerCase().contains('admin privilege') ||
-        stderr.toLowerCase().contains('admin privilege');
   }
 }
 
