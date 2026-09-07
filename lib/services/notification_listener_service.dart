@@ -83,24 +83,8 @@ class NotificationListenerService {
 
   // ── Priority parsing helpers ────────────────────────────────────
 
-  static NotificationPriority _parsePriority(dynamic value) {
-    if (value is int) {
-      return NotificationPriority.values[value.clamp(0, 3)];
-    }
-    if (value is String) {
-      switch (value.toLowerCase()) {
-        case 'emergency': return NotificationPriority.emergency;
-        case 'p0': return NotificationPriority.emergency;
-        case 'high': return NotificationPriority.high;
-        case 'p1': return NotificationPriority.high;
-        case 'normal': return NotificationPriority.normal;
-        case 'p2': return NotificationPriority.normal;
-        case 'low': return NotificationPriority.low;
-        case 'p3': return NotificationPriority.low;
-      }
-    }
-    return NotificationPriority.low;
-  }
+  static NotificationPriority _parsePriority(dynamic value) =>
+      BoardNotification.parsePriority(value);
 
   static BoardNotification fromMap(String id, Map<String, dynamic> data) {
     int? parseSize(dynamic value) {

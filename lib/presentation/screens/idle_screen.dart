@@ -306,8 +306,9 @@ class _IdleScreenState extends State<IdleScreen>
       if (drained.isNotEmpty) {
         for (final n in drained) {
           if (n.priority == NotificationPriority.emergency ||
-              n.priority == NotificationPriority.high) {
-            // Already handled by overlays — skip popdown
+              n.priority == NotificationPriority.high ||
+              n.priority == NotificationPriority.normal) {
+            // Emergency/high/normal (P2) handled by overlays — skip popdown
           } else if (n.priority == NotificationPriority.low) {
             setState(() {
               _popdownQueue.add(n);
@@ -323,13 +324,13 @@ class _IdleScreenState extends State<IdleScreen>
       _popdownSub = notifService.onNotificationArrived.listen((n) {
         if (!mounted) return;
         // Route by priority:
-        // - emergency/high → handled by overlays, skip popdown
-        // - normal → handled by overlay (P-2), skip popdown
+        // - emergency/high/normal → handled by overlays, skip popdown
         // - low → show popdown animation (during breaks or as general info)
         if (n.priority == NotificationPriority.emergency ||
-            n.priority == NotificationPriority.high) {
+            n.priority == NotificationPriority.high ||
+            n.priority == NotificationPriority.normal) {
           // Overlays handle these — skip popdown
-          Log.d('[Idle] Emergency/high notification — overlay handles display.');
+          Log.d('[Idle] Emergency/high/normal notification — overlay handles display.');
         } else if (n.priority == NotificationPriority.low) {
           // Low priority (P-3) → show popdown animation
           setState(() {

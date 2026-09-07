@@ -74,7 +74,7 @@ class BoardNotification {
       body: payload.body ?? '',
       type: payload.notificationType,
       timestamp: timestamp ?? TimeSyncService.timeNow,
-      priority: _mapDisplayModeToPriority(payload.displayMode),
+      priority: parsePriority(payload.priority),
       attachmentUrl: payload.attachmentUrl,
       attachmentName: payload.attachmentName,
       attachmentType: payload.attachmentType,
@@ -86,15 +86,24 @@ class BoardNotification {
     );
   }
 
-  static NotificationPriority _mapDisplayModeToPriority(String displayMode) {
-    if (displayMode == NotificationPayload.displayModeFullScreen) {
-      return NotificationPriority.emergency;
+  /// Parse a server priority string ("P0", "P1", "P2", "P3") or
+  /// legacy label ("emergency", "high", "normal", "low") into the
+  /// corresponding [NotificationPriority]. Falls back to [low].
+  static NotificationPriority parsePriority(dynamic value) {
+    if (value is int) {
+      return NotificationPriority.values[value.clamp(0, 3)];
     }
-    if (displayMode == NotificationPayload.displayModeOverlay) {
-      return NotificationPriority.high;
-    }
-    if (displayMode == NotificationPayload.displayModeReminder) {
-      return NotificationPriority.normal;
+    if (value is String) {
+      switch (value.toLowerCase()) {
+        case 'emergency': return NotificationPriority.emergency;
+        case 'p0': return NotificationPriority.emergency;
+        case 'high': return NotificationPriority.high;
+        case 'p1': return NotificationPriority.high;
+        case 'normal': return NotificationPriority.normal;
+        case 'p2': return NotificationPriority.normal;
+        case 'low': return NotificationPriority.low;
+        case 'p3': return NotificationPriority.low;
+      }
     }
     return NotificationPriority.low;
   }
