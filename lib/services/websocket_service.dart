@@ -921,12 +921,12 @@ class WebsocketService with WidgetsBindingObserver {
     // don't force BoardState.closed — that would rip them to SummaryScreen
     // mid-submission. Record the CLOSED state without board state sync.
     final boardState = BoardStateMachine().currentState;
-    // Use version higher than current state so _shouldApply() doesn't reject it.
-    // The server's session_ended event may not carry a version, defaulting to 0,
-    // which would be rejected if the current state version is >= 1.
+    // Use copyWith to preserve existing session data (presentCount,
+    // courseName, facultyName, etc.) — only update state and version.
+    // A fresh SessionState would wipe accumulated data, causing the
+    // SummaryScreen to show 0 present, no professor name, etc.
     final currentVersion = _sessionState.currentState.version;
-    final closedState = SessionState(
-      sessionId: event.sessionId,
+    final closedState = _sessionState.currentState.copyWith(
       state: 'CLOSED',
       version: currentVersion + 1,
     );

@@ -9,6 +9,7 @@ import '../../models/board_notification.dart';
 import '../../models/course_topic.dart';
 import '../../models/syllabus_unit.dart';
 import '../../services/api_service.dart';
+import '../../services/session_state_service.dart';
 import '../../services/heartbeat_service.dart';
 import '../../services/notification_listener_service.dart';
 import '../../services/resource_service.dart';
@@ -645,12 +646,20 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
     );
     if (result != true || !mounted) return;
     setState(() => _isEnding = true);
-    try {
-      await ApiService.terminateSession(widget.sessionId);
-    } catch (e) {
+
+    // Sync local attendance data to SessionStateService so SummaryScreen
+    // receives accurate presentCount/courseName/facultyName.
+    SessionStateService().updateCounts(
+      widget.presentCount,
+      widget.totalCapacity - widget.presentCount,
+    );
+
+    // Fire terminate as fire-and-forget — don't block the UI transition.
+    ApiService.terminateSession(widget.sessionId).catchError((e) {
       Log.e('[Workspace] Error ending session: $e');
       HeartbeatService.enqueuePendingTermination(widget.sessionId);
-    }
+    });
+
     if (!mounted) return;
     // Trigger state machine → SessionOrchestratorScreen renders SummaryScreen
     BoardStateMachine().forceTransitionTo(BoardState.closed);

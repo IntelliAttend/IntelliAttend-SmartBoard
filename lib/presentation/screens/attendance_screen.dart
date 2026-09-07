@@ -10,6 +10,7 @@ import '../../models/board_notification.dart';
 import '../../services/api_service.dart';
 import '../../services/network_info_service.dart';
 import '../../services/session_manager.dart';
+import '../../services/session_state_service.dart';
 import '../../services/heartbeat_service.dart';
 import '../../services/student_service.dart';
 import '../../services/time_sync_service.dart';
@@ -874,12 +875,23 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     _endSessionCooldownTimer?.cancel();
     KioskService.setMode(KioskMode.fullscreen);
 
-    try {
-      await ApiService.terminateSession(widget.sessionId);
-    } catch (e) {
+    // Sync local attendance data to SessionStateService so SummaryScreen
+    // receives accurate presentCount/courseName/facultyName. Without this,
+    // the summary may show 0 present if session_ended WS event arrived
+    // and wiped the state before we transition.
+    SessionStateService().updateCounts(
+      _presentCount,
+      _students.length - _presentCount,
+    );
+
+    // Fire terminate as fire-and-forget — don't block the UI transition.
+    // Server continues termination independently. If it fails, the
+    // heartbeat service retries. The WS session_ended event (which the
+    // server will eventually emit) will finalize cleanup.
+    ApiService.terminateSession(widget.sessionId).catchError((e) {
       Log.e('[Attendance] Error ending session: $e');
       HeartbeatService.enqueuePendingTermination(widget.sessionId);
-    }
+    });
 
     if (!mounted) return;
     // Trigger state machine → SessionOrchestratorScreen renders SummaryScreen
