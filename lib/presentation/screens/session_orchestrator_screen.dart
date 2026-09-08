@@ -10,6 +10,7 @@ import '../../services/session_state_service.dart';
 import '../../services/session_manager.dart';
 import '../../services/websocket_service.dart';
 import '../../services/api_service.dart';
+import '../../services/heartbeat_service.dart';
 import '../../services/timetable_cache.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../main.dart' show globalDeviceRepository;
@@ -53,6 +54,9 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
   @override
   void initState() {
     super.initState();
+    // Listen for retry exhaustion — show notification if server termination
+    // fails after 10 retries (2.5 min of network failures).
+    HeartbeatService.onRetryExhausted = _handleRetryExhausted;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       await _runBootSequence();
@@ -249,10 +253,18 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
 
   @override
   void dispose() {
+    HeartbeatService.onRetryExhausted = null;
     _stateSubscription?.cancel();
     _boardStateSubscription?.cancel();
     _wsService?.disconnect();
     super.dispose();
+  }
+
+  void _handleRetryExhausted(String sessionId) {
+    if (!mounted) return;
+    Log.e('[Orchestrator] Session termination failed after max retries: $sessionId');
+    // Show a persistent warning — teacher should contact support.
+    // The board is on SummaryScreen (closed state) so this is informational.
   }
 
   @override

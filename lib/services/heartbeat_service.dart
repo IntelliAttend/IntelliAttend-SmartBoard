@@ -43,6 +43,7 @@ class HeartbeatService {
   static final List<String> _pendingTerminations = [];
   static final Map<String, int> _pendingRetryCounts = {};
   static const int _maxPendingRetries = 10;
+  static Function(String sessionId)? onRetryExhausted;
 
   static void enqueuePendingTermination(String sessionId) {
     if (!_pendingTerminations.contains(sessionId)) {
@@ -113,6 +114,7 @@ class HeartbeatService {
           Log.e('[Heartbeat] Pending termination giving up after $_maxPendingRetries retries for $pendingId');
           _pendingTerminations.remove(pendingId);
           _pendingRetryCounts.remove(pendingId);
+          onRetryExhausted?.call(pendingId);
         } else {
           Log.w('[Heartbeat] Pending termination retry failed for $pendingId ($retries/$_maxPendingRetries): $e');
         }

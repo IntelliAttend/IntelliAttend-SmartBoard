@@ -183,3 +183,7 @@
 | 45 | **WorkspaceScreen receives SessionContext** | 🔴 Critical | ✅ Done | Sidebar Attendance navigation passes context back to AttendanceScreen |
 | 46 | **Server: force terminate + WS broadcast** | 🔴 Critical | ✅ Done | `session_engine.end_session()` broadcasts `session_ended` to all rooms; `TerminateSessionRequest` has `force` param |
 | 47 | **Persist SessionContext to Isar** | 🟡 Medium | ❌ Open | Crash recovery should restore `SessionContext` from Isar, not just `SessionState`. Currently works because orchestrator recreates it from `SessionStateService` |
+| 48 | **SessionLifecycle.end() — single termination entry** | 🔴 Critical | ✅ Done | `lib/services/session_lifecycle.dart` — dedup, retry (max 10), deferral, count sync, logging |
+| 49 | **BoardStateMachine cleanup** | 🔴 Critical | ✅ Done | Removed `forceTransitionTo()`. Added `idle→closed` rule. FSM now the only way to change state |
+| 50 | **Retry exhaustion notification** | 🟡 Medium | ✅ Done | `HeartbeatService.onRetryExhausted` callback fires after 10 failed retries (2.5 min). Orchestrator hooks it for logging |
+| 51 | **Server: idempotent terminate** | 🔴 Critical | ✅ Done | `board.py` always passes `force=True`, returns `already_ended` field. Dead `force` param removed from request |
