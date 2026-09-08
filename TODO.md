@@ -169,3 +169,17 @@
 - ✅ **Firebase Admin SDK initialized** — `main.py` now initializes `firebase_admin` for token verification + custom token generation
 - ✅ **Deprecated code removed** — Deleted dead Firestore auth code from `main.py`, `core/security.py`, `auth_service.py`
 - ✅ **Backend registration tests added** — `tests/test_registration_pg.py` with 5 passing tests (async + mocked DB)
+
+---
+
+## 🟡 Session Lifecycle & Data Flow (SmartBoard Architectural Fix)
+
+| # | Task | Priority | Status | Details |
+|---|------|----------|--------|---------|
+| 41 | **SessionContext data class** | 🔴 Critical | ✅ Done | `lib/models/session_context.dart` — immutable data object that flows through constructors instead of relying on global `SessionStateService` singleton |
+| 42 | **SessionOrchestrator owns SessionContext** | 🔴 Critical | ✅ Done | Creates `SessionContext` from `SessionState` on ACTIVE, syncs from `SessionStateService` on CLOSED, passes to all child screens |
+| 43 | **AttendanceScreen receives SessionContext** | 🔴 Critical | ✅ Done | Constructor changed from 8 individual params to `SessionContext` + `capacity` + `roomName` + `boardId` |
+| 44 | **SummaryScreen receives SessionContext** | 🔴 Critical | ✅ Done | No longer reads from `SessionStateService` singleton; all data flows through constructor |
+| 45 | **WorkspaceScreen receives SessionContext** | 🔴 Critical | ✅ Done | Sidebar Attendance navigation passes context back to AttendanceScreen |
+| 46 | **Server: force terminate + WS broadcast** | 🔴 Critical | ✅ Done | `session_engine.end_session()` broadcasts `session_ended` to all rooms; `TerminateSessionRequest` has `force` param |
+| 47 | **Persist SessionContext to Isar** | 🟡 Medium | ❌ Open | Crash recovery should restore `SessionContext` from Isar, not just `SessionState`. Currently works because orchestrator recreates it from `SessionStateService` |

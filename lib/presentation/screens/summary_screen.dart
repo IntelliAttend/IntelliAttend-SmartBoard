@@ -5,39 +5,33 @@ import '../../core/theme/app_theme.dart';
 import '../../core/platform/kiosk_service.dart';
 import '../../core/utils/logger.dart';
 import '../../main.dart';
+import '../../models/session_context.dart';
 import '../../services/session_manager.dart';
 import '../../services/session_state_service.dart';
-import '../../services/student_service.dart';
 import 'session_orchestrator_screen.dart';
 import 'registration_screen.dart';
 
 class SummaryScreen extends StatefulWidget {
-  final String sessionId;
-  final int presentCount;
+  /// Authoritative session data — passed through constructor from the
+  /// orchestrator. Never reads from SessionStateService singleton, which
+  /// may have been wiped by a session_ended WS event.
+  final SessionContext? sessionContext;
   final int totalCapacity;
-  final String courseName;
-  final String facultyName;
-  final String? slotId;
   final VoidCallback? onReturnToIdle;
-  final List<StudentInfo>? students;
-  final List<int>? presentIndices;
-  final List<int>? absentIndices;
-  final bool isAttendanceSubmitted;
 
   const SummaryScreen({
     super.key,
-    required this.sessionId,
-    required this.presentCount,
+    this.sessionContext,
     required this.totalCapacity,
-    required this.courseName,
-    required this.facultyName,
-    this.slotId,
     this.onReturnToIdle,
-    this.students,
-    this.presentIndices,
-    this.absentIndices,
-    this.isAttendanceSubmitted = false,
   });
+
+  // Convenience accessors — delegate to sessionContext
+  String get sessionId => sessionContext?.sessionId ?? '';
+  int get presentCount => sessionContext?.presentCount ?? 0;
+  String get courseName => sessionContext?.displayCourseName ?? 'Class';
+  String get facultyName => sessionContext?.displayFacultyName ?? 'Professor';
+  String? get slotId => sessionContext?.slotId;
 
   @override
   State<SummaryScreen> createState() => _SummaryScreenState();

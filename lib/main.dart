@@ -17,6 +17,7 @@ import 'core/recovery/recovery_state.dart';
 import 'core/observability/observability_manager.dart';
 import 'core/config/enterprise_deploy_config.dart';
 import 'services/session_manager.dart';
+import 'models/session_context.dart';
 import 'core/security/secure_storage_service.dart';
 import 'presentation/screens/boot_screen.dart';
 import 'presentation/screens/attendance_screen.dart';
@@ -599,13 +600,9 @@ class _PreviewAttendanceScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AttendanceScreen(
-      sessionId: 'preview-session-001',
+      sessionContext: const SessionContext(sessionId: 'preview'),
       capacity: 40,
-      courseName: 'CS101 - Data Structures',
-      facultyName: 'Dr. Preview',
       roomName: 'Room 301',
-      initialPresentCount: 0,
-      slotId: 'slot-1',
       boardId: 'preview-board',
     );
   }
@@ -617,11 +614,7 @@ class _PreviewWorkspaceScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const WorkspaceScreen(
-      sessionId: 'preview-session-001',
-      courseName: 'CS101 - Data Structures',
-      facultyName: 'Dr. Preview',
-      roomName: 'Room 301',
-      presentCount: 32,
+      sessionContext: SessionContext(sessionId: 'preview'),
       totalCapacity: 40,
       isAttendanceSubmitted: true,
     );

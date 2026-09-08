@@ -7,15 +7,13 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:isar/isar.dart';
 import '../../core/theme/app_theme.dart';
 import '../../models/board_notification.dart';
+import '../../models/session_context.dart';
 import '../../services/api_service.dart';
 import '../../services/network_info_service.dart';
 import '../../services/session_manager.dart';
-import '../../services/session_state_service.dart';
-import '../../services/heartbeat_service.dart';
-import '../../services/student_service.dart';
+import '../../services/session_lifecycle.dart';
 import '../../services/time_sync_service.dart';
 import '../../core/platform/kiosk_service.dart';
-import '../../core/state/board_state_machine.dart';
 import '../../core/utils/roll_number_utils.dart';
 import '../../core/utils/logger.dart';
 import '../../models/isar_schemas.dart';
@@ -25,35 +23,29 @@ import 'workspace_screen.dart';
 import '../widgets/glass_container.dart';
 
 class AttendanceScreen extends StatefulWidget {
-  final String sessionId;
+  final SessionContext sessionContext;
   final int capacity;
-  final String courseName;
-  final String facultyName;
   final String roomName;
   final String? slotId;
   final String? boardId;
-  final String? courseCode;
-
-  final int initialPresentCount;
-  final List<int>? previousPresentIndices;
-  final List<int>? previousAbsentIndices;
   final VoidCallback? onNavigateBack;
 
   const AttendanceScreen({
     super.key,
-    required this.sessionId,
+    required this.sessionContext,
     required this.capacity,
-    required this.courseName,
-    required this.facultyName,
     required this.roomName,
-    this.initialPresentCount = 0,
-    this.previousPresentIndices,
-    this.previousAbsentIndices,
     this.slotId,
     this.boardId,
-    this.courseCode,
     this.onNavigateBack,
   });
+
+  // Convenience accessors — delegate to sessionContext
+  String get sessionId => sessionContext.sessionId;
+  String get courseName => sessionContext.displayCourseName;
+  String get facultyName => sessionContext.displayFacultyName;
+  String? get courseCode => sessionContext.courseCode;
+  int get initialPresentCount => sessionContext.presentCount;
 
   @override
   State<AttendanceScreen> createState() => _AttendanceScreenState();
@@ -120,13 +112,15 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         Log.w('[Attendance] Snapshot restore skipped: $e');
       });
       // Fallback: if snapshot is empty but previous indices were passed (e.g. from
-      // WorkspaceScreen), initialise the grid from them so edits can continue.
-      if (widget.previousPresentIndices != null || widget.previousAbsentIndices != null) {
+      // SessionContext), initialise the grid from them so edits can continue.
+      final prevPresent = widget.sessionContext.previousPresentIndices;
+      final prevAbsent = widget.sessionContext.previousAbsentIndices;
+      if (prevPresent != null || prevAbsent != null) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && _presentSeatIndices.isEmpty && _absentSeatIndices.isEmpty) {
             setState(() {
-              _presentSeatIndices.addAll(widget.previousPresentIndices ?? []);
-              _absentSeatIndices.addAll(widget.previousAbsentIndices ?? []);
+              _presentSeatIndices.addAll(prevPresent ?? []);
+              _absentSeatIndices.addAll(prevAbsent ?? []);
               _presentCount = _presentSeatIndices.length;
               if (_presentSeatIndices.isNotEmpty || _absentSeatIndices.isNotEmpty) {
                 _stage = _Stage.splitReview;
@@ -474,24 +468,12 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (context) => WorkspaceScreen(
-          sessionId: widget.sessionId,
-          courseName: widget.courseName,
-          facultyName: widget.facultyName,
-          roomName: widget.roomName,
-          slotId: widget.slotId,
-          courseCode: widget.courseCode,
-          presentCount: _presentSeatIndices.length,
+          sessionContext: widget.sessionContext.copyWith(
+            presentCount: _presentCount,
+            absentCount: _students.length - _presentCount,
+          ),
           totalCapacity: widget.capacity,
-          students: _students.map((s) => StudentInfo(
-            rollNumber: s.rollNumber,
-            name: s.name,
-            email: s.studentId,
-            sectionId: '',
-            classId: '',
-          )).toList(),
-          presentIndices: _presentSeatIndices.toList(),
-          absentIndices: _absentSeatIndices.toList(),
-          isAttendanceSubmitted: true,
+          isAttendanceSubmitted: _isAttendanceSubmitted,
         ),
       ),
     );
@@ -875,27 +857,15 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     _endSessionCooldownTimer?.cancel();
     KioskService.setMode(KioskMode.fullscreen);
 
-    // Sync local attendance data to SessionStateService so SummaryScreen
-    // receives accurate presentCount/courseName/facultyName. Without this,
-    // the summary may show 0 present if session_ended WS event arrived
-    // and wiped the state before we transition.
-    SessionStateService().updateCounts(
-      _presentCount,
-      _students.length - _presentCount,
+    // End session via single entry point — handles count sync, API call,
+    // retry queue, and board state transition. User tap = not deferred.
+    SessionLifecycle.end(
+      sessionId: widget.sessionId,
+      reason: EndReason.userTap,
+      presentCount: _presentCount,
+      absentCount: _students.length - _presentCount,
+      setFullscreen: false, // already set above
     );
-
-    // Fire terminate as fire-and-forget — don't block the UI transition.
-    // Server continues termination independently. If it fails, the
-    // heartbeat service retries. The WS session_ended event (which the
-    // server will eventually emit) will finalize cleanup.
-    ApiService.terminateSession(widget.sessionId).catchError((e) {
-      Log.e('[Attendance] Error ending session: $e');
-      HeartbeatService.enqueuePendingTermination(widget.sessionId);
-    });
-
-    if (!mounted) return;
-    // Trigger state machine → SessionOrchestratorScreen renders SummaryScreen
-    BoardStateMachine().forceTransitionTo(BoardState.closed);
   }
 
   void _startEndSessionCooldown() {

@@ -9,6 +9,7 @@ import '../data/repositories/device_repository.dart';
 import '../models/remote_config.dart';
 import 'api_service.dart';
 import 'session_state_service.dart';
+import 'session_lifecycle.dart';
 import 'remote_config_service.dart';
 import 'time_sync_service.dart';
 import 'update_checker.dart';
@@ -40,10 +41,13 @@ class HeartbeatService {
   static String screenState = 'unknown';
 
   static final List<String> _pendingTerminations = [];
+  static final Map<String, int> _pendingRetryCounts = {};
+  static const int _maxPendingRetries = 10;
 
   static void enqueuePendingTermination(String sessionId) {
     if (!_pendingTerminations.contains(sessionId)) {
       _pendingTerminations.add(sessionId);
+      _pendingRetryCounts[sessionId] = 0;
       Log.w('[Heartbeat] Enqueued pending termination for $sessionId');
     }
   }
@@ -80,6 +84,8 @@ class HeartbeatService {
     _timer = null;
     _started = false;
     _consecutiveNullSessions = 0;
+    _pendingTerminations.clear();
+    _pendingRetryCounts.clear();
     Log.i('[Heartbeat] Stopped.');
   }
 
@@ -98,9 +104,18 @@ class HeartbeatService {
       try {
         await ApiService.terminateSession(pendingId);
         _pendingTerminations.remove(pendingId);
+        _pendingRetryCounts.remove(pendingId);
         Log.i('[Heartbeat] Pending termination succeeded for $pendingId');
       } catch (e) {
-        Log.w('[Heartbeat] Pending termination retry failed for $pendingId: $e');
+        final retries = (_pendingRetryCounts[pendingId] ?? 0) + 1;
+        _pendingRetryCounts[pendingId] = retries;
+        if (retries >= _maxPendingRetries) {
+          Log.e('[Heartbeat] Pending termination giving up after $_maxPendingRetries retries for $pendingId');
+          _pendingTerminations.remove(pendingId);
+          _pendingRetryCounts.remove(pendingId);
+        } else {
+          Log.w('[Heartbeat] Pending termination retry failed for $pendingId ($retries/$_maxPendingRetries): $e');
+        }
       }
     }
 
@@ -198,7 +213,11 @@ class HeartbeatService {
           Log.w('[Heartbeat] $_consecutiveNullSessions consecutive null sessions — deferring (user on AttendanceScreen)');
         } else {
           Log.w('[Heartbeat] $_consecutiveNullSessions consecutive null sessions — force-ending');
-          machine.forceTransitionTo(BoardState.closed);
+          SessionLifecycle.end(
+            sessionId: SessionStateService().currentState.sessionId,
+            reason: EndReason.heartbeatNull,
+            setFullscreen: false,
+          );
         }
       }
 
@@ -268,13 +287,21 @@ class HeartbeatService {
       Log.i('[Heartbeat] Session completed on server — deferring (user on AttendanceScreen)');
     } else if (info.isCompleted && current != BoardState.active) {
       Log.i('[Heartbeat] Session completed — transitioning to CLOSED');
-      machine.transitionTo(BoardState.closed);
+      SessionLifecycle.end(
+        sessionId: SessionStateService().currentState.sessionId,
+        reason: EndReason.heartbeatCompleted,
+        setFullscreen: false,
+      );
     } else if (info.isEmpty && current == BoardState.active) {
       // Don't force-end while user is actively marking attendance.
       Log.w('[Heartbeat] Session null on server — deferring (user on AttendanceScreen)');
     } else if (info.isEmpty && current != BoardState.active) {
       Log.w('[Heartbeat] Session null on server — force-ending');
-      machine.forceTransitionTo(BoardState.closed);
+      SessionLifecycle.end(
+        sessionId: SessionStateService().currentState.sessionId,
+        reason: EndReason.heartbeatNull,
+        setFullscreen: false,
+      );
     }
   }
 }

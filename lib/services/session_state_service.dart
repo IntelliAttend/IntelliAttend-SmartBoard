@@ -113,7 +113,6 @@ class SessionStateService {
 
   SessionState _sessionState = SessionState(sessionId: '', state: 'IDLE');
   String? _sessionSecret;
-  String? _websocketAccessToken;
 
   final StreamController<SessionState> _stateController =
       StreamController<SessionState>.broadcast();
@@ -130,11 +129,9 @@ class SessionStateService {
 
   SessionState get currentState => _sessionState;
   String? get sessionSecret => _sessionSecret;
-  String? get websocketAccessToken => _websocketAccessToken;
 
   void storeSessionSecrets(String secret, String? wsToken) {
     _sessionSecret = secret;
-    _websocketAccessToken = wsToken;
   }
 
   void applyState(SessionState newState) {
@@ -183,7 +180,6 @@ class SessionStateService {
   void reset() {
     _sessionState = SessionState(sessionId: '', state: 'IDLE');
     _sessionSecret = null;
-    _websocketAccessToken = null;
     BoardStateMachine().reset();
     _stateController.add(_sessionState);
     Log.i('[SessionState] Reset to IDLE');

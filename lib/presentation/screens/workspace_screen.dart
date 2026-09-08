@@ -7,10 +7,10 @@ import '../../core/utils/logger.dart';
 import '../../main.dart' show kPreviewWorkspace;
 import '../../models/board_notification.dart';
 import '../../models/course_topic.dart';
+import '../../models/session_context.dart';
 import '../../models/syllabus_unit.dart';
 import '../../services/api_service.dart';
-import '../../services/session_state_service.dart';
-import '../../services/heartbeat_service.dart';
+import '../../services/session_lifecycle.dart';
 import '../../services/notification_listener_service.dart';
 import '../../services/resource_service.dart';
 import '../../services/syllabus_service.dart';
@@ -20,9 +20,7 @@ import 'file_viewer_screen.dart';
 import 'attendance_screen.dart';
 import '../../services/time_sync_service.dart';
 import '../../services/websocket_service.dart';
-import '../../services/student_service.dart';
 import '../../services/sync_manager.dart';
-import '../../core/state/board_state_machine.dart';
 
 
 enum _WorkspaceTab { resources, topics, calendar }
@@ -91,38 +89,29 @@ class _WSColors {
 }
 
 class WorkspaceScreen extends StatefulWidget {
-  final String sessionId;
-  final String courseName;
-  final String facultyName;
-  final String roomName;
-  final String? sectionId;
-  final String? slotId;
-  final String? courseCode;
-  final int presentCount;
+  /// Authoritative session data — passed through constructor.
+  final SessionContext sessionContext;
   final int totalCapacity;
-  final List<StudentInfo>? students;
-  final List<int>? presentIndices;
-  final List<int>? absentIndices;
   final bool isAttendanceSubmitted;
   final WebsocketService? websocketService;
 
   const WorkspaceScreen({
     super.key,
-    required this.sessionId,
-    required this.courseName,
-    required this.facultyName,
-    required this.roomName,
-    this.sectionId,
-    this.slotId,
-    this.courseCode,
-    required this.presentCount,
+    required this.sessionContext,
     required this.totalCapacity,
-    this.students,
-    this.presentIndices,
-    this.absentIndices,
     this.isAttendanceSubmitted = false,
     this.websocketService,
   });
+
+  // Convenience accessors — delegate to sessionContext
+  String get sessionId => sessionContext.sessionId;
+  String get courseName => sessionContext.displayCourseName;
+  String get facultyName => sessionContext.displayFacultyName;
+  String get roomName => sessionContext.roomName ?? '';
+  String? get sectionId => sessionContext.sectionId;
+  String? get slotId => sessionContext.slotId;
+  String? get courseCode => sessionContext.courseCode;
+  int get presentCount => sessionContext.presentCount;
 
   @override
   State<WorkspaceScreen> createState() => _WorkspaceScreenState();
@@ -647,22 +636,15 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
     if (result != true || !mounted) return;
     setState(() => _isEnding = true);
 
-    // Sync local attendance data to SessionStateService so SummaryScreen
-    // receives accurate presentCount/courseName/facultyName.
-    SessionStateService().updateCounts(
-      widget.presentCount,
-      widget.totalCapacity - widget.presentCount,
+    // End session via single entry point — handles count sync, API call,
+    // retry queue, and board state transition. User tap = not deferred.
+    SessionLifecycle.end(
+      sessionId: widget.sessionId,
+      reason: EndReason.userTap,
+      presentCount: widget.presentCount,
+      absentCount: widget.totalCapacity - widget.presentCount,
+      setFullscreen: false,
     );
-
-    // Fire terminate as fire-and-forget — don't block the UI transition.
-    ApiService.terminateSession(widget.sessionId).catchError((e) {
-      Log.e('[Workspace] Error ending session: $e');
-      HeartbeatService.enqueuePendingTermination(widget.sessionId);
-    });
-
-    if (!mounted) return;
-    // Trigger state machine → SessionOrchestratorScreen renders SummaryScreen
-    BoardStateMachine().forceTransitionTo(BoardState.closed);
   }
 
   static Widget _buildCardStat(String label, String value, Color color) {
@@ -977,16 +959,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                   Navigator.of(context).pushReplacement(
                     MaterialPageRoute(
                       builder: (context) => AttendanceScreen(
-                        sessionId: widget.sessionId,
+                        sessionContext: widget.sessionContext,
                         capacity: widget.totalCapacity,
-                        courseName: widget.courseName,
-                        facultyName: widget.facultyName,
                         roomName: widget.roomName,
-                        slotId: widget.slotId,
-                        courseCode: widget.courseCode,
-                        initialPresentCount: widget.presentCount,
-                        previousPresentIndices: widget.presentIndices,
-                        previousAbsentIndices: widget.absentIndices,
                         boardId: '',
                       ),
                     ),

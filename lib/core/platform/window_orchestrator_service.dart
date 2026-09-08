@@ -3,8 +3,8 @@ import 'package:window_manager/window_manager.dart';
 import 'kiosk_service.dart';
 import 'notification_service.dart';
 import '../../services/time_sync_service.dart';
-import '../../services/api_service.dart';
 import '../../services/session_state_service.dart';
+import '../../services/session_lifecycle.dart';
 import '../../services/session_manager.dart';
 import '../state/board_state_machine.dart';
 import '../utils/logger.dart';
@@ -183,28 +183,21 @@ class WindowOrchestratorService {
             if (isMinimized) {
               // App is minimized — force CLOSED immediately regardless of BoardState
               Log.i('[Orchestrator] T-1: Auto-terminating session ${sessionState.sessionId} — app minimized, slot ending in ${diffSec}s');
-              await KioskService.setMode(KioskMode.fullscreen);
-              BoardStateMachine().forceTransitionTo(BoardState.closed);
-
-              try {
-                await ApiService.terminateSession(sessionState.sessionId);
-              } catch (e) {
-                Log.e('[Orchestrator] T-1 terminate API failed: $e');
-              }
+              SessionLifecycle.end(
+                sessionId: sessionState.sessionId,
+                reason: EndReason.slotExpiredT1,
+              );
             } else if (boardState != BoardState.active) {
-              // App is in foreground but NOT on AttendanceScreen — force CLOSED
+              // App is in foreground but board is idle/closed — force CLOSED
               Log.i('[Orchestrator] T-1: Auto-terminating session ${sessionState.sessionId} — slot ending in ${diffSec}s');
-              await KioskService.setMode(KioskMode.fullscreen);
-              BoardStateMachine().forceTransitionTo(BoardState.closed);
-
-              try {
-                await ApiService.terminateSession(sessionState.sessionId);
-              } catch (e) {
-                Log.e('[Orchestrator] T-1 terminate API failed: $e');
-              }
+              SessionLifecycle.end(
+                sessionId: sessionState.sessionId,
+                reason: EndReason.slotExpiredT1,
+              );
             } else {
-              // User is on AttendanceScreen in foreground — defer termination
-              Log.i('[Orchestrator] T-1: Session ending in ${diffSec}s — user on AttendanceScreen, deferring termination');
+              // User is on an active screen (Attendance or Workspace) — defer.
+              // Auto-close (slot end) or heartbeat will handle hard termination.
+              Log.i('[Orchestrator] T-1: Session ending in ${diffSec}s — user on active screen, deferring termination');
             }
           }
         }
@@ -240,18 +233,10 @@ class WindowOrchestratorService {
           if (sessionState.isActive) {
             Log.i('[Orchestrator] Auto-closing session ${sessionState.sessionId} — slot ${currentSlot.slotId} ended');
 
-            // Force CLOSED immediately regardless of board state.
-            // If user is on AttendanceScreen, they can finish their current
-            // action — the server's session_ended WS event will be deferred.
-            // This ensures the session always terminates when the slot ends.
-            BoardStateMachine().forceTransitionTo(BoardState.closed);
-
-            // Terminate on server (best-effort)
-            try {
-              await ApiService.terminateSession(sessionState.sessionId);
-            } catch (e) {
-              Log.e('[Orchestrator] Auto-close API failed: $e');
-            }
+            SessionLifecycle.end(
+              sessionId: sessionState.sessionId,
+              reason: EndReason.slotExpiredAutoClose,
+            );
           }
         }
       }
@@ -274,14 +259,10 @@ class WindowOrchestratorService {
               _autoClosedSlots.add(session.slotId);
               Log.i('[Orchestrator] Safety-net auto-closing session ${session.sessionId} — past scheduled end during break');
 
-              // Force CLOSED immediately (board is already not on AttendanceScreen)
-              BoardStateMachine().forceTransitionTo(BoardState.closed);
-
-              try {
-                await ApiService.terminateSession(session.sessionId);
-              } catch (e) {
-                Log.e('[Orchestrator] Safety-net auto-close API failed: $e');
-              }
+              SessionLifecycle.end(
+                sessionId: session.sessionId,
+                reason: EndReason.safetyNet,
+              );
             }
           }
         }

@@ -453,7 +453,7 @@ class ApiService {
       'POST',
       'api/v1/board/session/terminate',
       headers: await _authHeaders(),
-      body: jsonEncode({'session_id': sessionId, 'force': true}),
+      body: jsonEncode({'session_id': sessionId}),
     );
 
     if (response.statusCode != 200) {

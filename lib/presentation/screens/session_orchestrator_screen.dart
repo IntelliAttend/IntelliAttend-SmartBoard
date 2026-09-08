@@ -5,6 +5,7 @@ import '../../core/config/app_config.dart';
 import '../../core/state/board_state_machine.dart';
 import '../../core/platform/kiosk_service.dart';
 import '../../models/isar_schemas.dart';
+import '../../models/session_context.dart';
 import '../../services/session_state_service.dart';
 import '../../services/session_manager.dart';
 import '../../services/websocket_service.dart';
@@ -42,6 +43,11 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
   // Runtime session objects — populated on ACTIVE transition
   WebsocketService? _wsService;
   String? _cachedSlotId;
+
+  /// Authoritative session data — owned by this orchestrator, passed through
+  /// constructors to child screens. Never replaced wholesale; updated via
+  /// [SessionContext.copyWith] so data is never lost during state transitions.
+  SessionContext? _sessionContext;
 
 
   @override
@@ -192,7 +198,16 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
   void _handleStateChange(SessionState state) {
     if (state.isActive) {
       _cachedSlotId = TimetableCache().currentSlot?.slotId;
+      // Create or update the authoritative SessionContext from the
+      // SessionState. This is the single source of truth for all child screens.
+      _sessionContext = SessionContext.fromState(state, slotId: _cachedSlotId);
       _prepareActiveSession(state);
+    } else if (state.isClosed && _sessionContext != null) {
+      // Server sent CLOSED — update context but preserve accumulated data.
+      _sessionContext = _sessionContext!.copyWith(
+        state: 'CLOSED',
+        version: state.version,
+      );
     }
   }
 
@@ -228,6 +243,7 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
       }
     }
     _cachedSlotId = null;
+    _sessionContext = null;
     _sessionState.reset();
   }
 
@@ -249,26 +265,44 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
         );
       case BoardState.active:
         final state = _sessionState.currentState;
-        return AttendanceScreen(
+        // Build or update SessionContext with latest state data.
+        // The context is the authoritative source — child screens read from it,
+        // not from the global SessionStateService singleton.
+        _sessionContext ??= SessionContext(
           sessionId: state.sessionId,
-          initialPresentCount: state.presentCount,
+          slotId: _cachedSlotId,
+        );
+        _sessionContext = _sessionContext!.copyWith(
+          presentCount: state.presentCount,
+          absentCount: state.absentCount,
+          totalStudents: state.totalStudents,
+          courseName: state.courseName,
+          facultyName: state.facultyName,
+          roomName: state.roomName,
+          courseCode: state.courseCode,
+        );
+        return AttendanceScreen(
+          sessionContext: _sessionContext!,
           capacity: widget.registration.capacity,
-          courseName: state.courseName ?? 'Class',
-          facultyName: state.facultyName ?? 'Professor',
           roomName: state.roomName ?? widget.registration.roomName,
           boardId: widget.registration.smartBoardId,
-          courseCode: state.courseCode,
           onNavigateBack: _returnToIdle,
         );
       case BoardState.closed:
+        // Sync context from SessionStateService — AttendanceScreen may have
+        // called updateCounts() with final attendance data before transitioning.
+        // This ensures SummaryScreen receives accurate presentCount even if
+        // the session_ended WS event didn't carry count data.
         final state = _sessionState.currentState;
-        return SummaryScreen(
-          sessionId: state.sessionId,
+        _sessionContext = (_sessionContext ?? SessionContext(sessionId: state.sessionId)).copyWith(
+          state: 'CLOSED',
+          version: state.version,
           presentCount: state.presentCount,
+          absentCount: state.absentCount,
+        );
+        return SummaryScreen(
+          sessionContext: _sessionContext,
           totalCapacity: widget.registration.capacity,
-          courseName: state.courseName ?? 'Class',
-          facultyName: state.facultyName ?? 'Professor',
-          slotId: _cachedSlotId,
           onReturnToIdle: _returnToIdle,
         );
     }

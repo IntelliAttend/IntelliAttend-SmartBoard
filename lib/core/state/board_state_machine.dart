@@ -16,10 +16,16 @@ class BoardStateMachine {
   Stream<BoardState> get stateStream => _stateController.stream;
   BoardState get currentState => _state;
 
+  /// Legal transitions:
+  ///   idle → active    (session starts)
+  ///   idle → closed    (timer/heartbeat force-end while idle)
+  ///   active → closed  (session ends)
+  ///   active → idle    (back navigation)
+  ///   closed → idle    (return to idle after summary)
   bool _allowTransition(BoardState from, BoardState to) {
     switch (from) {
       case BoardState.idle:
-        return to == BoardState.active;
+        return to == BoardState.active || to == BoardState.closed;
       case BoardState.active:
         return to == BoardState.closed || to == BoardState.idle;
       case BoardState.closed:
@@ -36,13 +42,6 @@ class BoardStateMachine {
     }
 
     Log.i('[StateMachine] ${_state.name} -> ${newState.name}');
-    _state = newState;
-    _stateController.add(_state);
-  }
-
-  void forceTransitionTo(BoardState newState) {
-    if (_state == newState) return;
-    Log.i('[StateMachine] Forced: ${_state.name} -> ${newState.name}');
     _state = newState;
     _stateController.add(_state);
   }

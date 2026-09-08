@@ -17,6 +17,7 @@ import '../../core/security/secure_storage_service.dart';
 import '../../core/rate_limiter.dart';
 import '../../models/board_notification.dart';
 import '../../models/isar_schemas.dart';
+import '../../models/session_context.dart';
 import 'package:isar/isar.dart';
 import '../widgets/glass_container.dart';
 import '../widgets/pin_input.dart';
@@ -2901,13 +2902,15 @@ class _IdleScreenState extends State<IdleScreen>
                             color: const Color(0xFF14B8A6),
                             onTap: () => Navigator.of(context).push(
                               MaterialPageRoute(builder: (_) => WorkspaceScreen(
-                                sessionId: session.sessionId,
-                                courseName: session.courseName,
-                                facultyName: session.facultyName,
-                                roomName: widget.registration.roomName,
-                                sectionId: session.sectionId,
-                                slotId: null,
-                                presentCount: session.presentIndices.length,
+                                sessionContext: SessionContext(
+                                  sessionId: session.sessionId,
+                                  courseName: session.courseName,
+                                  facultyName: session.facultyName,
+                                  sectionId: session.sectionId,
+                                  presentCount: session.presentIndices.length,
+                                  absentCount: session.absentIndices.length,
+                                  totalStudents: session.rosterCount,
+                                ),
                                 totalCapacity: session.rosterCount,
                               )),
                             ),
@@ -2923,13 +2926,17 @@ class _IdleScreenState extends State<IdleScreen>
                             onTap: () {
                               Navigator.of(context).push(
                                 MaterialPageRoute(builder: (_) => AttendanceScreen(
-                                  sessionId: session.sessionId,
+                                  sessionContext: SessionContext(
+                                    sessionId: session.sessionId,
+                                    courseName: session.courseName,
+                                    facultyName: session.facultyName,
+                                    sectionId: session.sectionId,
+                                    presentCount: session.presentIndices.length,
+                                    absentCount: session.absentIndices.length,
+                                    totalStudents: session.rosterCount,
+                                  ),
                                   capacity: session.rosterCount,
-                                  courseName: session.courseName,
-                                  facultyName: session.facultyName,
                                   roomName: widget.registration.roomName,
-                                  slotId: null,
-                                  initialPresentCount: session.presentIndices.length,
                                   boardId: widget.registration.smartBoardId,
                                   onNavigateBack: () => Navigator.of(context).pop(),
                                 )),
