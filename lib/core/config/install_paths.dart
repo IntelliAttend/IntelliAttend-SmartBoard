@@ -46,11 +46,14 @@ class InstallPaths {
 
   static final String _localAppData =
       Platform.environment['LOCALAPPDATA'] ??
-      '${Platform.environment['USERPROFILE']}\\AppData\\Local';
+      '${Platform.environment['USERPROFILE']}${Platform.pathSeparator}AppData${Platform.pathSeparator}Local';
+
+  /// Platform path separator — `\` on Windows, `/` on macOS/Linux.
+  static final String _s = Platform.pathSeparator;
 
   /// Root: `%LOCALAPPDATA%\IntelliAttendSmartBoard`
   static String get root =>
-      testRootOverride ?? '$_localAppData\\IntelliAttendSmartBoard';
+      testRootOverride ?? '$_localAppData${_s}IntelliAttendSmartBoard';
   static Directory get rootDirectory => Directory(root);
 
   /// Update infrastructure root — OUTSIDE the application install directory.
@@ -67,9 +70,9 @@ class InstallPaths {
   static String get infraRoot {
     final override = testRootOverride;
     if (override != null && override.isNotEmpty) {
-      return '$override\\Infra';
+      return '$override${_s}Infra';
     }
-    return '$_localAppData\\IntelliAttend';
+    return '$_localAppData${_s}IntelliAttend';
   }
   static Directory get infraRootDirectory => Directory(infraRoot);
 
@@ -97,14 +100,14 @@ class InstallPaths {
   /// Directory containing the running application binary.
   static String get appDir {
     final override = testRootOverride;
-    if (override != null && override.isNotEmpty) return '$override\\App';
+    if (override != null && override.isNotEmpty) return '$override${_s}App';
     if (!kIsWeb && Platform.isWindows) {
       try {
         final exeDir = File(Platform.resolvedExecutable).parent.path;
         if (exeDir.isNotEmpty) return exeDir;
       } catch (_) {}
     }
-    return '$root\\App';
+    return '$root${_s}App';
   }
   static Directory get appDirectory => Directory(appDir);
 
@@ -112,7 +115,7 @@ class InstallPaths {
   static String get exePath {
     final override = testRootOverride;
     if (override != null && override.isNotEmpty) {
-      return '$override\\App\\intelliattend_smartboard.exe';
+      return '$override${_s}App${_s}intelliattend_smartboard.exe';
     }
     if (!kIsWeb && Platform.isWindows) {
       try {
@@ -120,7 +123,7 @@ class InstallPaths {
         if (exe.isNotEmpty) return exe;
       } catch (_) {}
     }
-    return '$appDir\\intelliattend_smartboard.exe';
+    return '$appDir${_s}intelliattend_smartboard.exe';
   }
   static File get exeFile => File(exePath);
 
@@ -132,15 +135,15 @@ class InstallPaths {
   /// explicit `[Files]` entry (guarded by the `update_agent.running` marker
   /// written by the agent at boot). See [legacyUpdateAgentPath] for the
   /// pre-isolation location used as a one-time migration fallback.
-  static String get updateAgentDir => '$infraRoot\\UpdateAgent';
+  static String get updateAgentDir => '$infraRoot${_s}UpdateAgent';
   static Directory get updateAgentDirectory => Directory(updateAgentDir);
-  static String get updateAgentPath => '$updateAgentDir\\update_agent.exe';
+  static String get updateAgentPath => '$updateAgentDir${_s}update_agent.exe';
   static File get updateAgentFile => File(updateAgentPath);
 
   /// Running marker dropped by the agent at boot and removed at exit. The
   /// installer skips overwriting the agent while this file exists.
   static String get updateAgentMarkerFile =>
-      '$updateAgentDir\\update_agent.running';
+      '$updateAgentDir${_s}update_agent.running';
   static File get updateAgentMarkerFileInstance =>
       File(updateAgentMarkerFile);
 
@@ -148,76 +151,76 @@ class InstallPaths {
   /// before Phase 1 isolation. [UpdateAgentLauncher] falls back to it while
   /// the first post-isolation installer has not yet placed the agent in
   /// [updateAgentDir].
-  static String get legacyUpdateAgentPath => '$appDir\\update_agent.exe';
+  static String get legacyUpdateAgentPath => '$appDir${_s}update_agent.exe';
   static File get legacyUpdateAgentFile => File(legacyUpdateAgentPath);
 
   // ── Application state (app-managed) ──────────────────────────────────────
 
   /// Persistent application state: registration, health, update state.
-  static String get dataDir => '$root\\Data';
+  static String get dataDir => '$root${_s}Data';
   static Directory get dataDirectory => Directory(dataDir);
 
   /// User-facing configuration: env.json, config.json.
-  static String get configDir => '$root\\Config';
+  static String get configDir => '$root${_s}Config';
   static Directory get configDirectory => Directory(configDir);
 
   /// Ephemeral cached data that can be safely deleted.
-  static String get cacheDir => '$root\\Cache';
+  static String get cacheDir => '$root${_s}Cache';
   static Directory get cacheDirectory => Directory(cacheDir);
 
   /// Downloaded update packages (staging area). OUTSIDE `{app}` so a rollback
   /// (which moves/rewrites the app directory) can never destroy an in-flight
   /// or staged download.
-  static String get updateDir => '$infraRoot\\Updates';
+  static String get updateDir => '$infraRoot${_s}Updates';
   static Directory get updateDirectory => Directory(updateDir);
 
   /// Structured log files (install, update, rollback, crash, etc.).
-  static String get logDir => '$root\\Logs';
+  static String get logDir => '$root${_s}Logs';
   static Directory get logDirectory => Directory(logDir);
 
   /// Rollback backups of previous versions. OUTSIDE `{app}` so a rollback
   /// (`appDir` move + backup restore) can never delete the backup it is about
   /// to restore (previously the backup lived under the install root, breaking
   /// the restore step).
-  static String get backupDir => '$infraRoot\\Backup';
+  static String get backupDir => '$infraRoot${_s}Backup';
   static Directory get backupDirectory => Directory(backupDir);
 
   // ── Specific files ──────────────────────────────────────────────────────
 
   /// Single-instance lock file.
-  static String get lockFile => '$dataDir\\app.lock';
+  static String get lockFile => '$dataDir${_s}app.lock';
   static File get lockFileInstance => File(lockFile);
 
   /// Update health state (persisted by UpdateHealthMonitor).
-  static String get updateHealthFile => '$dataDir\\update_health.json';
+  static String get updateHealthFile => '$dataDir${_s}update_health.json';
   static File get updateHealthFileInstance => File(updateHealthFile);
 
   /// Update state contract between app and detached update agent.
-  static String get updateStateFile => '$dataDir\\update_state.json';
+  static String get updateStateFile => '$dataDir${_s}update_state.json';
   static File get updateStateFileInstance => File(updateStateFile);
 
   /// Board registration data.
-  static String get registrationFile => '$dataDir\\registration.json';
+  static String get registrationFile => '$dataDir${_s}registration.json';
   static File get registrationFileInstance => File(registrationFile);
 
   /// Installation lifecycle state.
   static String get installationStateFile =>
-      '$dataDir\\installation_state.json';
+      '$dataDir${_s}installation_state.json';
   static File get installationStateFileInstance =>
       File(installationStateFile);
 
   /// Production environment config (written by install_production_msi.ps1).
-  static String get envFile => '$configDir\\env.json';
+  static String get envFile => '$configDir${_s}env.json';
   static File get envFileInstance => File(envFile);
 
   /// Application configuration.
-  static String get configFile => '$configDir\\config.json';
+  static String get configFile => '$configDir${_s}config.json';
   static File get configFileInstance => File(configFile);
 
   // ── Temp directory (outside app root) ────────────────────────────────────
 
   /// Temporary files for the update agent and other transient operations.
-  static String get tempDir => '${Directory.systemTemp.path}\\IntelliAttend';
+  static String get tempDir => '${Directory.systemTemp.path}${_s}IntelliAttend';
   static Directory get tempDirectory => Directory(tempDir);
 
   // ── Legacy paths (for migration) ────────────────────────────────────────
@@ -227,15 +230,15 @@ class InstallPaths {
 
   /// Old executable path (before App\ subdirectory).
   static String get legacyExePath =>
-      '$legacyRoot\\intelliattend_smartboard\\intelliattend_smartboard.exe';
+      '$legacyRoot${_s}intelliattend_smartboard${_s}intelliattend_smartboard.exe';
 
   /// Old .env path (before Config\ subdirectory).
   static String get legacyEnvPath =>
-      '$legacyRoot\\IntelliAttendSmartBoard\\.env';
+      '$legacyRoot${_s}IntelliAttendSmartBoard${_s}.env'; // ignore: unnecessary_brace_in_string_interps
 
   /// Old update health path (before Data\ subdirectory).
   static String get legacyUpdateHealthPath =>
-      '$legacyRoot\\IntelliAttendSmartBoard\\update_health.json';
+      '$legacyRoot${_s}IntelliAttendSmartBoard${_s}update_health.json';
 
   // ── Directory creation ──────────────────────────────────────────────────
 

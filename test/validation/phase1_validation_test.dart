@@ -217,11 +217,12 @@ void main() {
   setUp(() {
     HttpOverrides.global = null;
     _tempRoot = Directory.systemTemp.createTempSync('phase1_val_');
-    _appDir = Directory('${_tempRoot.path}\\App');
+    final _s = Platform.pathSeparator;
+    _appDir = Directory('${_tempRoot.path}${_s}App');
     _appDir.createSync(recursive: true);
-    File('${_appDir.path}\\intelliattend_smartboard.exe')
+    File('${_appDir.path}${_s}intelliattend_smartboard.exe')
         .writeAsStringSync('APP_BINARY');
-    File('${_appDir.path}\\data.bin').writeAsStringSync('APP_DATA');
+    File('${_appDir.path}${_s}data.bin').writeAsStringSync('APP_DATA');
     InstallPaths.testRootOverride = _tempRoot.path;
     UpdateHealthMonitor.testAppDirectoryOverride = _appDir;
     _launches.clear();
@@ -243,9 +244,10 @@ void main() {
   });
 
   tearDownAll(() async {
-    final outDir = '${Directory.current.path}\\build\\validation';
-    writeJsonReport('$outDir\\Phase1ValidationReport.json');
-    writeMarkdownReport('$outDir\\Phase1ValidationReport.md');
+    final _s = Platform.pathSeparator;
+    final outDir = '${Directory.current.path}${_s}build${_s}validation';
+    writeJsonReport('$outDir${_s}Phase1ValidationReport.json');
+    writeMarkdownReport('$outDir${_s}Phase1ValidationReport.md');
     final s = summary();
     stdout.writeln('[Validation] GATE=${s['gate']} '
         'executed=${s['executed']} passed=${s['passed']} '
@@ -678,7 +680,7 @@ void main() {
             chunkSize: 65536, chunkDelay: const Duration(milliseconds: 10));
         await setUpPipeline();
         final installerPath =
-            '${InstallPaths.updateDir}\\IASB-5.5.0-Setup.exe';
+            '${InstallPaths.updateDir}${Platform.pathSeparator}IASB-5.5.0-Setup.exe';
         final started = await AutoUpdater.checkForUpdate(validManifest(
             target: '5.5.0', url: '${server.base}/i.exe', sha: shaHex(bytes)),
             silent: false);
@@ -878,10 +880,10 @@ void main() {
         final started = await drive(validManifest(
             target: '5.5.0', url: '${server.base}/i.exe', sha: hash));
         expect(started, true);
-        final backup = Directory('${InstallPaths.backupDir}\\v5.4.0');
+        final backup = Directory('${InstallPaths.backupDir}${Platform.pathSeparator}v5.4.0');
         expect(backup.existsSync(), true,
             reason: 'backup of the current install must exist');
-        expect(File('${backup.path}\\intelliattend_smartboard.exe')
+        expect(File('${backup.path}${Platform.pathSeparator}intelliattend_smartboard.exe')
                 .existsSync(),
             true,
             reason: 'backup must contain the app binary');
@@ -899,7 +901,7 @@ void main() {
         final server = await newServer();
         server.serveInstaller(bytes);
         await setUpPipeline(installed: '5.4.0');
-        final backup = Directory('${InstallPaths.backupDir}\\v5.4.0');
+        final backup = Directory('${InstallPaths.backupDir}${Platform.pathSeparator}v5.4.0');
         expect(await drive(validManifest(
                 target: '5.5.0', url: '${server.base}/i.exe', sha: hash)),
             true);
@@ -922,7 +924,7 @@ void main() {
               'proceeding would silently lose rollback capability.',
               (r) async {
         // A FILE where the backup directory should be forces the copy to fail.
-        File('${InstallPaths.backupDir}\\v5.4.0')
+        File('${InstallPaths.backupDir}${Platform.pathSeparator}v5.4.0')
             .createSync(recursive: true);
         await setUpPipeline(installed: '5.4.0');
         final started = await drive(validManifest(
@@ -1194,7 +1196,7 @@ void main() {
         server.serveInstaller(bytes);
         await setUpPipeline();
         // Simulate the aftermath of a killed process: garbage partial remains.
-        final stale = File('${InstallPaths.updateDir}\\IASB-5.5.0-Setup.exe');
+        final stale = File('${InstallPaths.updateDir}${Platform.pathSeparator}IASB-5.5.0-Setup.exe');
         stale.createSync(recursive: true);
         stale.writeAsStringSync('PARTIAL GARBAGE');
         final started = await drive(validManifest(
@@ -1272,7 +1274,7 @@ void main() {
             target: '5.5.0', url: '${server.base}/i.exe', sha: hash));
         expect(started, true);
         expectProgress(UpdateState.completed);
-        expect(Directory('${InstallPaths.backupDir}\\v5.4.0').existsSync(),
+        expect(Directory('${InstallPaths.backupDir}${Platform.pathSeparator}v5.4.0').existsSync(),
             true);
       });
     });
@@ -1545,7 +1547,7 @@ void main() {
     test('env.json preserved across a failed update', () async {
       await _scenario('14 — Configuration Preservation',
           'env.json survives a failed update attempt', '', (r) async {
-        final file = File('${InstallPaths.configDir}\\env.json');
+        final file = File('${InstallPaths.configDir}${Platform.pathSeparator}env.json');
         file.createSync(recursive: true);
         file.writeAsStringSync('{"ENV":"production","API_BASE":"https://x"}');
         final bytes = installerBytes(64 * 1024);
@@ -1562,7 +1564,7 @@ void main() {
     test('config.json preserved across a failed update', () async {
       await _scenario('14 — Configuration Preservation',
           'config.json survives a failed update attempt', '', (r) async {
-        final file = File('${InstallPaths.configDir}\\config.json');
+        final file = File('${InstallPaths.configDir}${Platform.pathSeparator}config.json');
         file.createSync(recursive: true);
         file.writeAsStringSync('{"board_id":"B-1"}');
         final bytes = installerBytes(64 * 1024);
@@ -1601,10 +1603,10 @@ void main() {
       await _scenario('15 — User Data Preservation',
           'Attendance queue and offline cache survive a failed update',
           '', (r) async {
-        final queue = File('${InstallPaths.dataDir}\\attendance_queue.json');
+        final queue = File('${InstallPaths.dataDir}${Platform.pathSeparator}attendance_queue.json');
         queue.createSync(recursive: true);
         queue.writeAsStringSync('{"pending":3}');
-        final cache = File('${InstallPaths.cacheDir}\\offline.bin');
+        final cache = File('${InstallPaths.cacheDir}${Platform.pathSeparator}offline.bin');
         cache.createSync(recursive: true);
         cache.writeAsBytesSync([1, 2, 3, 4]);
         final bytes = installerBytes(64 * 1024);
@@ -1621,10 +1623,10 @@ void main() {
     test('images and session logs preserved', () async {
       await _scenario('15 — User Data Preservation',
           'Images and session logs survive a failed update', '', (r) async {
-        final image = File('${InstallPaths.cacheDir}\\photo_1.jpg');
+        final image = File('${InstallPaths.cacheDir}${Platform.pathSeparator}photo_1.jpg');
         image.createSync(recursive: true);
         image.writeAsBytesSync(List<int>.generate(64, (_) => 7));
-        final log = File('${InstallPaths.dataDir}\\logs\\session.log');
+        final log = File('${InstallPaths.dataDir}${Platform.pathSeparator}logs${Platform.pathSeparator}session.log');
         log.createSync(recursive: true);
         log.writeAsStringSync('SESSION_OK');
         final bytes = installerBytes(64 * 1024);
@@ -1641,7 +1643,7 @@ void main() {
     test('certificates preserved', () async {
       await _scenario('15 — User Data Preservation',
           'Certificates survive a failed update', '', (r) async {
-        final cert = File('${InstallPaths.dataDir}\\certs\\board.pem');
+        final cert = File('${InstallPaths.dataDir}${Platform.pathSeparator}certs${Platform.pathSeparator}board.pem');
         cert.createSync(recursive: true);
         cert.writeAsStringSync('CERT-BEGIN');
         final bytes = installerBytes(64 * 1024);

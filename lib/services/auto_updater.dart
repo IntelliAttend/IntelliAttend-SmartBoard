@@ -476,7 +476,7 @@ class AutoUpdater {
     // ── 1. Download ──────────────────────────────────────────────────────────
 
     await InstallPaths.ensureDirectories();
-    final installerPath = '${InstallPaths.updateDir}\\IASB-$targetVersion-Setup.exe';
+    final installerPath = '${InstallPaths.updateDir}${Platform.pathSeparator}IASB-$targetVersion-Setup.exe';
     final installerFile = File(installerPath);
 
     // Remove any partially-downloaded file from a previous attempt.
@@ -588,7 +588,7 @@ class AutoUpdater {
     );
 
     final logPath =
-        '${InstallPaths.logDir}\\update_${DateTime.now().millisecondsSinceEpoch}.log';
+        '${InstallPaths.logDir}${Platform.pathSeparator}update_${DateTime.now().millisecondsSinceEpoch}.log';
 
     final launched = agentLauncherOverride != null
         ? await agentLauncherOverride!(

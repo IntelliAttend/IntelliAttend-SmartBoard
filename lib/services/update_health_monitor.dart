@@ -216,7 +216,7 @@ class UpdateHealthMonitor {
 
       // Use InstallPaths.backupDir for consistent backup location.
       final backupDir = Directory(
-          '${InstallPaths.backupDir}\\v$currentVersion');
+          '${InstallPaths.backupDir}${Platform.pathSeparator}v$currentVersion');
       if (await backupDir.exists()) {
         // Remove stale backup from a previous failed update.
         await backupDir.delete(recursive: true);
@@ -406,10 +406,10 @@ class UpdateHealthMonitor {
   static Future<void> _performRollbackDirect(Directory appDir, Directory backupDir) async {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final failedDir =
-        '${appDir.parent.path}\\${appDir.uri.pathSegments.last}_failed_$timestamp';
+        '${appDir.parent.path}${Platform.pathSeparator}${appDir.uri.pathSegments.last}_failed_$timestamp';
     final exeName =
         Platform.resolvedExecutable.split(Platform.pathSeparator).last;
-    final restoredExe = '${appDir.path}\\$exeName';
+    final restoredExe = '${appDir.path}${Platform.pathSeparator}$exeName';
 
     // Wait a moment for current process to be ready for file operations
     await Future.delayed(const Duration(seconds: 2));
@@ -435,7 +435,7 @@ class UpdateHealthMonitor {
     } catch (e) {
       Log.e('[UpdateHealth] Rollback failed: $e');
       // Log error to temp file for diagnostics
-      final logFile = File('${Directory.systemTemp.path}\\intelliattend_rollback_error.log');
+      final logFile = File('${Directory.systemTemp.path}${Platform.pathSeparator}intelliattend_rollback_error.log');
       await logFile.writeAsString('[$timestamp] $e\n', mode: FileMode.append);
     }
   }
@@ -447,9 +447,9 @@ class UpdateHealthMonitor {
     await for (final entity in source.list(recursive: false)) {
       final entityName = entity.uri.pathSegments.last;
       if (entity is File) {
-        await entity.copy('${destination.path}\\$entityName');
+        await entity.copy('${destination.path}${Platform.pathSeparator}$entityName');
       } else if (entity is Directory) {
-        final subDest = Directory('${destination.path}\\$entityName');
+        final subDest = Directory('${destination.path}${Platform.pathSeparator}$entityName');
         await _copyDirectory(entity, subDest);
       }
     }
