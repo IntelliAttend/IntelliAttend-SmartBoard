@@ -34,14 +34,18 @@ extension _EndReasonLabel on EndReason {
 /// calls [SessionLifecycle.end] instead of directly calling [ApiService.terminateSession]
 /// + [BoardStateMachine.transitionTo]. This ensures:
 ///
-/// 1. **Deduplication** — same session won't be terminated twice simultaneously.
-/// 2. **Retry** — failed terminates are always enqueued to the heartbeat retry queue
+/// 1. **Server-first** — the terminate API call is BLOCKING. The board only
+///    transitions to SummaryScreen AFTER the server confirms the session is ended.
+///    This prevents the client/server state disagreement that caused the
+///    Summary→Idle→Summary loop.
+/// 2. **Deduplication** — same session won't be terminated twice simultaneously.
+/// 3. **Retry** — failed terminates are always enqueued to the heartbeat retry queue
 ///    (max 10 retries, then give up).
-/// 3. **Deferral** — if the user is on an active screen (BoardState.active), the
+/// 4. **Deferral** — if the user is on an active screen (BoardState.active), the
 ///    board transition is deferred (the WS `session_ended` event or the user's
 ///    own end action handles it).
-/// 4. **Logging** — every termination is logged with a reason for debugging.
-/// 5. **Count sync** — final present/absent counts are synced to SessionStateService
+/// 5. **Logging** — every termination is logged with a reason for debugging.
+/// 6. **Count sync** — final present/absent counts are synced to SessionStateService
 ///    so the orchestrator has accurate data when building SummaryScreen.
 class SessionLifecycle {
   SessionLifecycle._();
@@ -97,16 +101,28 @@ class SessionLifecycle {
       // Defer: user is on an active screen and this is NOT their own action.
       // Record the intent to close but don't rip them away.
       Log.i('[Lifecycle] Deferring board transition — user on active screen');
+      // Still fire the terminate API (fire-and-forget for deferred cases)
+      _fireTerminate(sessionId, reason);
     } else {
-      // Force transition: either user tapped End, or board is idle/closed.
+      // BLOCKING: Wait for server to confirm session is ended BEFORE
+      // transitioning to SummaryScreen. This is the key difference from the
+      // previous fire-and-forget approach that caused state disagreements.
+      try {
+        await ApiService.terminateSession(sessionId);
+        Log.i('[Lifecycle] Server confirmed session $sessionId ended');
+      } catch (e) {
+        Log.e('[Lifecycle] Terminate API failed for $sessionId (${reason.label}): $e');
+        // Enqueue for retry but still transition — don't block the user forever.
+        // The heartbeat service will retry in the background.
+        HeartbeatService.enqueuePendingTermination(sessionId);
+      }
+
+      // NOW transition to closed — server has been notified (or will retry).
       if (setFullscreen) {
         await KioskService.setMode(KioskMode.fullscreen);
       }
       machine.transitionTo(BoardState.closed);
     }
-
-    // Fire terminate API as fire-and-forget — don't block the caller.
-    _fireTerminate(sessionId, reason);
 
     // Clean up dedup tracking after a short delay.
     // This allows the same session to be re-terminated if needed (e.g., after

@@ -857,9 +857,9 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     _endSessionCooldownTimer?.cancel();
     KioskService.setMode(KioskMode.fullscreen);
 
-    // End session via single entry point — handles count sync, API call,
-    // retry queue, and board state transition. User tap = not deferred.
-    SessionLifecycle.end(
+    // End session via single entry point — BLOCKING: waits for server
+    // confirmation before transitioning to SummaryScreen.
+    await SessionLifecycle.end(
       sessionId: widget.sessionId,
       reason: EndReason.userTap,
       presentCount: _presentCount,
