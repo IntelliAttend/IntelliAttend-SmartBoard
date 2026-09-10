@@ -101,6 +101,8 @@ class SessionManager {
 
   /// Persists a new active session to the local vault.
   /// Standardizes metadata across all screen callers.
+  /// If a session with the same sessionId already exists, updates it instead
+  /// of creating a duplicate (prevents Isar UNIQUE INDEX VIOLATED).
   static Future<void> saveSession({
     required String sessionId,
     required int rosterCount,
@@ -110,7 +112,14 @@ class SessionManager {
     required DateTime endTime,
     String slotId = '',
   }) async {
-    final session = ActiveSession()
+    // Check if a session with this ID already exists — reuse its Isar ID
+    // to avoid UNIQUE INDEX VIOLATED on the unique sessionId index.
+    ActiveSession? existing = await _isar!.activeSessions
+        .filter()
+        .sessionIdEqualTo(sessionId)
+        .findFirst();
+
+    final session = existing ?? ActiveSession()
       ..sessionId = sessionId
       ..slotId = slotId
       ..rosterCount = rosterCount
@@ -120,6 +129,18 @@ class SessionManager {
       ..scheduledEndTime = endTime
       ..verifiedStudentIds = []
       ..lifecycle = 'active';
+
+    if (existing != null) {
+      // Update fields on the existing object
+      existing
+        ..slotId = slotId
+        ..rosterCount = rosterCount
+        ..facultyName = facultyName
+        ..courseName = courseName
+        ..sectionId = sectionId
+        ..scheduledEndTime = endTime
+        ..lifecycle = 'active';
+    }
 
     await _isar!.writeTxn(() async {
       await _isar!.activeSessions.put(session);
@@ -485,6 +506,14 @@ class SessionManager {
 
   static Future<void> saveNotification(BoardNotification notification) async {
     final stored = _boardNotificationToStored(notification);
+    // Check for existing to avoid UNIQUE INDEX VIOLATED on notificationId
+    final existing = await _isar!.storedNotifications
+        .filter()
+        .notificationIdEqualTo(stored.notificationId)
+        .findFirst();
+    if (existing != null) {
+      stored.id = existing.id;
+    }
     await _isar!.writeTxn(() async {
       await _isar!.storedNotifications.put(stored);
     });
@@ -495,7 +524,16 @@ class SessionManager {
     if (notifications.isEmpty) return;
     final stored = notifications.map(_boardNotificationToStored).toList();
     await _isar!.writeTxn(() async {
-      await _isar!.storedNotifications.putAll(stored);
+      for (final s in stored) {
+        final existing = await _isar!.storedNotifications
+            .filter()
+            .notificationIdEqualTo(s.notificationId)
+            .findFirst();
+        if (existing != null) {
+          s.id = existing.id;
+        }
+        await _isar!.storedNotifications.put(s);
+      }
     });
     Log.d('[SessionManager] Persisted ${stored.length} notifications');
   }
