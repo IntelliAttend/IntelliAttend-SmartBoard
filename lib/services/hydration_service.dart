@@ -106,6 +106,13 @@ class HydrationService {
     final scheduleList = payload['schedule_list'] as List<dynamic>?;
     final rosters = payload['rosters'] as Map<String, dynamic>?;
 
+    // Don't wipe local data if server returns empty schedule and rosters
+    if (scheduleList != null && scheduleList.isEmpty &&
+        (rosters == null || rosters.isEmpty)) {
+      Log.w('[Hydration] Empty payload — skipping persist to preserve local cache');
+      return;
+    }
+
     if (profile != null) {
       await _persistProfile(profile, isar);
     }
@@ -156,6 +163,12 @@ class HydrationService {
     Isar isar,
   ) async {
     Log.i('[Hydration] schedule_list count: ${scheduleList.length}');
+
+    if (scheduleList.isEmpty) {
+      Log.w('[Hydration] schedule_list is empty — skipping persist to preserve local cache');
+      return;
+    }
+
     if (scheduleList.isNotEmpty) {
       final dayDistribution = <int, int>{};
       for (final raw in scheduleList) {
