@@ -76,6 +76,10 @@ class SessionLifecycle {
 
     Log.i('[Lifecycle] Ending session $sessionId — reason: ${reason.label}');
 
+    // Mark session as recently completed to prevent IdleScreen from
+    // re-discovering it during the cooldown window.
+    SessionStateService().markRecentlyCompleted(sessionId);
+
     // Sync final counts to SessionStateService before transitioning.
     // The orchestrator reads these when building SummaryScreen.
     if (presentCount != null && absentCount != null) {

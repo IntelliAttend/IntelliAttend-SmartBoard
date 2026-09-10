@@ -45,8 +45,17 @@ class _SummaryScreenState extends State<SummaryScreen> {
   void initState() {
     super.initState();
     KioskService.setMode(KioskMode.fullscreen);
-    _persistCompletedSession();
-    _startCountdown();
+    _persistAndStartCountdown();
+  }
+
+  Future<void> _persistAndStartCountdown() async {
+    // Wait for session to be marked completed in Isar BEFORE starting countdown.
+    // This prevents IdleScreen from re-discovering the session during the
+    // 20-second countdown window.
+    await _persistCompletedSession();
+    if (mounted) {
+      _startCountdown();
+    }
   }
 
   Future<void> _persistCompletedSession() async {
@@ -63,6 +72,9 @@ class _SummaryScreenState extends State<SummaryScreen> {
     // sees this session as ended, not active.
     await SessionManager.markSessionCompleted(widget.sessionId);
     await SessionManager.clearSession(widget.sessionId);
+    // Also mark as recently completed in SessionStateService to prevent
+    // IdleScreen from re-discovering during cooldown window.
+    SessionStateService().markRecentlyCompleted(widget.sessionId);
   }
 
   void _startCountdown() {

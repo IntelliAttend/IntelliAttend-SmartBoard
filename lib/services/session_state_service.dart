@@ -114,6 +114,11 @@ class SessionStateService {
   SessionState _sessionState = SessionState(sessionId: '', state: 'IDLE');
   String? _sessionSecret;
 
+  /// Recently completed session IDs — prevents IdleScreen from re-discovering
+  /// a session that was just ended. Entries expire after 60 seconds.
+  final Set<String> _recentlyCompletedSessionIds = {};
+  static const _completionCooldown = Duration(seconds: 60);
+
   final StreamController<SessionState> _stateController =
       StreamController<SessionState>.broadcast();
 
@@ -183,6 +188,22 @@ class SessionStateService {
     BoardStateMachine().reset();
     _stateController.add(_sessionState);
     Log.i('[SessionState] Reset to IDLE');
+  }
+
+  /// Mark a session as recently completed. IdleScreen will skip re-discovery
+  /// for this session ID for [_completionCooldown].
+  void markRecentlyCompleted(String sessionId) {
+    if (sessionId.isEmpty) return;
+    _recentlyCompletedSessionIds.add(sessionId);
+    Log.i('[SessionState] Marked session $sessionId as recently completed');
+    Future.delayed(_completionCooldown, () {
+      _recentlyCompletedSessionIds.remove(sessionId);
+    });
+  }
+
+  /// Check if a session was recently completed (within cooldown window).
+  bool wasRecentlyCompleted(String sessionId) {
+    return _recentlyCompletedSessionIds.contains(sessionId);
   }
 
   Future<bool> restoreFromLocal({

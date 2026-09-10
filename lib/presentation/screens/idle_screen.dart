@@ -11,6 +11,7 @@ import '../../core/utils/logger.dart';
 import '../../data/repositories/device_repository.dart';
 import 'package:provider/provider.dart';
 import '../../services/session_manager.dart';
+import '../../services/session_state_service.dart';
 import '../../main.dart';
 import '../../services/api_service.dart';
 import '../../core/security/secure_storage_service.dart';
@@ -759,15 +760,27 @@ class _IdleScreenState extends State<IdleScreen>
     // If we already have an active session, verify it's still lifecycle='active'
     // in Isar (i.e. hasn't been marked completed by SummaryScreen).
     if (_activeSession != null) {
-      final exists = await SessionManager.sessionExists(_activeSession!.sessionId);
-      if (!exists && mounted) {
-        Log.i('[Idle] Active session ${_activeSession!.sessionId} no longer active — clearing.');
+      // Guard: skip re-verification if this session was just completed
+      if (SessionStateService().wasRecentlyCompleted(_activeSession!.sessionId)) {
+        Log.d('[Idle] Session ${_activeSession!.sessionId} recently completed — clearing without re-verification');
         setState(() {
           _activeSession = null;
           _sessionStartTimestamp = null;
           _sessionScheduledEnd = null;
           _stopSessionProgressTimer();
-          // TEMPORARY: button always visible — do not hide when session cleared
+        });
+        return;
+      }
+
+      final exists = await SessionManager.sessionExists(_activeSession!.sessionId);
+      if (!exists && mounted) {
+        Log.i('[Idle] Active session ${_activeSession!.sessionId} no longer active — clearing.');
+        SessionStateService().markRecentlyCompleted(_activeSession!.sessionId);
+        setState(() {
+          _activeSession = null;
+          _sessionStartTimestamp = null;
+          _sessionScheduledEnd = null;
+          _stopSessionProgressTimer();
         });
       }
       return;
@@ -778,6 +791,12 @@ class _IdleScreenState extends State<IdleScreen>
     final session = await SessionManager.getResumeableSession(
       currentSlotId: _bedrockEntry?.slotId,
     );
+
+    // Guard: skip if this session was recently completed
+    if (session != null && SessionStateService().wasRecentlyCompleted(session.sessionId)) {
+      Log.d('[Idle] Discovered session ${session.sessionId} but it was recently completed — skipping');
+      return;
+    }
 
     if (session != null && mounted) {
       setState(() {
@@ -808,6 +827,12 @@ class _IdleScreenState extends State<IdleScreen>
 
       final serverActive = response['active'] as bool? ?? false;
       final serverSessionId = response['session_id'] as String?;
+
+      // Guard: skip if this session was recently completed
+      if (serverSessionId != null && SessionStateService().wasRecentlyCompleted(serverSessionId)) {
+        Log.d('[Idle] Server session $serverSessionId recently completed — skipping discovery');
+        return;
+      }
 
       if (serverActive && serverSessionId != null) {
         Log.i('[Idle] Server has active session $serverSessionId — resuming locally.');
