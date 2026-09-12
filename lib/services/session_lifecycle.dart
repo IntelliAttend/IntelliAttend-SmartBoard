@@ -34,10 +34,11 @@ extension _EndReasonLabel on EndReason {
 /// calls [SessionLifecycle.end] instead of directly calling [ApiService.terminateSession]
 /// + [BoardStateMachine.transitionTo]. This ensures:
 ///
-/// 1. **Server-first** — the terminate API call is BLOCKING. The board only
-///    transitions to SummaryScreen AFTER the server confirms the session is ended.
-///    This prevents the client/server state disagreement that caused the
-///    Summary→Idle→Summary loop.
+/// 1. **Instant user feedback** — a user-tap end fires the terminate in the
+///    background and transitions to SummaryScreen in the same frame. The
+///    terminate used to be BLOCKING (commit eeff36e) to protect against the
+///    Summary→Idle→Summary loop, but that loop is now independently prevented
+///    by the `recentlyCompletedSessionIds` cooldown.
 /// 2. **Deduplication** — same session won't be terminated twice simultaneously.
 /// 3. **Retry** — failed terminates are always enqueued to the heartbeat retry queue
 ///    (max 10 retries, then give up).
@@ -104,17 +105,28 @@ class SessionLifecycle {
       // Still fire the terminate API (fire-and-forget for deferred cases)
       _fireTerminate(sessionId, reason);
     } else {
-      // BLOCKING: Wait for server to confirm session is ended BEFORE
-      // transitioning to SummaryScreen. This is the key difference from the
-      // previous fire-and-forget approach that caused state disagreements.
-      try {
-        await ApiService.terminateSession(sessionId);
-        Log.i('[Lifecycle] Server confirmed session $sessionId ended');
-      } catch (e) {
-        Log.e('[Lifecycle] Terminate API failed for $sessionId (${reason.label}): $e');
-        // Enqueue for retry but still transition — don't block the user forever.
-        // The heartbeat service will retry in the background.
-        HeartbeatService.enqueuePendingTermination(sessionId);
+      if (reason == EndReason.userTap) {
+        // IMMEDIATE: fire the terminate in the background and transition in
+        // the same frame so the user lands on SummaryScreen instantly. This
+        // path used to be BLOCKING (commit eeff36e) to prevent the
+        // Summary->Idle->Summary loop, but that loop is now independently
+        // prevented by markRecentlyCompleted() above (60s re-discovery
+        // cooldown), so the wait is redundant. Failures fall through to the
+        // heartbeat retry queue and the server-side idempotent terminate.
+        _fireTerminate(sessionId, reason);
+      } else {
+        // Server-first for non-user terminations (slot timers, safety net —
+        // background). There is no UX to block here, so prefer waiting for
+        // server confirmation before transitioning.
+        try {
+          await ApiService.terminateSession(sessionId);
+          Log.i('[Lifecycle] Server confirmed session $sessionId ended');
+        } catch (e) {
+          Log.e('[Lifecycle] Terminate API failed for $sessionId (${reason.label}): $e');
+          // Enqueue for retry but still transition — don't block forever.
+          // The heartbeat service will retry in the background.
+          HeartbeatService.enqueuePendingTermination(sessionId);
+        }
       }
 
       // NOW transition to closed — server has been notified (or will retry).

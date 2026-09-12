@@ -2937,6 +2937,7 @@ class _IdleScreenState extends State<IdleScreen>
                                   totalStudents: session.rosterCount,
                                 ),
                                 totalCapacity: session.rosterCount,
+                                isStandaloneRoute: true,
                               )),
                             ),
                           ),
@@ -2964,6 +2965,7 @@ class _IdleScreenState extends State<IdleScreen>
                                   roomName: widget.registration.roomName,
                                   boardId: widget.registration.smartBoardId,
                                   onNavigateBack: () => Navigator.of(context).pop(),
+                                  isStandaloneRoute: true,
                                 )),
                               );
                             },

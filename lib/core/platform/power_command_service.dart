@@ -87,7 +87,7 @@ class PowerCommandService {
       _currentCommand = event.command;
       _currentCommandId = event.commandId;
       _reason = event.reason;
-      _secondsRemaining = event.delaySeconds.clamp(5, 600);
+      _secondsRemaining = event.delaySeconds.clamp(1, 600);
       _totalDelaySeconds = _secondsRemaining;
       _emitState();
 

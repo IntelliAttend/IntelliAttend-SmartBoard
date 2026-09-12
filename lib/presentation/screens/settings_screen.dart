@@ -1121,7 +1121,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           command: action,
           commandId: 'local_${action}_${DateTime.now().millisecondsSinceEpoch}',
           reason: 'Manual $action from settings',
-          delaySeconds: 5,
+          delaySeconds: 1,
         ),
       );
     } catch (e) {

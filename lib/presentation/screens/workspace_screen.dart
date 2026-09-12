@@ -95,12 +95,20 @@ class WorkspaceScreen extends StatefulWidget {
   final bool isAttendanceSubmitted;
   final WebsocketService? websocketService;
 
+  /// True when this screen is pushed as its own Navigator route (e.g. from the
+  /// IdleScreen active-session Workspace card), sitting ON TOP of the
+  /// SessionOrchestratorScreen. When the session ends, the orchestrator
+  /// underneath swaps to SummaryScreen, so this route must pop itself to reveal
+  /// it. False when rendered as a direct child of the orchestrator.
+  final bool isStandaloneRoute;
+
   const WorkspaceScreen({
     super.key,
     required this.sessionContext,
     required this.totalCapacity,
     this.isAttendanceSubmitted = false,
     this.websocketService,
+    this.isStandaloneRoute = false,
   });
 
   // Convenience accessors — delegate to sessionContext
@@ -645,6 +653,15 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
       absentCount: widget.totalCapacity - widget.presentCount,
       setFullscreen: false,
     );
+
+    // If this screen is a Navigator route pushed on top of the orchestrator
+    // (IdleScreen active-session Workspace card / AttendanceScreen "Workspace"
+    // button), the orchestrator has already swapped its child to SummaryScreen
+    // underneath. Pop this route so the SummaryScreen is revealed instead of a
+    // stuck "ending" spinner.
+    if (mounted && widget.isStandaloneRoute) {
+      Navigator.of(context).pop();
+    }
   }
 
   static Widget _buildCardStat(String label, String value, Color color) {
@@ -963,6 +980,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen>
                         capacity: widget.totalCapacity,
                         roomName: widget.roomName,
                         boardId: '',
+                        isStandaloneRoute: true,
                       ),
                     ),
                   );

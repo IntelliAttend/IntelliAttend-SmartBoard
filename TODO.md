@@ -187,3 +187,46 @@
 | 49 | **BoardStateMachine cleanup** | 🔴 Critical | ✅ Done | Removed `forceTransitionTo()`. Added `idle→closed` rule. FSM now the only way to change state |
 | 50 | **Retry exhaustion notification** | 🟡 Medium | ✅ Done | `HeartbeatService.onRetryExhausted` callback fires after 10 failed retries (2.5 min). Orchestrator hooks it for logging |
 | 51 | **Server: idempotent terminate** | 🔴 Critical | ✅ Done | `board.py` always passes `force=True`, returns `already_ended` field. Dead `force` param removed from request |
+
+---
+
+## 🔴 Runtime Regression: End-Session Stuck on "Ending…" / SummaryHidden Behind Back-Arrow
+
+> Reported live: clicking **End Session** shows a loading spinner and the SummaryScreen never appears;
+> pressing the **back arrow** in Workspace later reveals the SummaryScreen. **Not acceptable** — the
+> session's end must land on Summary immediately.
+
+| # | Root Cause | File(s) | Impact |
+|---|-----------|---------|--------|
+| 52 | **Workspace/Attendance are pushed ON TOP of the orchestrator.** IdleScreen opens them via `Navigator.push` (`idle_screen.dart:2929,2953`) and `_navigateToWorkspace` uses `pushReplacement` (`attendance_screen.dart:468`). When the board transitions ACTIVE→CLOSED, the orchestrator (underneath) rebuilds its child to SummaryScreen, but the pushed route stays on top with the stuck "Ending…" spinner. Nothing pops it — only a manual back-press reveals Summary. | `workspace_screen.dart`, `attendance_screen.dart`, `idle_screen.dart` | SummaryScreen hidden behind the ending route |
+| 53 | **Blocking terminate delays the CLOSED transition (commit `eeff36e`).** `SessionLifecycle.end()` awaits `ApiService.terminateSession()` BEFORE `transitionTo(closed)`. The server's `end_session()` synchronously recomputes attendance summaries for every student (N sequential DB queries) + 4 awaited WS broadcasts → HTTP takes 10–15s+ (client has 30s timeout with up to 3 retries). UI is frozen on the spinner that whole window. | `session_lifecycle.dart`, server `session_engine.py` | 10–15s spinner before any transition |
+| 54 | **`Attendancer->_navigateToWorkspace` uses `pushReplacement`** which replaces (disposes) the SessionOrchestratorScreen route — killing the board-state subscription that owns SummaryScreen rendering. | `attendance_screen.dart:468` | Orchestrator destroyed on Attendance→Workspace nav |
+
+**Fix plan:**
+1. Add `isStandaloneRoute` flag to `AttendanceScreen`/`WorkspaceScreen` (default false — orchestrator children).
+2. After `await SessionLifecycle.end(...)` returns, if `mounted && isStandaloneRoute` → `Navigator.of(context).pop()` so SummaryScreen is revealed (task 55).
+3. Change `_navigateToWorkspace` to `Navigator.push` (not `pushReplacement`) so the orchestrator stays alive (task 56).
+4. Bound the blocking wait: use a short timeout for the user-tap terminate path and fall through to the heartbeat retry queue (safe now because `recentlyCompletedSessionIds` already prevents the Summary→Idle→Summary loop) (task 57).
+
+| # | Task | Priority | Status | Details |
+|---|------|----------|--------|---------|
+| 55 | **Pop standalone route after session end** | 🔴 Critical | ✅ Done | Added `isStandaloneRoute` flag (default false) to `WorkspaceScreen` + `AttendanceScreen`; `_handleEndSession`/`_handleEndAttendance` now `Navigator.pop()` after `SessionLifecycle.end()` returns when `mounted && isStandaloneRoute` — reveals SummaryScreen instead of a stale ending route |
+| 56 | **Keep orchestrator alive on Workspace nav** | 🔴 Critical | ✅ Done | `attendance_screen._navigateToWorkspace` changed `pushReplacement` → `push` + `isStandaloneRoute: true`; same for Workspace sidebar → Attendance + IdleScreen active-session Workspace/Attendance cards |
+| 57 | **Instant Summary on user-tap end** | 🔴 High | ✅ Done | `SessionLifecycle.end()` — `EndReason.userTap` is now **fire-and-forget**: terminate runs in background (`_fireTerminate` → heartbeat retry queue on failure) and the CLOSED transition happens in the same frame. SummaryScreen lands in <100ms. Safe because `recentlyCompletedSessionIds` (60s cooldown) independently prevents the Summary→Idle→Summary loop the old blocking behavior existed for. Non-user paths (T-1/auto-close/safety-net) stay server-first |
+
+---
+
+## 🟡 Settings: Power-Off Shows 5-Sec "Activation" Countdown
+
+| # | Root Cause | File(s) | Impact |
+|---|-----------|---------|--------|
+| 58 | **Hold-to-confirm (~1.25s) then a mandatory 5-second countdown.** `_buildHoldActionButton` passes `delaySeconds: 5` to `PowerCommandService.handleSystemCommand`, which clamps `_secondsRemaining = delaySeconds.clamp(5, 600)` → a 5-second shutdown overlay runs after the hold. Perceived as new/unneeded friction. | `settings_screen.dart:1115`, `power_command_service.dart:90` | 5s wait before POWER OFF |
+| 59 | **Fix:** lowered countdown floor `clamp(1, 600)`; local settings actions now use `delaySeconds: 1`. Remote/admin-issued commands keep their explicit schedule. | ✅ Done in `power_command_service.dart` + `settings_screen.dart` | Near-instant shutdown after the hold-confirm ring |
+
+---
+
+## 🟡 Class-to-Class Transition Edge Cases
+
+| # | Task | Priority | Status | Details |
+|---|------|----------|--------|---------|
+| 60 | **Audit class→class transition** | 🟡 Medium | ✅ Done | Verified `WindowOrchestratorService` slot timers (T-1/auto-close/safety-net) + IdleScreen discovery (`_checkActiveSession`, `wasRecentlyCompleted`, `_discoverSessionFromServer`, 120s cooldown, T-5/T-3 warm-up). Logic is sound — the reported class-to-class breakage is **downstream of tasks 55–57**: a stuck ending route froze class A's completion, so class B never surfaced. Re-test back-to-back transitions after deploying 55–57 |

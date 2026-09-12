@@ -30,6 +30,13 @@ class AttendanceScreen extends StatefulWidget {
   final String? boardId;
   final VoidCallback? onNavigateBack;
 
+  /// True when this screen is pushed as its own Navigator route (e.g. from the
+  /// IdleScreen active-session card or the Workspace sidebar), sitting ON TOP of
+  /// the SessionOrchestratorScreen. When the session ends, the orchestrator
+  /// underneath swaps to SummaryScreen, so this route must pop itself to reveal
+  /// it. False when rendered as a direct child of the orchestrator.
+  final bool isStandaloneRoute;
+
   const AttendanceScreen({
     super.key,
     required this.sessionContext,
@@ -38,6 +45,7 @@ class AttendanceScreen extends StatefulWidget {
     this.slotId,
     this.boardId,
     this.onNavigateBack,
+    this.isStandaloneRoute = false,
   });
 
   // Convenience accessors — delegate to sessionContext
@@ -465,7 +473,9 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   void _navigateToWorkspace() {
-    Navigator.of(context).pushReplacement(
+    // Push, not pushReplacement — the SessionOrchestratorScreen below must stay
+    // alive so it can swap its child to SummaryScreen when the session ends.
+    Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => WorkspaceScreen(
           sessionContext: widget.sessionContext.copyWith(
@@ -474,6 +484,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
           ),
           totalCapacity: widget.capacity,
           isAttendanceSubmitted: _isAttendanceSubmitted,
+          isStandaloneRoute: true,
         ),
       ),
     );
@@ -866,6 +877,14 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       absentCount: _students.length - _presentCount,
       setFullscreen: false, // already set above
     );
+
+    // If this screen is a Navigator route pushed on top of the orchestrator
+    // (IdleScreen active-session card / Workspace sidebar), the orchestrator has
+    // already swapped its child to SummaryScreen underneath. Pop this route so
+    // the SummaryScreen is revealed instead of a stale "ending" screen.
+    if (mounted && widget.isStandaloneRoute) {
+      Navigator.of(context).pop();
+    }
   }
 
   void _startEndSessionCooldown() {
