@@ -230,3 +230,22 @@
 | # | Task | Priority | Status | Details |
 |---|------|----------|--------|---------|
 | 60 | **Audit class→class transition** | 🟡 Medium | ✅ Done | Verified `WindowOrchestratorService` slot timers (T-1/auto-close/safety-net) + IdleScreen discovery (`_checkActiveSession`, `wasRecentlyCompleted`, `_discoverSessionFromServer`, 120s cooldown, T-5/T-3 warm-up). Logic is sound — the reported class-to-class breakage is **downstream of tasks 55–57**: a stuck ending route froze class A's completion, so class B never surfaced. Re-test back-to-back transitions after deploying 55–57 |
+
+---
+
+## 🔴 Production Critical — Session Start / Attendance / Terminate Failure-Handling
+
+> Source: `PRODUCTION_FAILURE_AUDIT.md` (Sep 12, 2026). Scope limited to the daily
+> core flow: **session starting (PIN) → taking attendance → terminating the session**.
+> Items outside this flow (boot/recovery, auto-update, WS reconnect loop, popup
+> hygiene, telemetry probe) are deferred.
+
+| # | Fix | Priority | Status | Details |
+|---|-----|----------|--------|---------|
+| 61 | **Defer server terminate with the UI** | 🔴 High | ✅ Done | `session_lifecycle.dart:113-122` now defers BOTH transition and terminate when the teacher is on an active screen (server session stays alive so submits keep working); no dedup lease is held so the teacher's End Session is never blocked. T-1 (`window_orchestrator_service.dart:174`) only marks the slot fired when termination actually occurs → auto-close stays the backstop |
+| 62 | **Heartbeat transport-error must never force-end** | 🔴 High | ✅ Done | `heartbeat_service.dart` `_sendInner`: `status:'error'` beats are ignored entirely (no null-session count, no force-end); only 3 consecutive clean null-session responses trigger force-end |
+| 63 | **Offline queue integrity** | 🔴 High | ✅ Done | `sync_manager.dart`: Isar delete moved out of the submit try/catch (a local delete failure can never re-submit or inflate retries); `attendance_screen.dart:417` preserves `retryCount`/`createdAt` on re-queue. Confirmed server `/session/attendance/submit` upserts idempotently (`on_conflict_do_update` on session_id+student_id) |
+| 64 | **Terminate in-flight lock + serialized `_send()`** | 🔴 High | ✅ Done | `heartbeat_service.dart` `_send()` wrappers in `_sendInner()` behind an `_isSendRunning` guard (overlapping beats dropped); `session_lifecycle.dart` dedup lease now held until the terminate settles — 6 min when enqueued to the heartbeat retry queue (10×15s) to stop lifecycle+heartbeat stacking duplicate terminates |
+| 65 | **Surface terminate retry exhaustion** | 🟡 Medium | ✅ Done | `session_orchestrator_screen.dart` `_handleRetryExhausted` shows a system warning + dismissible amber banner (auto-dismiss 30s) so the teacher knows the server may still hold the session |
+| 66 | **Health-check must not gate slot logic** | 🟡 Medium | ✅ Done | `window_orchestrator_service.dart:100` fullscreen health check is now fire-and-forget with a 3s timeout — a hung platform call can no longer freeze T-0/T-1/auto-close/safety-net |
+| 67 | **Summary must not hang on Isar write** | 🟡 Medium | ✅ Done | `summary_screen.dart` persists with a 5s timeout; the countdown into Idle always starts even if the write fails/hangs |

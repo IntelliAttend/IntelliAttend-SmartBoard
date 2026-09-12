@@ -532,34 +532,6 @@ class WebsocketService with WidgetsBindingObserver {
     }
   }
 
-  void submitAttendance({
-    required String sessionId,
-    required List<String> presentEmails,
-    required List<String> absentEmails,
-  }) {
-    send({
-      'type': 'attendance_submit',
-      'session_id': sessionId,
-      'present_emails': presentEmails,
-      'absent_emails': absentEmails,
-    });
-    Log.i('[WS] attendance_submit sent: ${presentEmails.length} present, ${absentEmails.length} absent');
-  }
-
-  void saveDraft({
-    required String sessionId,
-    required List<String> presentEmails,
-    required List<String> absentEmails,
-  }) {
-    send({
-      'type': 'attendance_save_draft',
-      'session_id': sessionId,
-      'present_emails': presentEmails,
-      'absent_emails': absentEmails,
-    });
-    Log.i('[WS] attendance_save_draft sent: ${presentEmails.length} present, ${absentEmails.length} absent');
-  }
-
   void sendTap({
     required String sessionId,
     required String studentId,

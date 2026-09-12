@@ -130,22 +130,33 @@ class SyncManager {
           absentEmails: absentIds,
         );
 
-        // Delete from queue after successful sync
-        await _isar.writeTxn(() async {
-          await _isar.pendingAttendances.delete(pending.id);
-        });
-
         remaining--;
         Log.i('[SyncManager] Synced attendance for session ${pending.sessionId}');
         onAttendanceSynced?.call(pending.sessionId);
       } catch (e) {
-        // Update retry count and error
+        // Update retry count and error — the submission itself failed, so it
+        // is safe (and required) to retry.
         await _isar.writeTxn(() async {
           pending.retryCount++;
           pending.lastError = e.toString();
           await _isar.pendingAttendances.put(pending);
         });
         Log.w('[SyncManager] Failed to sync attendance for ${pending.sessionId}: $e');
+        continue;
+      }
+
+      // §4 — Delete is SEPARATE from the submit. A local Isar failure here
+      // must never re-submit an already-synced payload (the server upsert is
+      // idempotent, but this avoids needless duplicate writes) and must never
+      // increment the retry counter or drop the item — the server submission
+      // already succeeded, so the item is simply removed on the next pass.
+      try {
+        await _isar.writeTxn(() async {
+          await _isar.pendingAttendances.delete(pending.id);
+        });
+      } catch (deleteError) {
+        Log.e('[SyncManager] Queue delete failed for ${pending.sessionId} '
+            '(already synced; will retry delete next pass): $deleteError');
       }
     }
 

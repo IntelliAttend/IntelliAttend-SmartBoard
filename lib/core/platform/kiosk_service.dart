@@ -40,6 +40,13 @@ class KioskService {
   /// `onWindowRestore` uses this to re-apply fullscreen with the correct mode.
   static KioskMode? _preSuspendMode;
 
+  /// Remembers the mode that was active when [forceRelease] was invoked. Used
+  /// by [ensureFullscreen] to self-heal if kiosk was force-released mid-run by
+  /// an unhandled error while a session screen was active. Boot/recovery paths
+  /// release kiosk before any mode is set, so this stays null there and the
+  /// recovery screen never gets re-locked into kiosk.
+  static KioskMode? _forceReleasedFrom;
+
   // Serialises setMode() calls so concurrent callers (e.g. the
   // WindowOrchestratorService timer firing while IdleScreen's post-frame
   // callback runs) cannot issue overlapping window_manager native calls.
@@ -71,7 +78,24 @@ class KioskService {
   /// one timer source checking window health — preventing the concurrent
   /// platform-channel call storm that caused system-wide DWM freezes.
   static Future<void> ensureFullscreen() async {
-    if (!_enabled) return;
+    if (!_enabled) {
+      // Self-heal: if kiosk was force-released while a session screen was
+      // active (e.g. a mid-run unhandled error), re-enable and re-apply the
+      // mode so the taskbar disappears again. Boot/recovery never set
+      // _forceReleasedFrom, so they cannot self-heal back into kiosk.
+      final from = _forceReleasedFrom;
+      if (from == null || from == KioskMode.suspended) return;
+      Log.w(
+          '🛡️ [Kiosk] Self-heal: re-enabling kiosk after force-release ($from).');
+      _enabled = true;
+      _forceReleasedFrom = null;
+      try {
+        await setMode(from, force: true);
+      } catch (e) {
+        Log.d('[Kiosk] Self-heal failed: $e');
+      }
+      return;
+    }
     final mode = _currentMode;
     if (mode == null || mode == KioskMode.suspended) return;
     try {
@@ -286,6 +310,9 @@ class KioskService {
   /// close the window.
   static Future<void> forceRelease() async {
     Log.w('🛑 [Kiosk] FORCE RELEASE');
+    // Remember the mode we are releasing from so ensureFullscreen() can
+    // self-heal when a mid-run error released kiosk during a session.
+    _forceReleasedFrom = _currentMode;
     _enabled = false;
     _currentMode = null;
     try {
@@ -301,6 +328,27 @@ class KioskService {
       }
     } catch (e) {
       Log.e('❌ [Kiosk] forceRelease error: $e');
+    }
+  }
+
+  /// Called by the global unhandled-error handler (runZonedGuarded) when a
+  /// stray async error escapes a zone at runtime. If the app is mid-session
+  /// in a kiosk mode, re-assert fullscreen instead of tearing kiosk down —
+  /// the classroom display must never be left with a visible taskbar just
+  /// because a background timer/network/WS callback threw. Only boot and
+  /// recovery states (no active kiosk mode) keep the legacy [forceRelease]
+  /// escape door so the window is never left bricked.
+  static Future<void> handleUnhandledError() async {
+    final mode = _currentMode;
+    if (_enabled && mode != null && mode != KioskMode.suspended) {
+      Log.w('🛡️ [Kiosk] Re-asserting kiosk ($mode) after unhandled error');
+      try {
+        await setMode(mode, force: true);
+      } catch (e) {
+        Log.e('❌ [Kiosk] Re-assert after unhandled error failed: $e');
+      }
+    } else {
+      await forceRelease();
     }
   }
 

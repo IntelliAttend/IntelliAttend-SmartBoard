@@ -4,6 +4,7 @@ import '../../core/utils/logger.dart';
 import '../../core/config/app_config.dart';
 import '../../core/state/board_state_machine.dart';
 import '../../core/platform/kiosk_service.dart';
+import '../../core/platform/notification_service.dart';
 import '../../models/isar_schemas.dart';
 import '../../models/session_context.dart';
 import '../../services/session_state_service.dart';
@@ -49,6 +50,11 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
   /// constructors to child screens. Never replaced wholesale; updated via
   /// [SessionContext.copyWith] so data is never lost during state transitions.
   SessionContext? _sessionContext;
+
+  /// §8.4 — Session whose server termination gave up after max retries.
+  /// Surfaces a persistent banner so the teacher knows the server may still
+  /// consider the session active. Auto-dismisses after a grace period.
+  String? _terminationFailedSessionId;
 
 
   @override
@@ -263,18 +269,40 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
   void _handleRetryExhausted(String sessionId) {
     if (!mounted) return;
     Log.e('[Orchestrator] Session termination failed after max retries: $sessionId');
-    // Show a persistent warning — teacher should contact support.
-    // The board is on SummaryScreen (closed state) so this is informational.
+    // §8.4 — Surface this to the teacher: the server was never confirmed as
+    // having ended the session. Informational (board already transitioned);
+    // never destructive. Auto-dismisses after 30s.
+    unawaited(_notifyTerminationFailed(sessionId));
+    setState(() => _terminationFailedSessionId = sessionId);
+    Future.delayed(const Duration(seconds: 30), () {
+      if (mounted && _terminationFailedSessionId == sessionId) {
+        setState(() => _terminationFailedSessionId = null);
+      }
+    });
+  }
+
+  Future<void> _notifyTerminationFailed(String sessionId) async {
+    try {
+      await NotificationService.showWarning(
+        'Session termination failed',
+        'SmartBoard could not confirm session end with the server. '
+        'If the session still appears active, contact support.',
+      );
+    } catch (e) {
+      Log.w('[Orchestrator] Termination-failure notification error: $e');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    late Widget screen;
     switch (_currentRenderState) {
       case BoardState.idle:
-        return IdleScreen(
+        screen = IdleScreen(
           registration: widget.registration,
           completedSession: widget.completedSession,
         );
+        break;
       case BoardState.active:
         final state = _sessionState.currentState;
         // Build or update SessionContext with latest state data.
@@ -293,13 +321,14 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
           roomName: state.roomName,
           courseCode: state.courseCode,
         );
-        return AttendanceScreen(
+        screen = AttendanceScreen(
           sessionContext: _sessionContext!,
           capacity: widget.registration.capacity,
           roomName: state.roomName ?? widget.registration.roomName,
           boardId: widget.registration.smartBoardId,
           onNavigateBack: _returnToIdle,
         );
+        break;
       case BoardState.closed:
         // Sync context from SessionStateService — AttendanceScreen may have
         // called updateCounts() with final attendance data before transitioning.
@@ -312,11 +341,63 @@ class _SessionOrchestratorScreenState extends State<SessionOrchestratorScreen> {
           presentCount: state.presentCount,
           absentCount: state.absentCount,
         );
-        return SummaryScreen(
+        screen = SummaryScreen(
           sessionContext: _sessionContext,
           totalCapacity: widget.registration.capacity,
           onReturnToIdle: _returnToIdle,
         );
+        break;
     }
+
+    // §8.4 — Overlay a dismissible banner when a server termination gave up
+    // after max retries. Non-intrusive: never a modal, auto-dismisses.
+    final failedSessionId = _terminationFailedSessionId;
+    if (failedSessionId == null) return screen;
+    return Stack(
+      children: [
+        screen,
+        Positioned(
+          left: 0,
+          right: 0,
+          top: 0,
+          child: _buildTerminationFailedBanner(failedSessionId),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTerminationFailedBanner(String sessionId) {
+    return Material(
+      color: const Color(0xFFB45309), // amber-700
+      elevation: 4,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded,
+                  color: Colors.white, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Session $sessionId could not be closed on the server. '
+                  'If it still appears active please contact support.',
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 18),
+                onPressed: () {
+                  if (mounted) setState(() => _terminationFailedSessionId = null);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

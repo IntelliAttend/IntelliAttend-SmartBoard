@@ -38,6 +38,12 @@ class HeartbeatService {
 
   static int _heartbeatCount = 0;
 
+  /// §8.2 — Guards against overlapping beats. `_send()` awaits network calls
+  /// (pending terminations, token refresh, heartbeat POST), so the periodic
+  /// 15s timer can fire while the previous beat is still in flight. Stacked
+  /// beats caused duplicate terminate calls and racey pending-retry counters.
+  static bool _isSendRunning = false;
+
   static String screenState = 'unknown';
 
   static final List<String> _pendingTerminations = [];
@@ -101,6 +107,21 @@ class HeartbeatService {
   }
 
   static Future<void> _send() async {
+    // §8.2 — Never allow a second beat to start while one is still running.
+    // The overlap is silently dropped; the next 15s tick continues.
+    if (_isSendRunning) {
+      Log.d('[Heartbeat] Previous beat still in flight — skipping this tick.');
+      return;
+    }
+    _isSendRunning = true;
+    try {
+      await _sendInner();
+    } finally {
+      _isSendRunning = false;
+    }
+  }
+
+  static Future<void> _sendInner() async {
     for (final pendingId in List<String>.from(_pendingTerminations)) {
       try {
         await ApiService.terminateSession(pendingId);
@@ -199,10 +220,19 @@ class HeartbeatService {
         _sessionController.add(info);
         _applySessionToStateMachine(info);
       } else if (sessionData == null) {
-        _consecutiveNullSessions++;
+        // §2 — A transport / 5xx / "error" beat is NOT evidence that the
+        // session vanished — the server simply failed to answer. It must
+        // never count toward the force-end threshold and never end a live
+        // session. Only genuine clean "null session" responses (3 in a row)
+        // are treated as the server having no session.
         final isServerError = result['status'] == 'error';
-        if (_consecutiveNullSessions < _maxNullSessionsBeforeForceEnd &&
-            !isServerError) {
+        if (isServerError) {
+          Log.w('[Heartbeat] Server returned error status — ignoring beat (no force-end).');
+          return;
+        }
+
+        _consecutiveNullSessions++;
+        if (_consecutiveNullSessions < _maxNullSessionsBeforeForceEnd) {
           Log.w('[Heartbeat] session: null (#$_consecutiveNullSessions) — waiting for next beat');
           return;
         }

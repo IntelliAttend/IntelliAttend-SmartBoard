@@ -93,8 +93,7 @@ class _IdleScreenState extends State<IdleScreen>
       {}; // Slots that have already had a session completed
   final Set<String> _failedSlotIds =
       {}; // Subset of completed slots where the session failed
-  bool _isKeypadExpanded = false; // Controls OTP keypad expansion state
-  bool _isPinMode = true; // true = faculty PIN (6 digits), false = OTP (4 digits)
+  bool _isKeypadExpanded = false; // Controls numeric keypad expansion state
 
   NetworkInfo _networkInfo = NetworkInfo(isConnected: false, lastChecked: DateTime.now());
   StreamSubscription<NetworkInfo>? _networkSub;
@@ -1620,113 +1619,51 @@ class _IdleScreenState extends State<IdleScreen>
   Future<void> _handleVerifyOtp() async {
     final code = _otpController.text.trim();
 
-    if (_isPinMode) {
-      // PIN mode: 6-digit faculty PIN (server resolves faculty + slot)
-      if (code.length != 6) {
-        setState(() => _errorMessage = 'Please enter a valid 6-digit PIN');
-        return;
-      }
+    // PIN-only flow: 6-digit faculty PIN (server resolves faculty + slot).
+    if (code.length != 6) {
+      setState(() => _errorMessage = 'Please enter a valid 6-digit PIN');
+      return;
+    }
 
-      final rateKey = 'session_pin_${widget.registration.smartBoardId}';
-      if (!RateLimiter.isAllowed(rateKey)) {
-        setState(() => _errorMessage =
-            'Too many attempts. Please wait before trying again.');
-        return;
-      }
-      setState(() {
-        _isLoading = true;
-        _errorMessage = null;
-      });
-      try {
-        _otpController.clear();
+    final rateKey = 'session_pin_${widget.registration.smartBoardId}';
+    if (!RateLimiter.isAllowed(rateKey)) {
+      setState(() => _errorMessage =
+          'Too many attempts. Please wait before trying again.');
+      return;
+    }
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+    try {
+      _otpController.clear();
 
-        final result = await ApiService.initiateSessionWithPin(
-          pin: code,
-        );
-        RateLimiter.reset(rateKey);
-        final slotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
-        await _processSessionResponse(result, slotId);
-      } catch (e) {
-        if (mounted) {
-          if (e is UnregisteredException) {
-            Log.w(
-                '🚨 [IdleScreen] Device unregistered on server. Redirecting to Registration...');
-            await context.read<IDeviceRepository>().clearRegistration();
-            if (mounted) {
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(
-                    builder: (context) => const RegistrationScreen()),
-                (route) => false,
-              );
-            }
-          } else {
-            setState(() =>
-                _errorMessage = e.toString().replaceFirst('Exception: ', ''));
-          }
-        }
-      } finally {
-        if (mounted) setState(() => _isLoading = false);
-      }
-    } else {
-      // OTP mode: 4-digit OTP (existing flow)
-      if (code.length != 4) {
-        setState(() => _errorMessage = 'Please enter a valid 4-digit PIN');
-        return;
-      }
-
-      // Try pre-flight warm-up once if session ID is missing. If retries
-      // exhausted, fall back to the session ID from the initiateSession API.
-      if (_preAllocatedSessionId == null && _upcomingAllocatedSessionId == null) {
-        if (_upcomingSlot != null) {
-          _triggerWarmUp(_upcomingSlot!.slotId, force: true);
-        }
-        if (_preAllocatedSessionId == null &&
-            _upcomingAllocatedSessionId == null) {
+      final result = await ApiService.initiateSessionWithPin(
+        pin: code,
+      );
+      RateLimiter.reset(rateKey);
+      final slotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
+      await _processSessionResponse(result, slotId);
+    } catch (e) {
+      if (mounted) {
+        if (e is UnregisteredException) {
           Log.w(
-              '[Idle] Pre-flight unavailable. Faculty may proceed with API-provided session ID.');
-        }
-      }
-
-      final rateKey = 'session_pin_${widget.registration.smartBoardId}';
-      if (!RateLimiter.isAllowed(rateKey)) {
-        setState(() => _errorMessage =
-            'Too many attempts. Please wait before trying again.');
-        return;
-      }
-      setState(() {
-        _isLoading = true;
-        _errorMessage = null;
-      });
-      try {
-        // Strict OTP Protocol: OTP must never be stored. The text controller is
-        // cleared the instant the API call fires — before waiting for a response.
-        _otpController.clear();
-
-        final result = await ApiService.initiateSession(code);
-        RateLimiter.reset(rateKey);
-        final slotId = _upcomingSlot?.slotId ?? _bedrockEntry?.slotId;
-        await _processSessionResponse(result, slotId);
-      } catch (e) {
-        if (mounted) {
-          if (e is UnregisteredException) {
-            Log.w(
-                '🚨 [IdleScreen] Device unregistered on server. Redirecting to Registration...');
-            await context.read<IDeviceRepository>().clearRegistration();
-            if (mounted) {
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(
-                    builder: (context) => const RegistrationScreen()),
-                (route) => false,
-              );
-            }
-          } else {
-            setState(() =>
-                _errorMessage = e.toString().replaceFirst('Exception: ', ''));
+              '🚨 [IdleScreen] Device unregistered on server. Redirecting to Registration...');
+          await context.read<IDeviceRepository>().clearRegistration();
+          if (mounted) {
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute(
+                  builder: (context) => const RegistrationScreen()),
+              (route) => false,
+            );
           }
+        } else {
+          setState(() =>
+              _errorMessage = e.toString().replaceFirst('Exception: ', ''));
         }
-      } finally {
-        if (mounted) setState(() => _isLoading = false);
       }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -2480,9 +2417,7 @@ class _IdleScreenState extends State<IdleScreen>
           ),
           const SizedBox(height: 12),
           Text(
-            _isPinMode
-                ? 'Enter your 6-digit Faculty PIN to begin Session.'
-                : 'Enter the session code displayed on your mobile device to begin Session.',
+            'Enter your 6-digit Faculty PIN to begin Session.',
             style: TextStyle(
               fontSize: bodyFontSize,
               color: secondaryColor,
@@ -2498,7 +2433,7 @@ class _IdleScreenState extends State<IdleScreen>
               cursor: SystemMouseCursors.click,
               child: PinInput(
                 value: _otpController.text,
-                length: _isPinMode ? 6 : 4,
+                length: 6,
                 obscureText: true,
                 availableWidth: pinAvailableWidth,
               ),
@@ -2579,27 +2514,6 @@ class _IdleScreenState extends State<IdleScreen>
                                 letterSpacing: 1.2)),
                       ],
                     ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          // Mode toggle: PIN vs OTP
-          Center(
-            child: GestureDetector(
-              onTap: () {
-                setState(() {
-                  _isPinMode = !_isPinMode;
-                  _otpController.clear();
-                  _errorMessage = null;
-                });
-              },
-              child: Text(
-                _isPinMode ? 'Use OTP instead' : 'Use Faculty PIN instead',
-                style: TextStyle(
-                  fontSize: statusFontSize,
-                  color: AppColors.primaryTeal,
-                  decoration: TextDecoration.underline,
-                ),
-              ),
             ),
           ),
           const SizedBox(height: 24),
@@ -3304,7 +3218,7 @@ class _IdleScreenState extends State<IdleScreen>
             });
           }
         } else {
-          final maxLen = _isPinMode ? 6 : 4;
+          final maxLen = 6;
           if (_otpController.text.length < maxLen) {
             setState(() {
               _otpController.text += label;

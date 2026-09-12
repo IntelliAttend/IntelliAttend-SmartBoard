@@ -97,7 +97,16 @@ class WindowOrchestratorService {
       //     watchdog timer).  Single source of truth for window state so
       //     concurrent platform-channel calls cannot race and crash the
       //     Flutter engine on Windows.
-      await KioskService.ensureFullscreen();
+      //
+      //     §7 Fix: fire-and-forget with a timeout. A hung window_manager
+      //     platform call must NEVER gate the slot logic below (T-0 / T-1 /
+      //     auto-close / safety-net), which are the board's termination
+      //     backstops. The tick releases _isTickRunning immediately.
+      unawaited(
+        KioskService.ensureFullscreen()
+            .timeout(const Duration(seconds: 3))
+            .catchError((Object _) {}),
+      );
 
       final allTodaySlots = await globalDeviceRepository.getTodayTimeline();
       if (allTodaySlots.isEmpty) return;
@@ -166,14 +175,15 @@ class WindowOrchestratorService {
       // Fires regardless of whether app is minimized or in foreground.
       // If app is minimized, force CLOSED immediately.
       // If user is on AttendanceScreen (foreground), defer — let them finish.
+      // §1 Fix: the slot is only marked "T-1 fired" when termination actually
+      // happens. While deferred, the auto-close backstop below still fires at
+      // slot end, so the session can never leak past the class boundary.
       if (currentSlot != null) {
         final slotEnd = _parseTime(currentSlot.endTime, now);
         final diffSec = slotEnd.difference(now).inSeconds;
         final t1Key = '${currentSlot.slotId}_t1';
 
         if (diffSec <= 60 && diffSec > 0 && !_t1FiredSlots.contains(t1Key)) {
-          _t1FiredSlots.add(t1Key);
-
           final sessionState = SessionStateService().currentState;
           final boardState = BoardStateMachine().currentState;
 
@@ -181,23 +191,30 @@ class WindowOrchestratorService {
             final isMinimized = await windowManager.isMinimized();
 
             if (isMinimized) {
-              // App is minimized — force CLOSED immediately regardless of BoardState
+              // App is minimized — force CLOSED immediately regardless of BoardState.
+              // No one is on the active screen, so transition WITHOUT relying on
+              // the WS session_ended broadcast (guard: forceTransition).
+              _t1FiredSlots.add(t1Key);
               Log.i('[Orchestrator] T-1: Auto-terminating session ${sessionState.sessionId} — app minimized, slot ending in ${diffSec}s');
               SessionLifecycle.end(
                 sessionId: sessionState.sessionId,
                 reason: EndReason.slotExpiredT1,
+                forceTransition: true,
               );
             } else if (boardState != BoardState.active) {
               // App is in foreground but board is idle/closed — force CLOSED
+              _t1FiredSlots.add(t1Key);
               Log.i('[Orchestrator] T-1: Auto-terminating session ${sessionState.sessionId} — slot ending in ${diffSec}s');
               SessionLifecycle.end(
                 sessionId: sessionState.sessionId,
                 reason: EndReason.slotExpiredT1,
               );
             } else {
-              // User is on an active screen (Attendance or Workspace) — defer.
-              // Auto-close (slot end) or heartbeat will handle hard termination.
-              Log.i('[Orchestrator] T-1: Session ending in ${diffSec}s — user on active screen, deferring termination');
+              // User is on an active screen (Attendance or Workspace) — defer the
+              // session (server stays alive so submits still work). Do NOT mark
+              // this slot T-1 fired — the auto-close backstop at slot end must
+              // still run (and defer again if the teacher is still marking).
+              Log.i('[Orchestrator] T-1: Session ending in ${diffSec}s — user on active screen, deferring termination and keeping server session alive');
             }
           }
         }
@@ -231,11 +248,15 @@ class WindowOrchestratorService {
           _autoClosedSlots.add(currentSlot.slotId);
           final sessionState = SessionStateService().currentState;
           if (sessionState.isActive) {
-            Log.i('[Orchestrator] Auto-closing session ${sessionState.sessionId} — slot ${currentSlot.slotId} ended');
+            // If the app is minimized nobody is disturbed — eliminate the
+            // session locally without depending on the WS broadcast.
+            final isMinimized = await windowManager.isMinimized();
+            Log.i('[Orchestrator] Auto-closing session ${sessionState.sessionId} — slot ${currentSlot.slotId} ended (minimized=$isMinimized)');
 
             SessionLifecycle.end(
               sessionId: sessionState.sessionId,
               reason: EndReason.slotExpiredAutoClose,
+              forceTransition: isMinimized,
             );
           }
         }

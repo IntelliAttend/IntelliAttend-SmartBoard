@@ -415,12 +415,12 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         .findFirst();
 
     if (existing != null) {
-      // Update existing entry
+      // §4 — Update the payload on re-queue, but PRESERVE retryCount and
+      // createdAt so a re-queued item never resets its retry budget / expiry
+      // clock and loops forever inside the queue.
       await isar.writeTxn(() async {
         existing.presentIdsJson = jsonEncode(presentIds);
         existing.absentIdsJson = jsonEncode(absentIds);
-        existing.createdAt = TimeSyncService.timeNow;
-        existing.retryCount = 0;
         existing.lastError = null;
         await isar.pendingAttendances.put(existing);
       });

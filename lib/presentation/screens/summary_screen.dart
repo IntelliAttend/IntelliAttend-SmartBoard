@@ -49,10 +49,13 @@ class _SummaryScreenState extends State<SummaryScreen> {
   }
 
   Future<void> _persistAndStartCountdown() async {
-    // Wait for session to be marked completed in Isar BEFORE starting countdown.
-    // This prevents IdleScreen from re-discovering the session during the
-    // 20-second countdown window.
-    await _persistCompletedSession();
+    // §8.11 — A slow/failed Isar write must NEVER stall the Summary screen.
+    // Persistence is best-effort; the countdown into Idle always starts.
+    try {
+      await _persistCompletedSession().timeout(const Duration(seconds: 5));
+    } catch (e) {
+      Log.e('[Summary] Session persistence failed/timed out (continuing to idle): $e');
+    }
     if (mounted) {
       _startCountdown();
     }

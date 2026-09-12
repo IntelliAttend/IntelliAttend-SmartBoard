@@ -203,8 +203,16 @@ void main(List<String> args) {
   }, (Object error, StackTrace stack) {
     Log.e('Unhandled application error', error, stack);
     unawaited(ObservabilityManager.captureException(error, stackTrace: stack));
-    unawaited(LifecycleRecover.markLaunchFailed('Unhandled: $error'));
-    unawaited(KioskService.forceRelease());
+    // Only treat this as a launch failure while startup is still in
+    // progress. A mid-run stray async error (network/WS/timer) must not
+    // poison the crash-loop guard or disable auto-start.
+    if (!AppLifecycleManager.isCompleted) {
+      unawaited(LifecycleRecover.markLaunchFailed('Unhandled: $error'));
+    }
+    // Re-assert kiosk instead of permanently releasing it when the app is
+    // mid-session — a background error must not leave the classroom display
+    // with a visible taskbar. Boot/recovery fall back to forceRelease.
+    unawaited(KioskService.handleUnhandledError());
   });
 }
 
